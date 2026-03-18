@@ -24,9 +24,37 @@ type Model struct {
 }
 
 var (
-	cursorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("cyan"))
-	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("green"))
+	headerAccentStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("green")).Bold(true)
+	cursorStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("cyan")).Bold(true)
+	selectedStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("green"))
+	cursorSelectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("yellow")).Bold(true).Underline(true)
+	helpKeyStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("blue")).Bold(true)
 )
+
+func renderHeader() string {
+	return "Launching " + headerAccentStyle.Render("OpenCode") + " with plugins"
+}
+
+func stylePluginRow(line string, focused bool, selected bool) string {
+	switch {
+	case focused && selected:
+		return cursorSelectedStyle.Render(line)
+	case focused:
+		return cursorStyle.Render(line)
+	case selected:
+		return selectedStyle.Render(line)
+	default:
+		return line
+	}
+}
+
+func renderHelpLine() string {
+	return helpKeyStyle.Render("↑/↓") + ": navigate • " +
+		helpKeyStyle.Render("space") + ": toggle • " +
+		helpKeyStyle.Render("enter") + ": confirm • " +
+		helpKeyStyle.Render("e") + ": edit config • " +
+		helpKeyStyle.Render("q") + ": quit"
+}
 
 // NewModel creates a new TUI model with the given plugin items
 func NewModel(items []PluginItem) Model {
@@ -92,31 +120,28 @@ func (m Model) View() tea.View {
 		return tea.NewView("")
 	}
 
-	s := "Launching OpenCode with plugins\n\n"
+	s := renderHeader() + "\n\n"
 
 	for i, p := range m.plugins {
 		cursor := "  "
-		if m.cursor == i {
+		focused := m.cursor == i
+		if focused {
 			cursor = "> "
 		}
 
 		checked := " "
-		if _, ok := m.selected[i]; ok {
+		_, selected := m.selected[i]
+		if selected {
 			checked = "*"
 		}
 
 		line := fmt.Sprintf("%s[%s] %s", cursor, checked, p.Name)
-
-		if m.cursor == i {
-			line = cursorStyle.Render(line)
-		} else if _, ok := m.selected[i]; ok {
-			line = selectedStyle.Render(line)
-		}
+		line = stylePluginRow(line, focused, selected)
 
 		s += line + "\n"
 	}
 
-	s += "\n↑/↓: navigate • space: toggle • enter: confirm • e: edit config • q: quit"
+	s += "\n" + renderHelpLine()
 
 	return tea.NewView(s)
 }

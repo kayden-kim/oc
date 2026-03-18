@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // mockKeyMsg creates a KeyPressMsg for testing
@@ -357,5 +359,82 @@ func TestEditRequested_Method(t *testing.T) {
 	m = newModel.(Model)
 	if !m.EditRequested() {
 		t.Error("expected EditRequested()=true after e")
+	}
+}
+
+func TestRenderHeader_HighlightsOpenCodeOnly(t *testing.T) {
+	headerLine := renderHeader()
+	headerAccentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("green")).Bold(true)
+
+	if !strings.Contains(headerLine, headerAccentStyle.Render("OpenCode")) {
+		t.Fatalf("expected styled OpenCode in header, got %q", headerLine)
+	}
+	if strings.Contains(headerLine, headerAccentStyle.Render("Launching ")) {
+		t.Fatalf("expected plain Launching prefix, got %q", headerLine)
+	}
+	if strings.Contains(headerLine, headerAccentStyle.Render(" with plugins")) {
+		t.Fatalf("expected plain header suffix, got %q", headerLine)
+	}
+}
+
+func TestStylePluginRow_UsesCombinedStyleForFocusedSelectedRow(t *testing.T) {
+	cursorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("cyan")).Bold(true)
+	cursorSelectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("yellow")).Bold(true).Underline(true)
+	rowLine := stylePluginRow("> [*] plugin-a", true, true)
+	expected := cursorSelectedStyle.Render("> [*] plugin-a")
+
+	if !strings.Contains(rowLine, expected) {
+		t.Fatalf("expected focused+selected style %q in %q", expected, rowLine)
+	}
+	if strings.Contains(rowLine, cursorStyle.Render("> [*] plugin-a")) {
+		t.Fatalf("expected dedicated combined style instead of cursor-only style, got %q", rowLine)
+	}
+}
+
+func TestRenderHelpLine_IncludesStyledKeyTokens(t *testing.T) {
+	helpKeyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("blue")).Bold(true)
+	helpLine := renderHelpLine()
+
+	for _, token := range []string{"↑/↓", "space", "enter", "e", "q"} {
+		if !strings.Contains(helpLine, helpKeyStyle.Render(token)) {
+			t.Fatalf("expected styled help token %q in %q", token, helpLine)
+		}
+	}
+
+	for _, action := range []string{"navigate", "toggle", "confirm", "edit config", "quit"} {
+		if !strings.Contains(helpLine, action) {
+			t.Fatalf("expected plain help action %q in %q", action, helpLine)
+		}
+		if strings.Contains(helpLine, helpKeyStyle.Render(action)) {
+			t.Fatalf("expected action %q to remain unstyled in %q", action, helpLine)
+		}
+	}
+}
+
+func TestView_RendersStyledHeaderLine(t *testing.T) {
+	view := NewModel([]PluginItem{{Name: "plugin-a"}}).View().Content
+	headerLine := strings.Split(view, "\n")[0]
+
+	if headerLine != renderHeader() {
+		t.Fatalf("expected header line %q, got %q", renderHeader(), headerLine)
+	}
+}
+
+func TestView_RendersFocusedSelectedRowLine(t *testing.T) {
+	view := NewModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}).View().Content
+	rowLine := strings.Split(view, "\n")[2]
+	expected := stylePluginRow("> [*] plugin-a", true, true)
+
+	if rowLine != expected {
+		t.Fatalf("expected row line %q, got %q", expected, rowLine)
+	}
+}
+
+func TestView_RendersStyledHelpLine(t *testing.T) {
+	view := NewModel([]PluginItem{{Name: "plugin-a"}}).View().Content
+	helpLine := strings.Split(view, "\n")[4]
+
+	if helpLine != renderHelpLine() {
+		t.Fatalf("expected help line %q, got %q", renderHelpLine(), helpLine)
 	}
 }
