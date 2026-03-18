@@ -18,7 +18,7 @@ type OcConfig struct {
 func LoadOcConfig(path string) (*OcConfig, error) {
 	// Try to decode the TOML file
 	var config OcConfig
-	err := toml.DecodeFile(path, &config)
+	_, err := toml.DecodeFile(path, &config)
 
 	// If the file doesn't exist, return nil, nil (not an error)
 	if err != nil && os.IsNotExist(err) {
