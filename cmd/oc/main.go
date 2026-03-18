@@ -12,7 +12,13 @@ import (
 	"github.com/kayden-kim/oc/internal/tui"
 )
 
+var version = "dev" // Overridden by ldflags at build time
+
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--version" {
+		fmt.Println(version)
+		os.Exit(0)
+	}
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
