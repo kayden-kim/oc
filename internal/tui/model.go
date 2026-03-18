@@ -92,7 +92,7 @@ func (m Model) View() tea.View {
 		return tea.NewView("")
 	}
 
-	s := "Select plugins (Space: toggle, Enter: confirm, e: edit opencode.json, q: quit):\n\n"
+	s := "Launching OpenCode with plugins\n\n"
 
 	for i, p := range m.plugins {
 		cursor := "  "
