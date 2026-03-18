@@ -29,3 +29,6 @@ build/
 # Project specific
 .env
 .env.local
+.sisyphus
+.superpowers
+.sisyphus

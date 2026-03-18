@@ -45,6 +45,14 @@ oc --model gpt-4
 
 All arguments after plugin selection are passed through to `opencode`.
 
+TUI controls:
+
+- `↑/↓` or `j/k`: move cursor
+- `space`: toggle plugin
+- `enter`: save selections and launch `opencode`
+- `e`: open `opencode.json` in your editor and exit `oc`
+- `q` / `esc` / `ctrl+c`: quit without changes
+
 ## Configuration
 
 **opencode.json location**: `~/.config/opencode/opencode.json`
@@ -73,6 +81,32 @@ plugins = [
 ```
 
 Plugins not in the whitelist are hidden from the TUI but preserved in the config file.
+
+## Editor Selection
+
+When you press `e` in the plugin selector, `oc` opens `~/.config/opencode/opencode.json` and exits immediately.
+
+Editor selection priority:
+
+1. `OC_EDITOR`
+2. `EDITOR`
+3. Platform default fallback
+
+Fallback editors:
+
+- Windows: `notepad`
+- macOS: `open -t`
+- Linux: `xdg-open`
+
+Examples:
+
+```bash
+export OC_EDITOR="code --goto"
+```
+
+```bash
+export EDITOR="nvim"
+```
 
 ## Building from Source
 

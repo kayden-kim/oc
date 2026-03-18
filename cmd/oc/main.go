@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/kayden-kim/oc/internal/config"
+	"github.com/kayden-kim/oc/internal/editor"
 	"github.com/kayden-kim/oc/internal/plugin"
 	"github.com/kayden-kim/oc/internal/runner"
 	"github.com/kayden-kim/oc/internal/tui"
@@ -37,9 +38,10 @@ type runtimeDeps struct {
 	loadOcConfig      func(string) (*config.OcConfig, error)
 	parsePlugins      func([]byte) ([]config.Plugin, string, error)
 	filterByWhitelist func([]config.Plugin, []string) ([]config.Plugin, []config.Plugin)
-	runTUI            func([]tui.PluginItem) (map[string]bool, bool, error)
+	runTUI            func([]tui.PluginItem) (map[string]bool, bool, bool, error)
 	applySelections   func([]byte, map[string]bool) ([]byte, error)
 	writeConfigFile   func(string, []byte) error
+	openEditor        func(string) error
 }
 
 func defaultDeps() runtimeDeps {
@@ -50,20 +52,21 @@ func defaultDeps() runtimeDeps {
 		loadOcConfig:      config.LoadOcConfig,
 		parsePlugins:      config.ParsePlugins,
 		filterByWhitelist: plugin.FilterByWhitelist,
-		runTUI: func(items []tui.PluginItem) (map[string]bool, bool, error) {
+		runTUI: func(items []tui.PluginItem) (map[string]bool, bool, bool, error) {
 			model := tui.NewModel(items)
 			result, err := tea.NewProgram(model).Run()
 			if err != nil {
-				return nil, false, err
+				return nil, false, false, err
 			}
 			finalModel, ok := result.(tui.Model)
 			if !ok {
-				return nil, false, fmt.Errorf("unexpected TUI model type %T", result)
+				return nil, false, false, fmt.Errorf("unexpected TUI model type %T", result)
 			}
-			return finalModel.Selections(), finalModel.Cancelled(), nil
+			return finalModel.Selections(), finalModel.Cancelled(), finalModel.EditRequested(), nil
 		},
 		applySelections: config.ApplySelections,
 		writeConfigFile: config.WriteConfigFile,
+		openEditor:      editor.Open,
 	}
 }
 
@@ -118,11 +121,17 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 		items[i] = tui.PluginItem{Name: p.Name, InitiallyEnabled: p.Enabled}
 	}
 
-	selections, cancelled, err := deps.runTUI(items)
+	selections, cancelled, editRequested, err := deps.runTUI(items)
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
 	if cancelled {
+		return nil
+	}
+	if editRequested {
+		if err := deps.openEditor(configPath); err != nil {
+			return fmt.Errorf("failed to open editor for %s: %w", configPath, err)
+		}
 		return nil
 	}
 

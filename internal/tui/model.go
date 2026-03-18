@@ -20,6 +20,7 @@ type Model struct {
 	selected  map[int]struct{}
 	cancelled bool
 	confirmed bool
+	edit      bool
 }
 
 var (
@@ -74,6 +75,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			m.confirmed = true
 			return m, tea.Quit
+		case "e":
+			m.edit = true
+			return m, tea.Quit
 		case "ctrl+c", "q", "esc":
 			m.cancelled = true
 			return m, tea.Quit
@@ -88,7 +92,7 @@ func (m Model) View() tea.View {
 		return tea.NewView("")
 	}
 
-	s := "Select plugins (Space: toggle, Enter: confirm, q: quit):\n\n"
+	s := "Select plugins (Space: toggle, Enter: confirm, e: edit opencode.json, q: quit):\n\n"
 
 	for i, p := range m.plugins {
 		cursor := "  "
@@ -112,7 +116,7 @@ func (m Model) View() tea.View {
 		s += line + "\n"
 	}
 
-	s += "\n↑/↓: navigate • space: toggle • enter: confirm • q: quit"
+	s += "\n↑/↓: navigate • space: toggle • enter: confirm • e: edit config • q: quit"
 
 	return tea.NewView(s)
 }
@@ -130,4 +134,9 @@ func (m Model) Selections() map[string]bool {
 // Cancelled returns true if the user cancelled the TUI
 func (m Model) Cancelled() bool {
 	return m.cancelled
+}
+
+// EditRequested returns true if the user chose to open the config in an editor.
+func (m Model) EditRequested() bool {
+	return m.edit
 }

@@ -266,6 +266,30 @@ func TestUpdate_QuitKeys(t *testing.T) {
 	}
 }
 
+func TestUpdate_EditRequest(t *testing.T) {
+	items := []PluginItem{
+		{Name: "plugin-a", InitiallyEnabled: false},
+	}
+
+	m := NewModel(items)
+
+	newModel, cmd := m.Update(mockKeyMsg("e"))
+	m = newModel.(Model)
+
+	if !m.EditRequested() {
+		t.Error("expected EditRequested()=true after e")
+	}
+	if m.cancelled {
+		t.Error("expected cancelled=false after e")
+	}
+	if m.confirmed {
+		t.Error("expected confirmed=false after e")
+	}
+	if cmd == nil || cmd() != tea.Quit() {
+		t.Error("expected tea.Quit command after e")
+	}
+}
+
 func TestSelections_Output(t *testing.T) {
 	items := []PluginItem{
 		{Name: "plugin-a", InitiallyEnabled: true},
@@ -316,5 +340,22 @@ func TestCancelled_Method(t *testing.T) {
 	m = newModel.(Model)
 	if !m.Cancelled() {
 		t.Error("expected Cancelled()=true after ctrl+c")
+	}
+}
+
+func TestEditRequested_Method(t *testing.T) {
+	items := []PluginItem{
+		{Name: "plugin-a", InitiallyEnabled: false},
+	}
+
+	m := NewModel(items)
+	if m.EditRequested() {
+		t.Error("expected EditRequested()=false initially")
+	}
+
+	newModel, _ := m.Update(mockKeyMsg("e"))
+	m = newModel.(Model)
+	if !m.EditRequested() {
+		t.Error("expected EditRequested()=true after e")
 	}
 }

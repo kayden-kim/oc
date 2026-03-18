@@ -18,6 +18,12 @@ type fakeRunner struct {
 	args     []string
 }
 
+type fakeEditor struct {
+	openErr error
+	opened  bool
+	path    string
+}
+
 func (f *fakeRunner) CheckAvailable() error {
 	return f.checkErr
 }
@@ -26,6 +32,12 @@ func (f *fakeRunner) Run(args []string) error {
 	f.ran = true
 	f.args = append([]string(nil), args...)
 	return f.runErr
+}
+
+func (f *fakeEditor) Open(path string) error {
+	f.opened = true
+	f.path = path
+	return f.openErr
 }
 
 func TestRunWithDeps_FullHappyPath(t *testing.T) {
@@ -53,15 +65,16 @@ func TestRunWithDeps_FullHappyPath(t *testing.T) {
 		filterByWhitelist: func(p []config.Plugin, w []string) ([]config.Plugin, []config.Plugin) {
 			return defaultDeps().filterByWhitelist(p, w)
 		},
-		runTUI: func(items []tui.PluginItem) (map[string]bool, bool, error) {
+		runTUI: func(items []tui.PluginItem) (map[string]bool, bool, bool, error) {
 			calledTUI = true
 			if len(items) != 3 {
 				t.Fatalf("expected 3 visible items, got %d", len(items))
 			}
-			return map[string]bool{"plugin-a": true, "plugin-b": true, "plugin-c": false}, false, nil
+			return map[string]bool{"plugin-a": true, "plugin-b": true, "plugin-c": false}, false, false, nil
 		},
 		applySelections: config.ApplySelections,
 		writeConfigFile: config.WriteConfigFile,
+		openEditor:      func(string) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("runWithDeps returned error: %v", err)
@@ -107,6 +120,7 @@ func TestRunWithDeps_MissingOpencodeJSON(t *testing.T) {
 		runTUI:            defaultDeps().runTUI,
 		applySelections:   config.ApplySelections,
 		writeConfigFile:   config.WriteConfigFile,
+		openEditor:        func(string) error { return nil },
 	})
 	if err == nil {
 		t.Fatal("expected missing file error")
@@ -141,12 +155,13 @@ func TestRunWithDeps_EmptyPluginArraySkipsTUI(t *testing.T) {
 		loadOcConfig:      config.LoadOcConfig,
 		parsePlugins:      config.ParsePlugins,
 		filterByWhitelist: defaultDeps().filterByWhitelist,
-		runTUI: func(items []tui.PluginItem) (map[string]bool, bool, error) {
+		runTUI: func(items []tui.PluginItem) (map[string]bool, bool, bool, error) {
 			tuiCalled = true
-			return map[string]bool{}, false, nil
+			return map[string]bool{}, false, false, nil
 		},
 		applySelections: config.ApplySelections,
 		writeConfigFile: config.WriteConfigFile,
+		openEditor:      func(string) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("runWithDeps returned error: %v", err)
@@ -193,17 +208,18 @@ func TestRunWithDeps_WhitelistFiltersVisibleAndPreservesHidden(t *testing.T) {
 		loadOcConfig:      config.LoadOcConfig,
 		parsePlugins:      config.ParsePlugins,
 		filterByWhitelist: defaultDeps().filterByWhitelist,
-		runTUI: func(items []tui.PluginItem) (map[string]bool, bool, error) {
+		runTUI: func(items []tui.PluginItem) (map[string]bool, bool, bool, error) {
 			if len(items) != 2 {
 				t.Fatalf("expected only whitelisted plugins in TUI, got %d", len(items))
 			}
 			if items[0].Name != "plugin-a" || items[1].Name != "plugin-b" {
 				t.Fatalf("unexpected visible plugins: %+v", items)
 			}
-			return map[string]bool{"plugin-a": false, "plugin-b": true}, false, nil
+			return map[string]bool{"plugin-a": false, "plugin-b": true}, false, false, nil
 		},
 		applySelections: config.ApplySelections,
 		writeConfigFile: config.WriteConfigFile,
+		openEditor:      func(string) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("runWithDeps returned error: %v", err)
@@ -246,11 +262,12 @@ func TestRunWithDeps_CancelledTUIDoesNotModifyFile(t *testing.T) {
 		loadOcConfig:      config.LoadOcConfig,
 		parsePlugins:      config.ParsePlugins,
 		filterByWhitelist: defaultDeps().filterByWhitelist,
-		runTUI: func(items []tui.PluginItem) (map[string]bool, bool, error) {
-			return nil, true, nil
+		runTUI: func(items []tui.PluginItem) (map[string]bool, bool, bool, error) {
+			return nil, true, false, nil
 		},
 		applySelections: config.ApplySelections,
 		writeConfigFile: config.WriteConfigFile,
+		openEditor:      func(string) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("runWithDeps returned error: %v", err)
@@ -282,11 +299,64 @@ func TestRunWithDeps_CheckAvailableError(t *testing.T) {
 		runTUI:            defaultDeps().runTUI,
 		applySelections:   config.ApplySelections,
 		writeConfigFile:   config.WriteConfigFile,
+		openEditor:        func(string) error { return nil },
 	})
 	if err == nil {
 		t.Fatal("expected availability error")
 	}
 	if !strings.Contains(err.Error(), "opencode not found") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunWithDeps_EditRequestOpensEditorAndExits(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, ".config", "opencode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	configPath := filepath.Join(configDir, "opencode.json")
+	initial := "{\n  \"plugin\": [\n    \"plugin-a\"\n  ]\n}\n"
+	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &fakeRunner{}
+	ed := &fakeEditor{}
+
+	err := runWithDeps(nil, runtimeDeps{
+		newRunner:         func() runnerAPI { return r },
+		userHomeDir:       func() (string, error) { return tmp, nil },
+		readFile:          os.ReadFile,
+		loadOcConfig:      config.LoadOcConfig,
+		parsePlugins:      config.ParsePlugins,
+		filterByWhitelist: defaultDeps().filterByWhitelist,
+		runTUI: func(items []tui.PluginItem) (map[string]bool, bool, bool, error) {
+			return nil, false, true, nil
+		},
+		applySelections: config.ApplySelections,
+		writeConfigFile: config.WriteConfigFile,
+		openEditor:      ed.Open,
+	})
+	if err != nil {
+		t.Fatalf("runWithDeps returned error: %v", err)
+	}
+	if !ed.opened {
+		t.Fatal("expected editor to be opened")
+	}
+	if ed.path != configPath {
+		t.Fatalf("expected editor path %q, got %q", configPath, ed.path)
+	}
+	if r.ran {
+		t.Fatal("runner should not execute when edit is requested")
+	}
+
+	updated, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(updated) != initial {
+		t.Fatalf("file should remain unchanged on edit request\nwant:\n%s\ngot:\n%s", initial, string(updated))
 	}
 }
