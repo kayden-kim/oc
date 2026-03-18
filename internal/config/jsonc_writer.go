@@ -11,12 +11,11 @@ import (
 )
 
 func ApplySelections(content []byte, selections map[string]bool) ([]byte, error) {
-	plugins, err := ParsePlugins(content)
+	plugins, lineEnding, err := ParsePlugins(content)
 	if err != nil {
 		return nil, err
 	}
 
-	lineEnding := lastDetectedLineEnding
 	if lineEnding == "" {
 		lineEnding = "\n"
 	}

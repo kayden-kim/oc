@@ -133,7 +133,7 @@ func TestParsePlugins(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plugins, err := ParsePlugins([]byte(tt.content))
+			plugins, lineEnding, err := ParsePlugins([]byte(tt.content))
 			if tt.expectError != "" {
 				if err == nil {
 					t.Fatalf("expected error containing %q, got nil", tt.expectError)
@@ -158,6 +158,15 @@ func TestParsePlugins(t *testing.T) {
 				if got.Name != exp.Name || got.Enabled != exp.Enabled || got.LineIndex != exp.LineIndex || got.OriginalLine != exp.OriginalLine {
 					t.Fatalf("plugin[%d] mismatch: expected %+v, got %+v", i, exp, got)
 				}
+			}
+
+			// Verify line ending is detected correctly
+			if strings.Contains(tt.content, "\r\n") {
+				if lineEnding != "\r\n" {
+					t.Fatalf("expected line ending \\r\\n, got %q", lineEnding)
+				}
+			} else if lineEnding != "\n" {
+				t.Fatalf("expected line ending \\n, got %q", lineEnding)
 			}
 		})
 	}

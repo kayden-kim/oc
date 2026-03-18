@@ -35,7 +35,7 @@ type runtimeDeps struct {
 	userHomeDir       func() (string, error)
 	readFile          func(string) ([]byte, error)
 	loadOcConfig      func(string) (*config.OcConfig, error)
-	parsePlugins      func([]byte) ([]config.Plugin, error)
+	parsePlugins      func([]byte) ([]config.Plugin, string, error)
 	filterByWhitelist func([]config.Plugin, []string) ([]config.Plugin, []config.Plugin)
 	runTUI            func([]tui.PluginItem) (map[string]bool, bool, error)
 	applySelections   func([]byte, map[string]bool) ([]byte, error)
@@ -103,7 +103,7 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 		return fmt.Errorf("failed to read opencode.json: %w", err)
 	}
 
-	plugins, err := deps.parsePlugins(content)
+	plugins, _, err := deps.parsePlugins(content)
 	if err != nil {
 		return fmt.Errorf("failed to parse plugins: %w", err)
 	}

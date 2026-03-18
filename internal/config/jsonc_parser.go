@@ -14,13 +14,10 @@ var (
 	pluginArrayEndPattern   = regexp.MustCompile(`^\s*\]`)
 	activePluginPattern     = regexp.MustCompile(`^\s*"([^"]+)"`)
 	commentedPluginPattern  = regexp.MustCompile(`^\s*//\s*"([^"]+)"`)
-
-	// lastDetectedLineEnding is kept for future writer logic.
-	lastDetectedLineEnding = "\n"
 )
 
-func ParsePlugins(content []byte) ([]Plugin, error) {
-	lastDetectedLineEnding = detectLineEnding(content)
+func ParsePlugins(content []byte) ([]Plugin, string, error) {
+	lineEnding := detectLineEnding(content)
 
 	plugins := make([]Plugin, 0)
 	scanner := bufio.NewScanner(bytes.NewReader(content))
@@ -35,7 +32,7 @@ func ParsePlugins(content []byte) ([]Plugin, error) {
 		if !inPluginArray {
 			if pluginKeyPattern.MatchString(line) {
 				if !pluginArrayStartPattern.MatchString(line) {
-					return nil, fmt.Errorf("plugin key is not an array")
+					return nil, "", fmt.Errorf("plugin key is not an array")
 				}
 
 				foundPluginKey = true
@@ -81,18 +78,18 @@ func ParsePlugins(content []byte) ([]Plugin, error) {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	if !foundPluginKey {
-		return nil, fmt.Errorf("plugin key not found")
+		return nil, "", fmt.Errorf("plugin key not found")
 	}
 
 	if inPluginArray {
-		return nil, fmt.Errorf("plugin array not closed")
+		return nil, "", fmt.Errorf("plugin array not closed")
 	}
 
-	return plugins, nil
+	return plugins, lineEnding, nil
 }
 
 func detectLineEnding(content []byte) string {
