@@ -1,0 +1,40 @@
+Task 2 - JSONC Plugin Parser (TDD)
+Date: 2026-03-18
+
+RED phase command:
+"/c/Program Files/Go/bin/go.exe" test ./internal/config/ -run TestParsePlugins -v
+
+RED phase output:
+# github.com/kayden-kim/oc/internal/config [github.com/kayden-kim/oc/internal/config.test]
+internal\config\jsonc_parser_test.go:12:17: undefined: Plugin
+internal\config\jsonc_parser_test.go:24:16: undefined: Plugin
+internal\config\jsonc_parser_test.go:34:16: undefined: Plugin
+internal\config\jsonc_parser_test.go:44:16: undefined: Plugin
+internal\config\jsonc_parser_test.go:57:16: undefined: Plugin
+internal\config\jsonc_parser_test.go:70:16: undefined: Plugin
+internal\config\jsonc_parser_test.go:84:16: undefined: Plugin
+internal\config\jsonc_parser_test.go:99:16: undefined: Plugin
+internal\config\jsonc_parser_test.go:113:16: undefined: Plugin
+internal\config\jsonc_parser_test.go:136:20: undefined: ParsePlugins
+internal\config\jsonc_parser_test.go:136:20: too many errors
+FAIL	github.com/kayden-kim/oc/internal/config [build failed]
+FAIL
+
+GREEN phase command:
+"/c/Program Files/Go/bin/go.exe" test ./internal/config/ -run TestParsePlugins -v
+
+GREEN phase output:
+=== RUN   TestParsePlugins
+=== RUN   TestParsePlugins/mixed_active_and_commented_plugins
+=== RUN   TestParsePlugins/empty_plugin_array
+=== RUN   TestParsePlugins/all_active_plugins
+=== RUN   TestParsePlugins/all_commented_plugins
+=== RUN   TestParsePlugins/special_characters_in_plugin_names
+=== RUN   TestParsePlugins/comment_spacing_variants
+=== RUN   TestParsePlugins/trailing_comma_variations
+=== RUN   TestParsePlugins/windows_line_endings
+=== RUN   TestParsePlugins/missing_plugin_key_returns_error
+=== RUN   TestParsePlugins/plugin_key_is_not_an_array_returns_error
+--- PASS: TestParsePlugins (0.00s)
+PASS
+ok  	github.com/kayden-kim/oc/internal/config	0.329s
