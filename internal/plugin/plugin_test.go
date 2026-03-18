@@ -128,6 +128,62 @@ func TestFilterByWhitelist(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "unversioned whitelist matches versioned plugin",
+			plugins: []config.Plugin{
+				{Name: "oh-my-opencode@latest", Enabled: true, LineIndex: 1, OriginalLine: `    "oh-my-opencode@latest",`},
+			},
+			whitelist:   []string{"oh-my-opencode"},
+			wantVisible: 1,
+			wantHidden:  0,
+		},
+		{
+			name: "versioned whitelist matches unversioned plugin",
+			plugins: []config.Plugin{
+				{Name: "oh-my-opencode", Enabled: true, LineIndex: 1, OriginalLine: `    "oh-my-opencode",`},
+			},
+			whitelist:   []string{"oh-my-opencode@latest"},
+			wantVisible: 1,
+			wantHidden:  0,
+		},
+		{
+			name: "scoped plugin keeps leading at-sign while ignoring version",
+			plugins: []config.Plugin{
+				{Name: "@scope/plugin@latest", Enabled: false, LineIndex: 2, OriginalLine: `    // "@scope/plugin@latest",`},
+			},
+			whitelist:   []string{"@scope/plugin"},
+			wantVisible: 1,
+			wantHidden:  0,
+		},
+		{
+			name: "case-sensitive matching still applies after version normalization",
+			plugins: []config.Plugin{
+				{Name: "Foo@latest", Enabled: true, LineIndex: 3, OriginalLine: `    "Foo@latest",`},
+			},
+			whitelist:   []string{"foo"},
+			wantVisible: 0,
+			wantHidden:  1,
+		},
+		{
+			name: "filtering preserves original plugin values after normalized match",
+			plugins: []config.Plugin{
+				{Name: "@scope/plugin@latest", Enabled: false, LineIndex: 4, OriginalLine: `    // "@scope/plugin@latest",`},
+			},
+			whitelist:   []string{"@scope/plugin"},
+			wantVisible: 1,
+			wantHidden:  0,
+			checkState: func(t *testing.T, visible, hidden []config.Plugin) {
+				if len(visible) != 1 {
+					return
+				}
+				if visible[0].Name != "@scope/plugin@latest" {
+					t.Fatalf("expected original plugin name to be preserved, got %q", visible[0].Name)
+				}
+				if visible[0].Enabled != false || visible[0].LineIndex != 4 {
+					t.Fatalf("expected original plugin state to be preserved, got %+v", visible[0])
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {

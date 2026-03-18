@@ -1,8 +1,19 @@
 package plugin
 
 import (
+	"strings"
+
 	"github.com/kayden-kim/oc/internal/config"
 )
+
+func comparisonName(name string) string {
+	lastAt := strings.LastIndex(name, "@")
+	if lastAt <= 0 {
+		return name
+	}
+
+	return name[:lastAt]
+}
 
 // FilterByWhitelist separates plugins into visible and hidden groups based on a whitelist.
 // - If whitelist is nil, all plugins are visible (empty hidden)
@@ -18,12 +29,12 @@ func FilterByWhitelist(plugins []config.Plugin, whitelist []string) (visible []c
 	// Build a map for O(1) lookup of whitelisted names
 	whitelistMap := make(map[string]bool)
 	for _, name := range whitelist {
-		whitelistMap[name] = true
+		whitelistMap[comparisonName(name)] = true
 	}
 
 	// Separate plugins into visible and hidden
 	for _, plugin := range plugins {
-		if whitelistMap[plugin.Name] {
+		if whitelistMap[comparisonName(plugin.Name)] {
 			visible = append(visible, plugin)
 		} else {
 			hidden = append(hidden, plugin)
