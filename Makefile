@@ -1,4 +1,4 @@
-.PHONY: build test build-all clean
+.PHONY: build test build-all clean release
 
 VERSION ?= dev
 LDFLAGS := -X main.version=$(VERSION)
@@ -17,3 +17,7 @@ build-all: clean
 
 clean:
 	rm -rf dist/
+
+release: build-all
+	@echo "Creating GitHub release $(VERSION)..."
+	gh release create $(VERSION) dist/* --title "$(VERSION)" --generate-notes
