@@ -1,0 +1,45 @@
+TOML Config Reader - Missing File Behavior
+
+=== TEST CASE: TestLoadOcConfigMissingFile ===
+
+Requirement: When ~/.oc is missing, LoadOcConfig MUST return (nil, nil)
+This is NOT treated as an error - it allows the application to show all plugins when no whitelist is configured.
+
+=== Implementation Logic ===
+
+Code in LoadOcConfig():
+  err := toml.DecodeFile(path, &config)
+  if err != nil && os.IsNotExist(err) {
+    return nil, nil  // File not found is NOT an error
+  }
+  if err != nil {
+    return nil, err  // Other errors are returned
+  }
+  return &config, nil  // Success case
+
+=== Why This Matters ===
+
+1. Graceful degradation: Missing ~/.oc file means "use all plugins" (no whitelist)
+2. No config file required: Users don't need ~/.oc to exist
+3. Whitelist is optional: Only users who want to restrict plugins create ~/.oc
+
+=== Test Verification ===
+
+TestLoadOcConfigMissingFile validates:
+  - nonexistentPath := "/nonexistent/path/to/config.toml"
+  - config, err := LoadOcConfig(nonexistentPath)
+  - if err != nil → FAIL (should not return error)
+  - if config != nil → FAIL (should return nil)
+  - Expected: config == nil AND err == nil ✓
+
+=== Application Integration ===
+
+When integrating with TUI:
+  config, _ := LoadOcConfig(homeDir + "/.oc")
+  if config == nil {
+    // Show all plugins (no whitelist)
+  } else {
+    // Show only whitelisted plugins from config.Plugins
+  }
+
+This pattern allows ~/.oc to be completely optional.

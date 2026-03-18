@@ -16,3 +16,16 @@
 - `LineIndex` remains stable using 0-based scanner iteration; `OriginalLine` should store scanner text exactly (no newline chars).
 - Empty inline array form (`"plugin": []`) must short-circuit array parsing to avoid false positives.
 - CRLF detection can be captured from raw bytes and saved for future writer behavior even when scanner normalizes line endings.
+
+## Task 3 (TOML Config Reader)
+- TDD approach: Write tests first (RED), then implementation (GREEN), verify (REFACTOR)
+- BurntSushi/toml v1.6.0 already in go.mod, no additional dependencies needed
+- `os.IsNotExist(err)` is the idiomatic Go way to check for missing files — returns (nil, nil) not an error
+- TOML struct tags use backticks: `toml:"plugins"` for field mapping to TOML keys
+- Default behavior: missing ~/.oc file means "no whitelist" → show all plugins (graceful degradation)
+- Test isolation: use t.TempDir() for creating temporary files in tests, ensures cleanup
+- 4 test cases cover: valid parsing, missing file, empty array, invalid syntax
+- LoadOcConfig() signature: func LoadOcConfig(path string) (*OcConfig, error)
+  - Returns (*OcConfig, nil) on success
+  - Returns (nil, nil) on missing file
+  - Returns (nil, error) on parse/other errors
