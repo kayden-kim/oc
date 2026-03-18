@@ -17,13 +17,13 @@ Download pre-built binaries from [GitHub Releases](https://github.com/kayden-kim
 
 **macOS (Apple Silicon)**:
 ```bash
-curl -L https://github.com/kayden-kim/oc/releases/download/v1.0.0/oc-darwin-arm64 -o /usr/local/bin/oc
+curl -L https://github.com/kayden-kim/oc/releases/download/v0.1.0/oc-darwin-arm64 -o /usr/local/bin/oc
 chmod +x /usr/local/bin/oc
 ```
 
 **macOS (Intel)**:
 ```bash
-curl -L https://github.com/kayden-kim/oc/releases/download/v1.0.0/oc-darwin-amd64 -o /usr/local/bin/oc
+curl -L https://github.com/kayden-kim/oc/releases/download/v0.1.0/oc-darwin-amd64 -o /usr/local/bin/oc
 chmod +x /usr/local/bin/oc
 ```
 
@@ -127,7 +127,7 @@ make build-all
 make test
 
 # Create GitHub release (requires gh CLI)
-make release VERSION=v1.0.0
+make release VERSION=v0.1.0
 ```
 
 Binaries are output to `./dist/` for multi-platform builds, or `./oc` for single-platform.
