@@ -17,13 +17,13 @@ Download pre-built binaries from [GitHub Releases](https://github.com/kayden-kim
 
 **macOS (Apple Silicon)**:
 ```bash
-curl -L https://github.com/kayden-kim/oc/releases/download/v0.1.0/oc-darwin-arm64 -o /usr/local/bin/oc
+curl -L https://github.com/kayden-kim/oc/releases/download/v0.1.1/oc-darwin-arm64 -o /usr/local/bin/oc
 chmod +x /usr/local/bin/oc
 ```
 
 **macOS (Intel)**:
 ```bash
-curl -L https://github.com/kayden-kim/oc/releases/download/v0.1.0/oc-darwin-amd64 -o /usr/local/bin/oc
+curl -L https://github.com/kayden-kim/oc/releases/download/v0.1.1/oc-darwin-amd64 -o /usr/local/bin/oc
 chmod +x /usr/local/bin/oc
 ```
 
@@ -50,7 +50,7 @@ TUI controls:
 - `↑/↓` or `j/k`: move cursor
 - `space`: toggle plugin
 - `enter`: save selections and launch `opencode`
-- `e`: open `opencode.json` in your editor and exit `oc`
+- `e`: open a config picker, then edit the selected file and exit `oc`
 - `q` / `esc` / `ctrl+c`: quit without changes
 
 ## Configuration
@@ -84,7 +84,19 @@ Plugins not in the whitelist are hidden from the TUI but preserved in the config
 
 ## Editor Selection
 
-When you press `e` in the plugin selector, `oc` opens `~/.config/opencode/opencode.json` and exits immediately.
+When you press `e` in the plugin selector, `oc` shows a config picker and exits after opening the selected file in your editor.
+
+Available choices:
+
+1. `~/.oc`
+2. `~/.config/opencode/opencode.json`
+3. `~/.config/opencode/oh-my-opencode.json`
+
+For the third option, `oc` checks the same folder as `opencode.json` and opens:
+
+1. `oh-my-opencode.json` if it exists
+2. `oh-my-opencode.jsonc` if `.json` does not exist and `.jsonc` does
+3. `oh-my-opencode.json` as the default path if neither file exists
 
 Editor selection priority:
 
@@ -127,7 +139,7 @@ make build-all
 make test
 
 # Create GitHub release (requires gh CLI)
-make release VERSION=v0.1.0
+make release VERSION=v0.1.1
 ```
 
 Binaries are output to `./dist/` for multi-platform builds, or `./oc` for single-platform.
