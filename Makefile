@@ -1,6 +1,6 @@
 .PHONY: build test build-all clean release
 
-VERSION ?= dev
+VERSION ?= v0.1.1
 LDFLAGS := -X main.version=$(VERSION)
 
 build:
