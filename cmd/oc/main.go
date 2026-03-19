@@ -41,7 +41,7 @@ type runtimeDeps struct {
 	runTUI            func([]tui.PluginItem, []tui.EditChoice) (map[string]bool, bool, string, error)
 	applySelections   func([]byte, map[string]bool) ([]byte, error)
 	writeConfigFile   func(string, []byte) error
-	openEditor        func(string) error
+	openEditor        func(string, string) error
 }
 
 func defaultDeps() runtimeDeps {
@@ -66,7 +66,7 @@ func defaultDeps() runtimeDeps {
 		},
 		applySelections: config.ApplySelections,
 		writeConfigFile: config.WriteConfigFile,
-		openEditor:      editor.Open,
+		openEditor:      editor.OpenWithConfig,
 	}
 }
 
@@ -95,8 +95,10 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 	}
 
 	var whitelist []string
+	var configEditor string
 	if ocConfig != nil {
 		whitelist = ocConfig.Plugins
+		configEditor = ocConfig.Editor
 	}
 
 	content, err := deps.readFile(configPath)
@@ -135,7 +137,7 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 		return nil
 	}
 	if editTarget != "" {
-		if err := deps.openEditor(editTarget); err != nil {
+		if err := deps.openEditor(editTarget, configEditor); err != nil {
 			return fmt.Errorf("failed to open editor for %s: %w", editTarget, err)
 		}
 		return nil

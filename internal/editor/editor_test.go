@@ -9,7 +9,7 @@ func TestCommandFromEnv_UsesOCEditorFirst(t *testing.T) {
 	t.Setenv("OC_EDITOR", "custom-editor --flag")
 	t.Setenv("EDITOR", "fallback-editor")
 
-	cmd, err := CommandForPath("/tmp/opencode.json")
+	cmd, err := CommandForPath("/tmp/opencode.json", "")
 	if err != nil {
 		t.Fatalf("CommandForPath returned error: %v", err)
 	}
@@ -25,7 +25,7 @@ func TestCommandFromEnv_UsesEditorWhenOCEditorMissing(t *testing.T) {
 	t.Setenv("OC_EDITOR", "")
 	t.Setenv("EDITOR", "vim")
 
-	cmd, err := CommandForPath("/tmp/opencode.json")
+	cmd, err := CommandForPath("/tmp/opencode.json", "")
 	if err != nil {
 		t.Fatalf("CommandForPath returned error: %v", err)
 	}
@@ -37,11 +37,40 @@ func TestCommandFromEnv_UsesEditorWhenOCEditorMissing(t *testing.T) {
 	}
 }
 
+func TestCommandForPath_UsesConfigEditorWhenEnvMissing(t *testing.T) {
+	t.Setenv("OC_EDITOR", "")
+	t.Setenv("EDITOR", "")
+
+	cmd, err := CommandForPath("/tmp/opencode.json", "emacs -nw")
+	if err != nil {
+		t.Fatalf("CommandForPath returned error: %v", err)
+	}
+	if cmd.Name != "emacs" {
+		t.Fatalf("expected emacs, got %q", cmd.Name)
+	}
+	if len(cmd.Args) != 2 || cmd.Args[0] != "-nw" || cmd.Args[1] != "/tmp/opencode.json" {
+		t.Fatalf("unexpected args: %#v", cmd.Args)
+	}
+}
+
+func TestCommandForPath_EnvOverridesConfig(t *testing.T) {
+	t.Setenv("OC_EDITOR", "")
+	t.Setenv("EDITOR", "vim")
+
+	cmd, err := CommandForPath("/tmp/opencode.json", "emacs")
+	if err != nil {
+		t.Fatalf("CommandForPath returned error: %v", err)
+	}
+	if cmd.Name != "vim" {
+		t.Fatalf("expected vim from EDITOR, got %q", cmd.Name)
+	}
+}
+
 func TestCommandForPath_FallsBackByPlatform(t *testing.T) {
 	t.Setenv("OC_EDITOR", "")
 	t.Setenv("EDITOR", "")
 
-	cmd, err := CommandForPath("/tmp/opencode.json")
+	cmd, err := CommandForPath("/tmp/opencode.json", "")
 	if err != nil {
 		t.Fatalf("CommandForPath returned error: %v", err)
 	}

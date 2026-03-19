@@ -72,15 +72,17 @@ Example `opencode.json` with plugin array:
 
 **Whitelist (optional)**: `~/.oc`
 
-Create a TOML file to filter which plugins appear in the TUI:
+Create a TOML file to filter which plugins appear in the TUI and set a default editor:
 ```toml
 plugins = [
   "oh-my-opencode",
   "my-custom-plugin"
 ]
+editor = "code --goto"
 ```
 
 Plugins not in the whitelist are hidden from the TUI but preserved in the config file.
+If `editor` is set, `oc` uses it only when `OC_EDITOR` and `EDITOR` are unset.
 
 ## Editor Selection
 
@@ -102,7 +104,8 @@ Editor selection priority:
 
 1. `OC_EDITOR`
 2. `EDITOR`
-3. Platform default fallback
+3. `editor` in `~/.oc`
+4. Platform default fallback
 
 Fallback editors:
 

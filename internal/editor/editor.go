@@ -14,9 +14,15 @@ type Command struct {
 	Args []string
 }
 
-// Open launches an editor for the given path and returns immediately.
+// Open launches an editor for the given path and waits for it to exit.
 func Open(path string) error {
-	cmdSpec, err := CommandForPath(path)
+	return OpenWithConfig(path, "")
+}
+
+// OpenWithConfig launches an editor for the given path using the provided config editor
+// and waits for it to exit.
+func OpenWithConfig(path string, configEditor string) error {
+	cmdSpec, err := CommandForPath(path, configEditor)
 	if err != nil {
 		return err
 	}
@@ -26,15 +32,15 @@ func Open(path string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start editor %q: %w", cmdSpec.Name, err)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("run editor %q: %w", cmdSpec.Name, err)
 	}
 
 	return nil
 }
 
 // CommandForPath resolves the editor command for a config path.
-func CommandForPath(path string) (Command, error) {
+func CommandForPath(path string, configEditor string) (Command, error) {
 	for _, key := range []string{"OC_EDITOR", "EDITOR"} {
 		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
 			parts, err := splitCommand(value)
@@ -43,6 +49,14 @@ func CommandForPath(path string) (Command, error) {
 			}
 			return Command{Name: parts[0], Args: append(parts[1:], path)}, nil
 		}
+	}
+
+	if configEditor = strings.TrimSpace(configEditor); configEditor != "" {
+		parts, err := splitCommand(configEditor)
+		if err != nil {
+			return Command{}, fmt.Errorf("parse config editor: %w", err)
+		}
+		return Command{Name: parts[0], Args: append(parts[1:], path)}, nil
 	}
 
 	switch runtime.GOOS {

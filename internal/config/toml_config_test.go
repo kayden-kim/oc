@@ -103,3 +103,54 @@ func TestLoadOcConfigInvalidTOML(t *testing.T) {
 		t.Errorf("expected nil config when error occurs, got %+v", config)
 	}
 }
+
+// TestLoadOcConfigWithEditor tests loading TOML with editor field
+func TestLoadOcConfigWithEditor(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.toml")
+
+	content := `plugins = ["plugin-a"]
+editor = "code --wait"`
+	err := os.WriteFile(configPath, []byte(content), 0644)
+	if err != nil {
+		t.Fatalf("failed to write test TOML file: %v", err)
+	}
+
+	config, err := LoadOcConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadOcConfig failed: %v", err)
+	}
+
+	if config == nil {
+		t.Fatal("expected config to be non-nil, got nil")
+	}
+
+	if config.Editor != "code --wait" {
+		t.Errorf("expected editor to be 'code --wait', got '%s'", config.Editor)
+	}
+}
+
+// TestLoadOcConfigWithoutEditor tests loading TOML without editor field
+func TestLoadOcConfigWithoutEditor(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.toml")
+
+	content := `plugins = ["plugin-a"]`
+	err := os.WriteFile(configPath, []byte(content), 0644)
+	if err != nil {
+		t.Fatalf("failed to write test TOML file: %v", err)
+	}
+
+	config, err := LoadOcConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadOcConfig failed: %v", err)
+	}
+
+	if config == nil {
+		t.Fatal("expected config to be non-nil, got nil")
+	}
+
+	if config.Editor != "" {
+		t.Errorf("expected editor to be empty, got '%s'", config.Editor)
+	}
+}

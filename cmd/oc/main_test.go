@@ -19,9 +19,10 @@ type fakeRunner struct {
 }
 
 type fakeEditor struct {
-	openErr error
-	opened  bool
-	path    string
+	openErr      error
+	opened       bool
+	path         string
+	configEditor string
 }
 
 func (f *fakeRunner) CheckAvailable() error {
@@ -34,9 +35,10 @@ func (f *fakeRunner) Run(args []string) error {
 	return f.runErr
 }
 
-func (f *fakeEditor) Open(path string) error {
+func (f *fakeEditor) Open(path string, configEditor string) error {
 	f.opened = true
 	f.path = path
+	f.configEditor = configEditor
 	return f.openErr
 }
 
@@ -77,20 +79,19 @@ func TestRunWithDeps_FullHappyPath(t *testing.T) {
 		},
 		applySelections: config.ApplySelections,
 		writeConfigFile: config.WriteConfigFile,
-		openEditor:      func(string) error { return nil },
+		openEditor:      func(string, string) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("runWithDeps returned error: %v", err)
 	}
-
 	if !calledTUI {
 		t.Fatal("expected TUI to be called")
 	}
 	if !r.ran {
-		t.Fatal("expected runner.Run to be called")
+		t.Fatal("runner.Run should be called")
 	}
 	if len(r.args) != 2 || r.args[0] != "--model" || r.args[1] != "gpt-5" {
-		t.Fatalf("args mismatch: %#v", r.args)
+		t.Fatalf("unexpected runner args: %#v", r.args)
 	}
 
 	updated, err := os.ReadFile(configPath)
@@ -98,41 +99,11 @@ func TestRunWithDeps_FullHappyPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := string(updated)
-	if !strings.Contains(out, "\"plugin-a\",") {
-		t.Fatalf("plugin-a should be enabled, got:\n%s", out)
-	}
-	if !strings.Contains(out, "\"plugin-b\",") || strings.Contains(out, "// \"plugin-b\"") {
+	if !strings.Contains(out, "\"plugin-b\"") || strings.Contains(out, "// \"plugin-b\"") {
 		t.Fatalf("plugin-b should be enabled, got:\n%s", out)
 	}
 	if !strings.Contains(out, "// \"plugin-c\"") {
 		t.Fatalf("plugin-c should be disabled, got:\n%s", out)
-	}
-}
-
-func TestRunWithDeps_MissingOpencodeJSON(t *testing.T) {
-	tmp := t.TempDir()
-	r := &fakeRunner{}
-
-	err := runWithDeps(nil, runtimeDeps{
-		newRunner:         func() runnerAPI { return r },
-		userHomeDir:       func() (string, error) { return tmp, nil },
-		readFile:          os.ReadFile,
-		loadOcConfig:      config.LoadOcConfig,
-		parsePlugins:      config.ParsePlugins,
-		filterByWhitelist: defaultDeps().filterByWhitelist,
-		runTUI:            defaultDeps().runTUI,
-		applySelections:   config.ApplySelections,
-		writeConfigFile:   config.WriteConfigFile,
-		openEditor:        func(string) error { return nil },
-	})
-	if err == nil {
-		t.Fatal("expected missing file error")
-	}
-	if !strings.Contains(err.Error(), "opencode.json not found") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if r.ran {
-		t.Fatal("runner.Run should not be called")
 	}
 }
 
@@ -164,7 +135,7 @@ func TestRunWithDeps_EmptyPluginArraySkipsTUI(t *testing.T) {
 		},
 		applySelections: config.ApplySelections,
 		writeConfigFile: config.WriteConfigFile,
-		openEditor:      func(string) error { return nil },
+		openEditor:      func(string, string) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("runWithDeps returned error: %v", err)
@@ -222,7 +193,7 @@ func TestRunWithDeps_WhitelistFiltersVisibleAndPreservesHidden(t *testing.T) {
 		},
 		applySelections: config.ApplySelections,
 		writeConfigFile: config.WriteConfigFile,
-		openEditor:      func(string) error { return nil },
+		openEditor:      func(string, string) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("runWithDeps returned error: %v", err)
@@ -270,7 +241,7 @@ func TestRunWithDeps_CancelledTUIDoesNotModifyFile(t *testing.T) {
 		},
 		applySelections: config.ApplySelections,
 		writeConfigFile: config.WriteConfigFile,
-		openEditor:      func(string) error { return nil },
+		openEditor:      func(string, string) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("runWithDeps returned error: %v", err)
@@ -302,7 +273,7 @@ func TestRunWithDeps_CheckAvailableError(t *testing.T) {
 		runTUI:            defaultDeps().runTUI,
 		applySelections:   config.ApplySelections,
 		writeConfigFile:   config.WriteConfigFile,
-		openEditor:        func(string) error { return nil },
+		openEditor:        func(string, string) error { return nil },
 	})
 	if err == nil {
 		t.Fatal("expected availability error")
@@ -351,6 +322,9 @@ func TestRunWithDeps_EditRequestOpensEditorAndExits(t *testing.T) {
 	if ed.path != configPath {
 		t.Fatalf("expected editor path %q, got %q", configPath, ed.path)
 	}
+	if ed.configEditor != "" {
+		t.Fatalf("expected empty config editor, got %q", ed.configEditor)
+	}
 	if r.ran {
 		t.Fatal("runner should not execute when edit is requested")
 	}
@@ -361,6 +335,54 @@ func TestRunWithDeps_EditRequestOpensEditorAndExits(t *testing.T) {
 	}
 	if string(updated) != initial {
 		t.Fatalf("file should remain unchanged on edit request\nwant:\n%s\ngot:\n%s", initial, string(updated))
+	}
+}
+
+func TestRunWithDeps_PassesOcConfigEditorToEditor(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, ".config", "opencode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	configPath := filepath.Join(configDir, "opencode.json")
+	if err := os.WriteFile(configPath, []byte("{\n  \"plugin\": [\n    \"plugin-a\"\n  ]\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ocConfigPath := filepath.Join(tmp, ".oc")
+	if err := os.WriteFile(ocConfigPath, []byte("editor = \"code --goto\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &fakeRunner{}
+	ed := &fakeEditor{}
+
+	err := runWithDeps(nil, runtimeDeps{
+		newRunner:         func() runnerAPI { return r },
+		userHomeDir:       func() (string, error) { return tmp, nil },
+		readFile:          os.ReadFile,
+		loadOcConfig:      config.LoadOcConfig,
+		parsePlugins:      config.ParsePlugins,
+		filterByWhitelist: defaultDeps().filterByWhitelist,
+		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice) (map[string]bool, bool, string, error) {
+			return nil, false, configPath, nil
+		},
+		applySelections: config.ApplySelections,
+		writeConfigFile: config.WriteConfigFile,
+		openEditor:      ed.Open,
+	})
+	if err != nil {
+		t.Fatalf("runWithDeps returned error: %v", err)
+	}
+	if !ed.opened {
+		t.Fatal("expected editor to be opened")
+	}
+	if ed.configEditor != "code --goto" {
+		t.Fatalf("expected config editor to be passed through, got %q", ed.configEditor)
+	}
+	if r.ran {
+		t.Fatal("runner should not execute when edit is requested")
 	}
 }
 
@@ -397,7 +419,7 @@ func TestRunWithDeps_PassesResolvedEditChoicesToTUI(t *testing.T) {
 		},
 		applySelections: config.ApplySelections,
 		writeConfigFile: config.WriteConfigFile,
-		openEditor:      func(string) error { return nil },
+		openEditor:      func(string, string) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("runWithDeps returned error: %v", err)

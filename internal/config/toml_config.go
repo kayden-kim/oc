@@ -9,6 +9,7 @@ import (
 // OcConfig represents the TOML configuration structure from ~/.oc
 type OcConfig struct {
 	Plugins []string `toml:"plugins"`
+	Editor  string   `toml:"editor"`
 }
 
 // LoadOcConfig loads the TOML configuration from the specified path.
