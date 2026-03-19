@@ -65,12 +65,15 @@ func TestRunWithDeps_FullHappyPath(t *testing.T) {
 		filterByWhitelist: func(p []config.Plugin, w []string) ([]config.Plugin, []config.Plugin) {
 			return defaultDeps().filterByWhitelist(p, w)
 		},
-		runTUI: func(items []tui.PluginItem) (map[string]bool, bool, bool, error) {
+		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice) (map[string]bool, bool, string, error) {
 			calledTUI = true
 			if len(items) != 3 {
 				t.Fatalf("expected 3 visible items, got %d", len(items))
 			}
-			return map[string]bool{"plugin-a": true, "plugin-b": true, "plugin-c": false}, false, false, nil
+			if len(editChoices) != 3 {
+				t.Fatalf("expected 3 edit choices, got %d", len(editChoices))
+			}
+			return map[string]bool{"plugin-a": true, "plugin-b": true, "plugin-c": false}, false, "", nil
 		},
 		applySelections: config.ApplySelections,
 		writeConfigFile: config.WriteConfigFile,
@@ -155,9 +158,9 @@ func TestRunWithDeps_EmptyPluginArraySkipsTUI(t *testing.T) {
 		loadOcConfig:      config.LoadOcConfig,
 		parsePlugins:      config.ParsePlugins,
 		filterByWhitelist: defaultDeps().filterByWhitelist,
-		runTUI: func(items []tui.PluginItem) (map[string]bool, bool, bool, error) {
+		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice) (map[string]bool, bool, string, error) {
 			tuiCalled = true
-			return map[string]bool{}, false, false, nil
+			return map[string]bool{}, false, "", nil
 		},
 		applySelections: config.ApplySelections,
 		writeConfigFile: config.WriteConfigFile,
@@ -208,14 +211,14 @@ func TestRunWithDeps_WhitelistFiltersVisibleAndPreservesHidden(t *testing.T) {
 		loadOcConfig:      config.LoadOcConfig,
 		parsePlugins:      config.ParsePlugins,
 		filterByWhitelist: defaultDeps().filterByWhitelist,
-		runTUI: func(items []tui.PluginItem) (map[string]bool, bool, bool, error) {
+		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice) (map[string]bool, bool, string, error) {
 			if len(items) != 2 {
 				t.Fatalf("expected only whitelisted plugins in TUI, got %d", len(items))
 			}
 			if items[0].Name != "plugin-a" || items[1].Name != "plugin-b" {
 				t.Fatalf("unexpected visible plugins: %+v", items)
 			}
-			return map[string]bool{"plugin-a": false, "plugin-b": true}, false, false, nil
+			return map[string]bool{"plugin-a": false, "plugin-b": true}, false, "", nil
 		},
 		applySelections: config.ApplySelections,
 		writeConfigFile: config.WriteConfigFile,
@@ -262,8 +265,8 @@ func TestRunWithDeps_CancelledTUIDoesNotModifyFile(t *testing.T) {
 		loadOcConfig:      config.LoadOcConfig,
 		parsePlugins:      config.ParsePlugins,
 		filterByWhitelist: defaultDeps().filterByWhitelist,
-		runTUI: func(items []tui.PluginItem) (map[string]bool, bool, bool, error) {
-			return nil, true, false, nil
+		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice) (map[string]bool, bool, string, error) {
+			return nil, true, "", nil
 		},
 		applySelections: config.ApplySelections,
 		writeConfigFile: config.WriteConfigFile,
@@ -332,8 +335,8 @@ func TestRunWithDeps_EditRequestOpensEditorAndExits(t *testing.T) {
 		loadOcConfig:      config.LoadOcConfig,
 		parsePlugins:      config.ParsePlugins,
 		filterByWhitelist: defaultDeps().filterByWhitelist,
-		runTUI: func(items []tui.PluginItem) (map[string]bool, bool, bool, error) {
-			return nil, false, true, nil
+		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice) (map[string]bool, bool, string, error) {
+			return nil, false, configPath, nil
 		},
 		applySelections: config.ApplySelections,
 		writeConfigFile: config.WriteConfigFile,
@@ -359,4 +362,99 @@ func TestRunWithDeps_EditRequestOpensEditorAndExits(t *testing.T) {
 	if string(updated) != initial {
 		t.Fatalf("file should remain unchanged on edit request\nwant:\n%s\ngot:\n%s", initial, string(updated))
 	}
+}
+
+func TestRunWithDeps_PassesResolvedEditChoicesToTUI(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, ".config", "opencode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	configPath := filepath.Join(configDir, "opencode.json")
+	if err := os.WriteFile(configPath, []byte("{\n  \"plugin\": [\n    \"plugin-a\"\n  ]\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	jsoncPath := filepath.Join(configDir, "oh-my-opencode.jsonc")
+	if err := os.WriteFile(jsoncPath, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &fakeRunner{}
+	var gotChoices []tui.EditChoice
+
+	err := runWithDeps(nil, runtimeDeps{
+		newRunner:         func() runnerAPI { return r },
+		userHomeDir:       func() (string, error) { return tmp, nil },
+		readFile:          os.ReadFile,
+		loadOcConfig:      config.LoadOcConfig,
+		parsePlugins:      config.ParsePlugins,
+		filterByWhitelist: defaultDeps().filterByWhitelist,
+		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice) (map[string]bool, bool, string, error) {
+			gotChoices = append([]tui.EditChoice(nil), editChoices...)
+			return nil, false, filepath.Join(tmp, ".oc"), nil
+		},
+		applySelections: config.ApplySelections,
+		writeConfigFile: config.WriteConfigFile,
+		openEditor:      func(string) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("runWithDeps returned error: %v", err)
+	}
+
+	if len(gotChoices) != 3 {
+		t.Fatalf("expected 3 edit choices, got %d", len(gotChoices))
+	}
+	if gotChoices[0].Path != filepath.Join(tmp, ".oc") {
+		t.Fatalf("expected first choice to target .oc, got %q", gotChoices[0].Path)
+	}
+	if gotChoices[1].Path != configPath {
+		t.Fatalf("expected second choice to target opencode.json, got %q", gotChoices[1].Path)
+	}
+	if gotChoices[2].Path != jsoncPath {
+		t.Fatalf("expected third choice to target oh-my jsonc, got %q", gotChoices[2].Path)
+	}
+	if r.ran {
+		t.Fatal("runner should not execute when edit is requested")
+	}
+}
+
+func TestResolveOhMyOpencodePath(t *testing.T) {
+	t.Run("prefers json when present", func(t *testing.T) {
+		configDir := t.TempDir()
+		jsonPath := filepath.Join(configDir, "oh-my-opencode.json")
+		jsoncPath := filepath.Join(configDir, "oh-my-opencode.jsonc")
+		if err := os.WriteFile(jsonPath, []byte("{}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(jsoncPath, []byte("{}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		if got := resolveOhMyOpencodePath(configDir); got != jsonPath {
+			t.Fatalf("expected %q, got %q", jsonPath, got)
+		}
+	})
+
+	t.Run("falls back to jsonc", func(t *testing.T) {
+		configDir := t.TempDir()
+		jsoncPath := filepath.Join(configDir, "oh-my-opencode.jsonc")
+		if err := os.WriteFile(jsoncPath, []byte("{}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		if got := resolveOhMyOpencodePath(configDir); got != jsoncPath {
+			t.Fatalf("expected %q, got %q", jsoncPath, got)
+		}
+	})
+
+	t.Run("defaults to json path", func(t *testing.T) {
+		configDir := t.TempDir()
+		want := filepath.Join(configDir, "oh-my-opencode.json")
+
+		if got := resolveOhMyOpencodePath(configDir); got != want {
+			t.Fatalf("expected %q, got %q", want, got)
+		}
+	})
 }

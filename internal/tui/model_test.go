@@ -8,6 +8,8 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+const testVersion = "v0.1.1"
+
 // mockKeyMsg creates a KeyPressMsg for testing
 func mockKeyMsg(key string) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Text: key}
@@ -20,7 +22,7 @@ func TestNewModel_InitialState(t *testing.T) {
 		{Name: "plugin-c", InitiallyEnabled: true},
 	}
 
-	m := NewModel(items)
+	m := NewModel(items, nil, testVersion)
 
 	if m.cursor != 0 {
 		t.Errorf("expected cursor=0, got %d", m.cursor)
@@ -46,7 +48,7 @@ func TestNewModel_InitialState(t *testing.T) {
 }
 
 func TestNewModel_EmptyList(t *testing.T) {
-	m := NewModel([]PluginItem{})
+	m := NewModel([]PluginItem{}, nil, testVersion)
 
 	if !m.confirmed {
 		t.Error("expected confirmed=true for empty list")
@@ -63,7 +65,7 @@ func TestUpdate_ArrowDown(t *testing.T) {
 		{Name: "plugin-c", InitiallyEnabled: false},
 	}
 
-	m := NewModel(items)
+	m := NewModel(items, nil, testVersion)
 
 	// Move down from 0 to 1
 	newModel, _ := m.Update(mockKeyMsg("down"))
@@ -86,7 +88,7 @@ func TestUpdate_ArrowDownBoundary(t *testing.T) {
 		{Name: "plugin-b", InitiallyEnabled: false},
 	}
 
-	m := NewModel(items)
+	m := NewModel(items, nil, testVersion)
 	m.cursor = 1 // Last item
 
 	// Try to move down past last item
@@ -104,7 +106,7 @@ func TestUpdate_ArrowUp(t *testing.T) {
 		{Name: "plugin-c", InitiallyEnabled: false},
 	}
 
-	m := NewModel(items)
+	m := NewModel(items, nil, testVersion)
 	m.cursor = 2
 
 	// Move up from 2 to 1
@@ -128,7 +130,7 @@ func TestUpdate_ArrowUpBoundary(t *testing.T) {
 		{Name: "plugin-b", InitiallyEnabled: false},
 	}
 
-	m := NewModel(items)
+	m := NewModel(items, nil, testVersion)
 	// cursor already at 0
 
 	// Try to move up past first item
@@ -146,7 +148,7 @@ func TestUpdate_VimBindings(t *testing.T) {
 		{Name: "plugin-c", InitiallyEnabled: false},
 	}
 
-	m := NewModel(items)
+	m := NewModel(items, nil, testVersion)
 
 	// j moves down
 	newModel, _ := m.Update(mockKeyMsg("j"))
@@ -169,7 +171,7 @@ func TestUpdate_SpaceToggle(t *testing.T) {
 		{Name: "plugin-b", InitiallyEnabled: false},
 	}
 
-	m := NewModel(items)
+	m := NewModel(items, nil, testVersion)
 
 	// plugin-a starts unselected
 	selections := m.Selections()
@@ -199,7 +201,7 @@ func TestUpdate_EnterConfirm(t *testing.T) {
 		{Name: "plugin-a", InitiallyEnabled: false},
 	}
 
-	m := NewModel(items)
+	m := NewModel(items, nil, testVersion)
 
 	// Press enter to confirm
 	newModel, cmd := m.Update(mockKeyMsg("enter"))
@@ -221,7 +223,7 @@ func TestUpdate_CtrlCCancel(t *testing.T) {
 		{Name: "plugin-a", InitiallyEnabled: false},
 	}
 
-	m := NewModel(items)
+	m := NewModel(items, nil, testVersion)
 
 	// Press ctrl+c to cancel
 	newModel, cmd := m.Update(mockKeyMsg("ctrl+c"))
@@ -252,7 +254,7 @@ func TestUpdate_QuitKeys(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		m := NewModel(items)
+		m := NewModel(items, nil, testVersion)
 		newModel, cmd := m.Update(mockKeyMsg(tt.key))
 		m = newModel.(Model)
 
@@ -272,14 +274,18 @@ func TestUpdate_EditRequest(t *testing.T) {
 	items := []PluginItem{
 		{Name: "plugin-a", InitiallyEnabled: false},
 	}
+	editChoices := []EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}}
 
-	m := NewModel(items)
+	m := NewModel(items, editChoices, testVersion)
 
 	newModel, cmd := m.Update(mockKeyMsg("e"))
 	m = newModel.(Model)
 
-	if !m.EditRequested() {
-		t.Error("expected EditRequested()=true after e")
+	if m.EditRequested() {
+		t.Error("expected EditRequested()=false until edit target is selected")
+	}
+	if !m.editMode {
+		t.Error("expected edit mode after e")
 	}
 	if m.cancelled {
 		t.Error("expected cancelled=false after e")
@@ -287,8 +293,55 @@ func TestUpdate_EditRequest(t *testing.T) {
 	if m.confirmed {
 		t.Error("expected confirmed=false after e")
 	}
+	if cmd != nil {
+		t.Error("expected no quit command after entering edit mode")
+	}
+}
+
+func TestUpdate_EditModeEnterSelectsTarget(t *testing.T) {
+	items := []PluginItem{{Name: "plugin-a", InitiallyEnabled: false}}
+	editChoices := []EditChoice{
+		{Label: ".oc file", Path: "/tmp/.oc"},
+		{Label: "opencode.json", Path: "/tmp/opencode.json"},
+	}
+
+	m := NewModel(items, editChoices, testVersion)
+	newModel, _ := m.Update(mockKeyMsg("e"))
+	m = newModel.(Model)
+	newModel, _ = m.Update(mockKeyMsg("down"))
+	m = newModel.(Model)
+	newModel, cmd := m.Update(mockKeyMsg("enter"))
+	m = newModel.(Model)
+
+	if !m.EditRequested() {
+		t.Fatal("expected EditRequested()=true after selecting an edit target")
+	}
+	if got := m.EditTarget(); got != "/tmp/opencode.json" {
+		t.Fatalf("expected edit target /tmp/opencode.json, got %q", got)
+	}
 	if cmd == nil || cmd() != tea.Quit() {
-		t.Error("expected tea.Quit command after e")
+		t.Error("expected tea.Quit command after edit target selection")
+	}
+}
+
+func TestUpdate_EditModeEscReturnsToPluginList(t *testing.T) {
+	items := []PluginItem{{Name: "plugin-a", InitiallyEnabled: false}}
+	editChoices := []EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}}
+
+	m := NewModel(items, editChoices, testVersion)
+	newModel, _ := m.Update(mockKeyMsg("e"))
+	m = newModel.(Model)
+	newModel, cmd := m.Update(mockKeyMsg("esc"))
+	m = newModel.(Model)
+
+	if m.editMode {
+		t.Error("expected edit mode to close on esc")
+	}
+	if m.Cancelled() {
+		t.Error("expected model not to be cancelled when backing out of edit mode")
+	}
+	if cmd != nil {
+		t.Error("expected no quit command when backing out of edit mode")
 	}
 }
 
@@ -299,7 +352,7 @@ func TestSelections_Output(t *testing.T) {
 		{Name: "plugin-c", InitiallyEnabled: true},
 	}
 
-	m := NewModel(items)
+	m := NewModel(items, nil, testVersion)
 
 	// Verify initial selections
 	selections := m.Selections()
@@ -333,7 +386,7 @@ func TestCancelled_Method(t *testing.T) {
 		{Name: "plugin-a", InitiallyEnabled: false},
 	}
 
-	m := NewModel(items)
+	m := NewModel(items, nil, testVersion)
 	if m.Cancelled() {
 		t.Error("expected Cancelled()=false initially")
 	}
@@ -349,45 +402,59 @@ func TestEditRequested_Method(t *testing.T) {
 	items := []PluginItem{
 		{Name: "plugin-a", InitiallyEnabled: false},
 	}
+	editChoices := []EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}}
 
-	m := NewModel(items)
+	m := NewModel(items, editChoices, testVersion)
 	if m.EditRequested() {
 		t.Error("expected EditRequested()=false initially")
 	}
 
 	newModel, _ := m.Update(mockKeyMsg("e"))
 	m = newModel.(Model)
+	if m.EditRequested() {
+		t.Error("expected EditRequested()=false while only the edit picker is open")
+	}
+
+	newModel, _ = m.Update(mockKeyMsg("enter"))
+	m = newModel.(Model)
 	if !m.EditRequested() {
-		t.Error("expected EditRequested()=true after e")
+		t.Error("expected EditRequested()=true after choosing an edit target")
+	}
+	if got := m.EditTarget(); got != "/tmp/.oc" {
+		t.Fatalf("expected EditTarget()=/tmp/.oc, got %q", got)
 	}
 }
 
 func TestRenderHeader_HighlightsOpenCodeOnly(t *testing.T) {
-	headerLine := renderHeader()
+	headerLine := Model{version: testVersion}.renderHeader()
 	headerAccentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("green")).Bold(true)
 
 	if !strings.Contains(headerLine, headerAccentStyle.Render("OpenCode")) {
 		t.Fatalf("expected styled OpenCode in header, got %q", headerLine)
 	}
-	if strings.Contains(headerLine, headerAccentStyle.Render("Launching ")) {
-		t.Fatalf("expected plain Launching prefix, got %q", headerLine)
+	if !strings.Contains(headerLine, "oc "+testVersion+" : Launching ") {
+		t.Fatalf("expected versioned launch prefix, got %q", headerLine)
 	}
 	if strings.Contains(headerLine, headerAccentStyle.Render(" with plugins")) {
 		t.Fatalf("expected plain header suffix, got %q", headerLine)
 	}
 }
 
+func TestRenderHeader_IncludesVersion(t *testing.T) {
+	headerLine := Model{version: testVersion}.renderHeader()
+
+	if !strings.HasPrefix(headerLine, "oc "+testVersion+" : ") {
+		t.Fatalf("expected header to start with version, got %q", headerLine)
+	}
+}
+
 func TestStylePluginRow_UsesCombinedStyleForFocusedSelectedRow(t *testing.T) {
-	cursorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("cyan")).Bold(true)
-	cursorSelectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("yellow")).Bold(true).Underline(true)
+	cursorSelectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("yellow")).Bold(true)
 	rowLine := stylePluginRow("> [*] plugin-a", true, true)
 	expected := cursorSelectedStyle.Render("> [*] plugin-a")
 
 	if !strings.Contains(rowLine, expected) {
 		t.Fatalf("expected focused+selected style %q in %q", expected, rowLine)
-	}
-	if strings.Contains(rowLine, cursorStyle.Render("> [*] plugin-a")) {
-		t.Fatalf("expected dedicated combined style instead of cursor-only style, got %q", rowLine)
 	}
 }
 
@@ -412,16 +479,17 @@ func TestRenderHelpLine_IncludesStyledKeyTokens(t *testing.T) {
 }
 
 func TestView_RendersStyledHeaderLine(t *testing.T) {
-	view := NewModel([]PluginItem{{Name: "plugin-a"}}).View().Content
+	view := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, testVersion).View().Content
 	headerLine := strings.Split(view, "\n")[0]
 
-	if headerLine != renderHeader() {
-		t.Fatalf("expected header line %q, got %q", renderHeader(), headerLine)
+	expected := Model{version: testVersion}.renderHeader()
+	if headerLine != expected {
+		t.Fatalf("expected header line %q, got %q", expected, headerLine)
 	}
 }
 
 func TestView_RendersFocusedSelectedRowLine(t *testing.T) {
-	view := NewModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}).View().Content
+	view := NewModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}, nil, testVersion).View().Content
 	rowLine := strings.Split(view, "\n")[2]
 	expected := stylePluginRow("> [*] plugin-a", true, true)
 
@@ -431,7 +499,7 @@ func TestView_RendersFocusedSelectedRowLine(t *testing.T) {
 }
 
 func TestView_RendersStyledHelpLine(t *testing.T) {
-	view := NewModel([]PluginItem{{Name: "plugin-a"}}).View().Content
+	view := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, testVersion).View().Content
 	helpLine := strings.Split(view, "\n")[4]
 
 	if helpLine != renderHelpLine() {
