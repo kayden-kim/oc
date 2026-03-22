@@ -2,11 +2,12 @@
 
 A TUI (Terminal User Interface) plugin selector for the [opencode](https://opencode.ai) CLI.
 
-`oc` provides an interactive multi-select interface to enable/disable opencode plugins via JSONC comment toggling, then launches opencode with your arguments.
+`oc` provides an interactive multi-select interface to enable/disable opencode plugins via JSONC comment toggling, then launches opencode with your arguments and returns to the TUI when the run finishes.
 
 ## Features
 
 - Interactive multi-select TUI powered by bubbletea
+- Return to the TUI after each `opencode` run to switch plugins and launch again
 - JSONC comment-based plugin toggling (`//` prefix)
 - Optional whitelist support via `~/.oc` TOML config
 - Cross-platform binaries (macOS arm64/amd64, Windows amd64)
@@ -43,15 +44,15 @@ oc [opencode arguments...]
 oc --model gpt-4
 ```
 
-All arguments after plugin selection are passed through to `opencode`.
+All arguments after plugin selection are passed through to `opencode`. After `opencode` exits, `oc` reopens the TUI so you can adjust plugins and run again in the same session.
 
 TUI controls:
 
 - `↑/↓` or `j/k`: move cursor
 - `space`: toggle plugin
 - `enter`: save selections and launch `opencode`
-- `e`: open a config picker, then edit the selected file and exit `oc`
-- `q` / `esc` / `ctrl+c`: quit without changes
+- `e`: open a config picker, edit the selected file, then return to the plugin TUI
+- `q` / `esc` / `ctrl+c`: quit the current `oc` session
 
 ## Configuration
 
@@ -86,7 +87,7 @@ If `editor` is set, `oc` uses it only when `OC_EDITOR` and `EDITOR` are unset.
 
 ## Editor Selection
 
-When you press `e` in the plugin selector, `oc` shows a config picker and exits after opening the selected file in your editor.
+When you press `e` in the plugin selector, `oc` shows a config picker, opens the selected file in your editor, and then returns to the plugin selector with refreshed config.
 
 Available choices:
 
