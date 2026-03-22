@@ -9,7 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-const testVersion = "v0.1.1"
+const testVersion = "v0.1.5"
 
 func newTestModel(items []PluginItem, editChoices []EditChoice, allowMultiplePlugins bool) Model {
 	return NewModel(items, editChoices, nil, SessionItem{}, testVersion, allowMultiplePlugins)

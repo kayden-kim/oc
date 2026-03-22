@@ -1,6 +1,6 @@
 .PHONY: build test build-all clean release
 
-VERSION ?= v0.1.1
+VERSION ?= v0.1.5
 LDFLAGS := -X main.version=$(VERSION)
 
 ifeq ($(OS),Windows_NT)

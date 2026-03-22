@@ -21,7 +21,7 @@ import (
 	"github.com/kayden-kim/oc/internal/tui"
 )
 
-var version = "v0.1.1" // Overridden by ldflags at build time
+var version = "v0.1.5" // Overridden by ldflags at build time
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "--version" {

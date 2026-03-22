@@ -26,7 +26,7 @@ $ oc --model gpt-4
 ```
 
 ```
-⚡ OC v0.1.1 - OpenCode launcher
+⚡ OC v0.1.5 - OpenCode launcher
 ─────────────────────────────────
   Choose plugins to enable
   > [x] oh-my-opencode
@@ -58,7 +58,7 @@ Download a pre-built binary from [GitHub Releases](https://github.com/kayden-kim
 <summary><strong>macOS (Apple Silicon)</strong></summary>
 
 ```bash
-curl -L https://github.com/kayden-kim/oc/releases/download/v0.1.1/oc-darwin-arm64 -o /usr/local/bin/oc
+curl -L https://github.com/kayden-kim/oc/releases/download/v0.1.5/oc-darwin-arm64 -o /usr/local/bin/oc
 chmod +x /usr/local/bin/oc
 ```
 
@@ -68,7 +68,7 @@ chmod +x /usr/local/bin/oc
 <summary><strong>macOS (Intel)</strong></summary>
 
 ```bash
-curl -L https://github.com/kayden-kim/oc/releases/download/v0.1.1/oc-darwin-amd64 -o /usr/local/bin/oc
+curl -L https://github.com/kayden-kim/oc/releases/download/v0.1.5/oc-darwin-amd64 -o /usr/local/bin/oc
 chmod +x /usr/local/bin/oc
 ```
 
@@ -262,7 +262,7 @@ cd oc
 make build          # build for current platform  -> ./oc
 make build-all      # cross-compile all targets   -> ./dist/
 make test           # run tests
-make release VERSION=v0.1.1   # build + create GitHub release (requires gh)
+make release VERSION=v0.1.5   # build + create GitHub release (requires gh)
 ```
 
 ## License
