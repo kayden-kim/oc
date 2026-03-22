@@ -24,6 +24,9 @@ func main() {
 		os.Exit(0)
 	}
 	if err := run(); err != nil {
+		if exitErr, ok := runner.IsExitCode(err); ok {
+			os.Exit(exitErr.Code)
+		}
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -89,6 +92,8 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 		return fmt.Errorf("opencode not found: %w", err)
 	}
 
+	var lastExitErr *runner.ExitCodeError
+
 	homeDir, err := deps.userHomeDir()
 	if err != nil {
 		return fmt.Errorf("failed to get home directory: %w", err)
@@ -98,73 +103,87 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 	configDir := filepath.Join(homeDir, ".config", "opencode")
 	configPath := filepath.Join(configDir, "opencode.json")
 
-	ocConfig, err := deps.loadOcConfig(ocConfigPath)
-	if err != nil {
-		return fmt.Errorf("failed to load whitelist: %w", err)
-	}
-
-	var whitelist []string
-	var configEditor string
-	var portsRange string
-	if ocConfig != nil {
-		whitelist = ocConfig.Plugins
-		configEditor = ocConfig.Editor
-		portsRange = ocConfig.Ports
-	}
-
-	content, err := deps.readFile(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("opencode.json not found at %s", configPath)
+	for {
+		ocConfig, err := deps.loadOcConfig(ocConfigPath)
+		if err != nil {
+			return fmt.Errorf("failed to load whitelist: %w", err)
 		}
-		return fmt.Errorf("failed to read opencode.json: %w", err)
-	}
 
-	plugins, _, err := deps.parsePlugins(content)
-	if err != nil {
-		return fmt.Errorf("failed to parse plugins: %w", err)
-	}
-
-	visible, _ := deps.filterByWhitelist(plugins, whitelist)
-	if len(visible) == 0 {
-		return runOpencode(r, args, portsRange, deps)
-	}
-
-	items := make([]tui.PluginItem, len(visible))
-	for i, p := range visible {
-		items[i] = tui.PluginItem{Name: p.Name, InitiallyEnabled: p.Enabled}
-	}
-	editChoices := []tui.EditChoice{
-		{Label: "1) .oc file", Path: ocConfigPath},
-		{Label: "2) opencode.json file", Path: configPath},
-		{Label: "3) oh-my-opencode.json file", Path: resolveOhMyOpencodePath(configDir)},
-	}
-
-	selections, cancelled, editTarget, err := deps.runTUI(items, editChoices)
-	if err != nil {
-		return fmt.Errorf("TUI error: %w", err)
-	}
-	if cancelled {
-		return nil
-	}
-	if editTarget != "" {
-		if err := deps.openEditor(editTarget, configEditor); err != nil {
-			return fmt.Errorf("failed to open editor for %s: %w", editTarget, err)
+		var whitelist []string
+		var configEditor string
+		var portsRange string
+		if ocConfig != nil {
+			whitelist = ocConfig.Plugins
+			configEditor = ocConfig.Editor
+			portsRange = ocConfig.Ports
 		}
-		return nil
-	}
 
-	modified, err := deps.applySelections(content, selections)
-	if err != nil {
-		return fmt.Errorf("failed to apply selections: %w", err)
-	}
-	if err := deps.writeConfigFile(configPath, modified); err != nil {
-		return fmt.Errorf("failed to write config: %w", err)
-	}
+		content, err := deps.readFile(configPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("opencode.json not found at %s", configPath)
+			}
+			return fmt.Errorf("failed to read opencode.json: %w", err)
+		}
 
-	printSelectedPlugins(selections)
+		plugins, _, err := deps.parsePlugins(content)
+		if err != nil {
+			return fmt.Errorf("failed to parse plugins: %w", err)
+		}
 
-	return runOpencode(r, args, portsRange, deps)
+		visible, _ := deps.filterByWhitelist(plugins, whitelist)
+		if len(visible) == 0 {
+			return runOpencode(r, args, portsRange, deps)
+		}
+
+		items := make([]tui.PluginItem, len(visible))
+		for i, p := range visible {
+			items[i] = tui.PluginItem{Name: p.Name, InitiallyEnabled: p.Enabled}
+		}
+		editChoices := []tui.EditChoice{
+			{Label: "1) .oc file", Path: ocConfigPath},
+			{Label: "2) opencode.json file", Path: configPath},
+			{Label: "3) oh-my-opencode.json file", Path: resolveOhMyOpencodePath(configDir)},
+		}
+
+		selections, cancelled, editTarget, err := deps.runTUI(items, editChoices)
+		if err != nil {
+			return fmt.Errorf("TUI error: %w", err)
+		}
+		if cancelled {
+			if lastExitErr != nil {
+				return lastExitErr
+			}
+			return nil
+		}
+		if editTarget != "" {
+			if err := deps.openEditor(editTarget, configEditor); err != nil {
+				return fmt.Errorf("failed to open editor for %s: %w", editTarget, err)
+			}
+			continue
+		}
+
+		modified, err := deps.applySelections(content, selections)
+		if err != nil {
+			return fmt.Errorf("failed to apply selections: %w", err)
+		}
+		if err := deps.writeConfigFile(configPath, modified); err != nil {
+			return fmt.Errorf("failed to write config: %w", err)
+		}
+
+		printSelectedPlugins(selections)
+
+		err = runOpencode(r, args, portsRange, deps)
+		if exitErr, ok := runner.IsExitCode(err); ok {
+			lastExitErr = exitErr
+			fmt.Fprintf(os.Stderr, "opencode exited with code %d\n\n", exitErr.Code)
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		lastExitErr = nil
+	}
 }
 
 func runOpencode(r runnerAPI, args []string, portsRange string, deps runtimeDeps) error {
