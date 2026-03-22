@@ -73,7 +73,7 @@ Example `opencode.json` with plugin array:
 
 **Whitelist (optional)**: `~/.oc`
 
-Create a TOML file to filter which plugins appear in the TUI, control whether multiple plugins can be selected, set a default editor, and optionally override ports per plugin:
+Create a TOML file to filter which plugins appear in the TUI, control whether multiple plugins can be selected, set a default editor, and optionally configure launch ports for `oh-my-opencode`:
 ```toml
 [oc]
 plugins = [
@@ -91,7 +91,7 @@ Plugins not in the whitelist are hidden from the TUI but preserved in the config
 The `plugins` list in `~/.oc` is only a whitelist, not an initial selection set.
 If `allow_multiple_plugins` is not set, it defaults to `false`.
 If `editor` is set, `oc` uses it only when `OC_EDITOR` and `EDITOR` are unset.
-If exactly one visible plugin matches a `[plugin.<name>]` section, that plugin's `ports` value is used for launch port selection.
+If `oh-my-opencode` is enabled for launch and `[plugin.oh-my-opencode].ports` is set, that range is used for launch port selection.
 
 ## Editor Selection
 

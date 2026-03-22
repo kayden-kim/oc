@@ -11,10 +11,10 @@ import (
 
 var (
 	launchTitleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Bold(true)
-	launchLabelStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
+	launchLabelStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Bold(true)
 	launchDimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#9AA4B2"))
 	launchSpinStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Bold(true)
-	launchLogNewStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
+	launchLogNewStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Bold(true)
 	launchLogMidStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#B7C0CC"))
 	launchLogOldStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#7A8594"))
 )
@@ -36,17 +36,20 @@ type launchExecutor func(chan<- tea.Msg)
 type LaunchModel struct {
 	version  string
 	plugins  []string
+	session  SessionItem
 	logs     []string
 	ready    *LaunchReadyMsg
+	clearing bool
 	executor launchExecutor
 	msgCh    chan tea.Msg
 	frame    int
 }
 
-func NewLaunchModel(plugins []string, version string, executor launchExecutor) LaunchModel {
+func NewLaunchModel(plugins []string, session SessionItem, version string, executor launchExecutor) LaunchModel {
 	return LaunchModel{
 		version:  version,
 		plugins:  append([]string(nil), plugins...),
+		session:  session,
 		executor: executor,
 		msgCh:    make(chan tea.Msg, 32),
 	}
@@ -101,6 +104,7 @@ func (m LaunchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case LaunchReadyMsg:
 		ready := msg
 		m.ready = &ready
+		m.clearing = true
 		return m, tea.Quit
 	case launchTickMsg:
 		m.frame = (m.frame + 1) % len(launchFrames)
@@ -113,12 +117,13 @@ func (m LaunchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m LaunchModel) View() tea.View {
-	if m.ready != nil {
+	if m.clearing {
 		return tea.NewView("")
 	}
 
 	var sections []string
 	sections = append(sections, Model{version: m.version}.renderHeader())
+	sections = append(sections, renderSelectedSession(m.session))
 	sections = append(sections, launchTitleStyle.Render(fmt.Sprintf("%s Launching opencode", launchFrames[m.frame])))
 
 	if len(m.plugins) == 0 {
@@ -126,7 +131,7 @@ func (m LaunchModel) View() tea.View {
 	} else {
 		pluginLines := []string{launchLabelStyle.Render("Plugins")}
 		for _, plugin := range m.plugins {
-			pluginLines = append(pluginLines, fmt.Sprintf("  - %s", plugin))
+			pluginLines = append(pluginLines, defaultTextStyle.Render(fmt.Sprintf("  - %s", plugin)))
 		}
 		sections = append(sections, strings.Join(pluginLines, "\n"))
 	}

@@ -7,9 +7,13 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+func newTestLaunchModel(plugins []string, session SessionItem, executor launchExecutor) LaunchModel {
+	return NewLaunchModel(plugins, session, testVersion, executor)
+}
+
 func TestNewLaunchModelCopiesPlugins(t *testing.T) {
 	plugins := []string{"plugin-a", "plugin-b"}
-	m := NewLaunchModel(plugins, testVersion, nil)
+	m := newTestLaunchModel(plugins, SessionItem{}, nil)
 	plugins[0] = "mutated"
 
 	view := m.View().Content
@@ -19,14 +23,14 @@ func TestNewLaunchModelCopiesPlugins(t *testing.T) {
 }
 
 func TestLaunchModelInitWithoutExecutorReturnsNil(t *testing.T) {
-	m := NewLaunchModel([]string{"plugin-a"}, testVersion, nil)
+	m := newTestLaunchModel([]string{"plugin-a"}, SessionItem{}, nil)
 	if cmd := m.Init(); cmd != nil {
 		t.Fatal("expected nil init command when executor is absent")
 	}
 }
 
 func TestLaunchModelViewRendersPluginsAndPlaceholder(t *testing.T) {
-	m := NewLaunchModel([]string{"plugin-a", "plugin-b"}, testVersion, nil)
+	m := newTestLaunchModel([]string{"plugin-a", "plugin-b"}, SessionItem{}, nil)
 	view := m.View().Content
 
 	for _, want := range []string{
@@ -45,14 +49,23 @@ func TestLaunchModelViewRendersPluginsAndPlaceholder(t *testing.T) {
 }
 
 func TestLaunchModelViewRendersNoPlugins(t *testing.T) {
-	m := NewLaunchModel(nil, testVersion, nil)
+	m := newTestLaunchModel(nil, SessionItem{}, nil)
 	if view := m.View().Content; !strings.Contains(view, "No selectable plugins in this view; continuing with the current configuration.") {
 		t.Fatalf("expected empty plugin copy in view, got %q", view)
 	}
 }
 
+func TestLaunchModelViewRendersSelectedSession(t *testing.T) {
+	session := SessionItem{ID: "ses_latest", Title: "Latest session"}
+	m := newTestLaunchModel([]string{"plugin-a"}, session, nil)
+
+	if view := m.View().Content; !strings.Contains(view, renderSelectedSession(session)) {
+		t.Fatalf("expected selected session line in view, got %q", view)
+	}
+}
+
 func TestLaunchModelTickAdvancesSpinner(t *testing.T) {
-	m := NewLaunchModel([]string{"plugin-a"}, testVersion, nil)
+	m := newTestLaunchModel([]string{"plugin-a"}, SessionItem{}, nil)
 	updated, cmd := m.Update(launchTickMsg{})
 	launchModel := updated.(LaunchModel)
 
@@ -65,7 +78,7 @@ func TestLaunchModelTickAdvancesSpinner(t *testing.T) {
 }
 
 func TestLaunchModelSpinnerWrapsAround(t *testing.T) {
-	m := NewLaunchModel([]string{"plugin-a"}, testVersion, nil)
+	m := newTestLaunchModel([]string{"plugin-a"}, SessionItem{}, nil)
 	updated := tea.Model(m)
 	for i := 0; i < len(launchFrames); i++ {
 		var cmd tea.Cmd
@@ -81,7 +94,7 @@ func TestLaunchModelSpinnerWrapsAround(t *testing.T) {
 }
 
 func TestLaunchModelUpdateAppendsLogs(t *testing.T) {
-	m := NewLaunchModel([]string{"plugin-a"}, testVersion, nil)
+	m := newTestLaunchModel([]string{"plugin-a"}, SessionItem{}, nil)
 	updated, cmd := m.Update(LaunchLogMsg{Line: "Using port 51234"})
 	launchModel := updated.(LaunchModel)
 
@@ -94,7 +107,7 @@ func TestLaunchModelUpdateAppendsLogs(t *testing.T) {
 }
 
 func TestLaunchModelViewEmphasizesNewestLogLine(t *testing.T) {
-	m := NewLaunchModel([]string{"plugin-a"}, testVersion, nil)
+	m := newTestLaunchModel([]string{"plugin-a"}, SessionItem{}, nil)
 	updated, _ := m.Update(LaunchLogMsg{Line: "checking config"})
 	updated, _ = updated.(LaunchModel).Update(LaunchLogMsg{Line: "resolving port"})
 	updated, _ = updated.(LaunchModel).Update(LaunchLogMsg{Line: "Using port 51234"})
@@ -112,7 +125,7 @@ func TestLaunchModelViewEmphasizesNewestLogLine(t *testing.T) {
 }
 
 func TestLaunchModelViewSingleLogLineIsBright(t *testing.T) {
-	m := NewLaunchModel([]string{"plugin-a"}, testVersion, nil)
+	m := newTestLaunchModel([]string{"plugin-a"}, SessionItem{}, nil)
 	updated, _ := m.Update(LaunchLogMsg{Line: "Using port 51234"})
 	view := updated.(LaunchModel).View().Content
 
@@ -122,7 +135,7 @@ func TestLaunchModelViewSingleLogLineIsBright(t *testing.T) {
 }
 
 func TestLaunchModelUpdateReadyQuitsAndStoresPortArgs(t *testing.T) {
-	m := NewLaunchModel([]string{"plugin-a"}, testVersion, nil)
+	m := newTestLaunchModel([]string{"plugin-a"}, SessionItem{}, nil)
 	updated, cmd := m.Update(LaunchReadyMsg{PortArgs: []string{"--port", "51234"}})
 	launchModel := updated.(LaunchModel)
 
@@ -139,17 +152,29 @@ func TestLaunchModelUpdateReadyQuitsAndStoresPortArgs(t *testing.T) {
 	}
 }
 
-func TestLaunchModelViewIsEmptyWhenReady(t *testing.T) {
-	m := NewLaunchModel([]string{"plugin-a"}, testVersion, nil)
+func TestLaunchModelViewClearsWhenReady(t *testing.T) {
+	m := newTestLaunchModel([]string{"plugin-a"}, SessionItem{}, nil)
 	updated, _ := m.Update(LaunchReadyMsg{PortArgs: []string{"--port", "51234"}})
 
-	if view := updated.(LaunchModel).View().Content; view != "" {
+	view := updated.(LaunchModel).View().Content
+	if view != "" {
 		t.Fatalf("expected empty view after launch ready, got %q", view)
 	}
 }
 
+func TestLaunchModelViewClearsLogsWhenReady(t *testing.T) {
+	m := newTestLaunchModel([]string{"plugin-a"}, SessionItem{}, nil)
+	updated, _ := m.Update(LaunchLogMsg{Line: "Using port 51234"})
+	updated, _ = updated.(LaunchModel).Update(LaunchReadyMsg{PortArgs: []string{"--port", "51234"}})
+
+	view := updated.(LaunchModel).View().Content
+	if view != "" {
+		t.Fatalf("expected ready view to clear progress output, got %q", view)
+	}
+}
+
 func TestLaunchModelIgnoresKeyPresses(t *testing.T) {
-	m := NewLaunchModel([]string{"plugin-a"}, testVersion, nil)
+	m := newTestLaunchModel([]string{"plugin-a"}, SessionItem{}, nil)
 	updated, cmd := m.Update(mockKeyMsg("q"))
 
 	if cmd != nil {

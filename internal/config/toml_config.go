@@ -14,7 +14,6 @@ type PluginConfig struct {
 type OcConfig struct {
 	Plugins              []string `toml:"plugins"`
 	Editor               string   `toml:"editor"`
-	Ports                string   `toml:"ports"`
 	AllowMultiplePlugins bool     `toml:"allow_multiple_plugins"`
 	PluginConfigs        map[string]PluginConfig
 }
@@ -22,21 +21,19 @@ type OcConfig struct {
 type ocTable struct {
 	Plugins              []string `toml:"plugins"`
 	Editor               string   `toml:"editor"`
-	Ports                string   `toml:"ports"`
 	AllowMultiplePlugins bool     `toml:"allow_multiple_plugins"`
 }
 
 type rawOcConfig struct {
 	Plugins              []string                `toml:"plugins"`
 	Editor               string                  `toml:"editor"`
-	Ports                string                  `toml:"ports"`
 	AllowMultiplePlugins bool                    `toml:"allow_multiple_plugins"`
 	Oc                   ocTable                 `toml:"oc"`
 	Plugin               map[string]PluginConfig `toml:"plugin"`
 }
 
 func hasOcTable(config rawOcConfig) bool {
-	return config.Oc.Plugins != nil || config.Oc.Editor != "" || config.Oc.Ports != "" || config.Oc.AllowMultiplePlugins
+	return config.Oc.Plugins != nil || config.Oc.Editor != "" || config.Oc.AllowMultiplePlugins
 }
 
 // LoadOcConfig loads the TOML configuration from the specified path.
@@ -61,7 +58,6 @@ func LoadOcConfig(path string) (*OcConfig, error) {
 	config := &OcConfig{
 		Plugins:              rawConfig.Plugins,
 		Editor:               rawConfig.Editor,
-		Ports:                rawConfig.Ports,
 		AllowMultiplePlugins: rawConfig.AllowMultiplePlugins,
 		PluginConfigs:        rawConfig.Plugin,
 	}
@@ -69,7 +65,6 @@ func LoadOcConfig(path string) (*OcConfig, error) {
 	if hasOcTable(rawConfig) {
 		config.Plugins = rawConfig.Oc.Plugins
 		config.Editor = rawConfig.Oc.Editor
-		config.Ports = rawConfig.Oc.Ports
 		config.AllowMultiplePlugins = rawConfig.Oc.AllowMultiplePlugins
 	}
 

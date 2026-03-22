@@ -155,57 +155,6 @@ func TestLoadOcConfigWithoutEditor(t *testing.T) {
 	}
 }
 
-// TestLoadOcConfigWithPorts tests loading TOML with ports field
-func TestLoadOcConfigWithPorts(t *testing.T) {
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.toml")
-
-	content := `plugins = ["plugin-a"]
-ports = "50000-55000"`
-	err := os.WriteFile(configPath, []byte(content), 0644)
-	if err != nil {
-		t.Fatalf("failed to write test TOML file: %v", err)
-	}
-
-	config, err := LoadOcConfig(configPath)
-	if err != nil {
-		t.Fatalf("LoadOcConfig failed: %v", err)
-	}
-
-	if config == nil {
-		t.Fatal("expected config to be non-nil, got nil")
-	}
-
-	if config.Ports != "50000-55000" {
-		t.Errorf("expected ports to be '50000-55000', got '%s'", config.Ports)
-	}
-}
-
-// TestLoadOcConfigWithoutPorts tests loading TOML without ports field
-func TestLoadOcConfigWithoutPorts(t *testing.T) {
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.toml")
-
-	content := `plugins = ["plugin-a"]`
-	err := os.WriteFile(configPath, []byte(content), 0644)
-	if err != nil {
-		t.Fatalf("failed to write test TOML file: %v", err)
-	}
-
-	config, err := LoadOcConfig(configPath)
-	if err != nil {
-		t.Fatalf("LoadOcConfig failed: %v", err)
-	}
-
-	if config == nil {
-		t.Fatal("expected config to be non-nil, got nil")
-	}
-
-	if config.Ports != "" {
-		t.Errorf("expected ports to be empty, got '%s'", config.Ports)
-	}
-}
-
 // TestLoadOcConfigWithAllowMultiplePlugins tests loading TOML with allow_multiple_plugins field
 func TestLoadOcConfigWithAllowMultiplePlugins(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -309,13 +258,11 @@ func TestLoadOcConfigOcSectionOverridesFlatKeys(t *testing.T) {
 
 	content := `plugins = ["top-level"]
 editor = "vim"
-ports = "50000-51000"
 allow_multiple_plugins = true
 
 [oc]
 plugins = ["section-plugin"]
 editor = "nvim"
-ports = "55000-55500"
 allow_multiple_plugins = false`
 	err := os.WriteFile(configPath, []byte(content), 0644)
 	if err != nil {
@@ -332,9 +279,6 @@ allow_multiple_plugins = false`
 	}
 	if config.Editor != "nvim" {
 		t.Fatalf("expected [oc] editor to override flat key, got %q", config.Editor)
-	}
-	if config.Ports != "55000-55500" {
-		t.Fatalf("expected [oc] ports to override flat key, got %q", config.Ports)
 	}
 	if config.AllowMultiplePlugins {
 		t.Fatal("expected [oc] allow_multiple_plugins to override flat key")

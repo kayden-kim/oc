@@ -1,11 +1,16 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
+	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/kayden-kim/oc/internal/config"
@@ -44,7 +49,9 @@ type runtimeDeps struct {
 	loadOcConfig      func(string) (*config.OcConfig, error)
 	parsePlugins      func([]byte) ([]config.Plugin, string, error)
 	filterByWhitelist func([]config.Plugin, []string) ([]config.Plugin, []config.Plugin)
-	runTUI            func([]tui.PluginItem, []tui.EditChoice, string, bool) (map[string]bool, bool, string, []string, error)
+	getwd             func() (string, error)
+	listSessions      func(string) ([]tui.SessionItem, error)
+	runTUI            func([]tui.PluginItem, []tui.EditChoice, []tui.SessionItem, tui.SessionItem, string, bool) (map[string]bool, bool, string, []string, tui.SessionItem, error)
 	applySelections   func([]byte, map[string]bool) ([]byte, error)
 	writeConfigFile   func(string, []byte) error
 	openEditor        func(string, string) error
@@ -61,6 +68,8 @@ func defaultDeps() runtimeDeps {
 		loadOcConfig:      config.LoadOcConfig,
 		parsePlugins:      config.ParsePlugins,
 		filterByWhitelist: plugin.FilterByWhitelist,
+		getwd:             os.Getwd,
+		listSessions:      listSessions,
 		applySelections:   config.ApplySelections,
 		writeConfigFile:   config.WriteConfigFile,
 		openEditor:        editor.OpenWithConfig,
@@ -69,38 +78,54 @@ func defaultDeps() runtimeDeps {
 		isPortAvailable:   port.IsAvailable,
 	}
 
-	deps.runTUI = func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, allowMultiplePlugins bool) (map[string]bool, bool, string, []string, error) {
-		model := tui.NewModel(items, editChoices, version, allowMultiplePlugins)
+	deps.runTUI = func(items []tui.PluginItem, editChoices []tui.EditChoice, sessions []tui.SessionItem, session tui.SessionItem, portsRange string, allowMultiplePlugins bool) (map[string]bool, bool, string, []string, tui.SessionItem, error) {
+		model := tui.NewModel(items, editChoices, sessions, session, version, allowMultiplePlugins)
 		result, err := tea.NewProgram(model).Run()
 		if err != nil {
-			return nil, false, "", nil, err
+			return nil, false, "", nil, tui.SessionItem{}, err
 		}
 		finalModel, ok := result.(tui.Model)
 		if !ok {
-			return nil, false, "", nil, fmt.Errorf("unexpected TUI model type %T", result)
+			return nil, false, "", nil, tui.SessionItem{}, fmt.Errorf("unexpected TUI model type %T", result)
 		}
 
 		selections := finalModel.Selections()
 		if finalModel.Cancelled() || finalModel.EditTarget() != "" {
-			return selections, finalModel.Cancelled(), finalModel.EditTarget(), nil, nil
+			return selections, finalModel.Cancelled(), finalModel.EditTarget(), nil, finalModel.SelectedSession(), nil
 		}
 
-		portArgs, err := runLaunchTUI(selectedPluginNames(selections), portsRange, deps)
+		effectivePortsRange := ""
+		if isPluginSelected(selections, ohMyOpencodePluginName) {
+			effectivePortsRange = portsRange
+		}
+
+		portArgs, err := runLaunchTUI(selectedPluginNames(selections), finalModel.SelectedSession(), effectivePortsRange, deps)
 		if err != nil {
-			return nil, false, "", nil, err
+			return nil, false, "", nil, tui.SessionItem{}, err
 		}
 
-		return selections, false, "", portArgs, nil
+		return selections, false, "", portArgs, finalModel.SelectedSession(), nil
 	}
 
 	return deps
 }
+
+const ohMyOpencodePluginName = "oh-my-opencode"
 
 func run() error {
 	return runWithDeps(os.Args[1:], defaultDeps())
 }
 
 func runWithDeps(args []string, deps runtimeDeps) error {
+	if deps.getwd == nil {
+		deps.getwd = os.Getwd
+	}
+	if deps.listSessions == nil {
+		deps.listSessions = func(string) ([]tui.SessionItem, error) {
+			return nil, nil
+		}
+	}
+
 	r := deps.newRunner()
 	if err := r.CheckAvailable(); err != nil {
 		return fmt.Errorf("opencode not found: %w", err)
@@ -116,8 +141,22 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 	ocConfigPath := filepath.Join(homeDir, ".oc")
 	configDir := filepath.Join(homeDir, ".config", "opencode")
 	configPath := filepath.Join(configDir, "opencode.json")
+	selectedSession := tui.SessionItem{}
 
 	for {
+		cwd, err := deps.getwd()
+		if err != nil {
+			return fmt.Errorf("failed to get current directory: %w", err)
+		}
+
+		sessions, err := deps.listSessions(cwd)
+		if err != nil {
+			sessions = nil
+		}
+		if selectedSession.ID == "" {
+			selectedSession = latestSession(sessions)
+		}
+
 		ocConfig, err := deps.loadOcConfig(ocConfigPath)
 		if err != nil {
 			return fmt.Errorf("failed to load whitelist: %w", err)
@@ -125,13 +164,11 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 
 		var whitelist []string
 		var configEditor string
-		var portsRange string
 		var pluginConfigs map[string]config.PluginConfig
 		allowMultiplePlugins := false
 		if ocConfig != nil {
 			whitelist = ocConfig.Plugins
 			configEditor = ocConfig.Editor
-			portsRange = ocConfig.Ports
 			pluginConfigs = ocConfig.PluginConfigs
 			allowMultiplePlugins = ocConfig.AllowMultiplePlugins
 		}
@@ -151,11 +188,11 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 
 		visible, _ := deps.filterByWhitelist(plugins, whitelist)
 		if len(visible) == 0 {
-			portArgs, err := runLaunchTUI(nil, portsRange, deps)
+			portArgs, err := runLaunchTUI(nil, selectedSession, "", deps)
 			if err != nil {
 				return fmt.Errorf("launch TUI error: %w", err)
 			}
-			return runOpencode(r, args, portArgs)
+			return runOpencode(r, args, portArgs, selectedSession)
 		}
 
 		items := make([]tui.PluginItem, len(visible))
@@ -168,14 +205,13 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 			{Label: "3) oh-my-opencode.json file", Path: resolveOhMyOpencodePath(configDir)},
 		}
 
-		effectivePortsRange := portsRange
-		if len(visible) == 1 {
-			if pluginConfig, ok := pluginConfigs[pluginNameKey(visible[0].Name)]; ok && pluginConfig.Ports != "" {
-				effectivePortsRange = pluginConfig.Ports
-			}
-		}
+		omoPortsRange := ohMyOpencodePortsRange(pluginConfigs)
 
-		selections, cancelled, editTarget, portArgs, err := deps.runTUI(items, editChoices, effectivePortsRange, allowMultiplePlugins)
+		var selections map[string]bool
+		var cancelled bool
+		var editTarget string
+		var portArgs []string
+		selections, cancelled, editTarget, portArgs, selectedSession, err = deps.runTUI(items, editChoices, sessions, selectedSession, omoPortsRange, allowMultiplePlugins)
 		if err != nil {
 			return fmt.Errorf("TUI error: %w", err)
 		}
@@ -191,6 +227,9 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 			}
 			continue
 		}
+		if !isPluginSelected(selections, ohMyOpencodePluginName) {
+			portArgs = nil
+		}
 
 		modified, err := deps.applySelections(content, selections)
 		if err != nil {
@@ -200,7 +239,7 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 			return fmt.Errorf("failed to write config: %w", err)
 		}
 
-		err = runOpencode(r, args, portArgs)
+		err = runOpencode(r, args, portArgs, selectedSession)
 		if exitErr, ok := runner.IsExitCode(err); ok {
 			lastExitErr = exitErr
 			fmt.Fprintf(os.Stderr, "opencode exited with code %d\n\n", exitErr.Code)
@@ -213,7 +252,8 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 	}
 }
 
-func runOpencode(r runnerAPI, args []string, portArgs []string) error {
+func runOpencode(r runnerAPI, args []string, portArgs []string, session tui.SessionItem) error {
+	args = appendSessionArgs(args, session)
 	args = append(args, portArgs...)
 	return r.Run(args)
 }
@@ -233,8 +273,26 @@ func pluginNameKey(name string) string {
 	return plugin.ComparisonName(name)
 }
 
-func runLaunchTUI(plugins []string, portsRange string, deps runtimeDeps) ([]string, error) {
-	launchModel := tui.NewLaunchModel(plugins, version, func(msgCh chan<- tea.Msg) {
+func ohMyOpencodePortsRange(pluginConfigs map[string]config.PluginConfig) string {
+	if pluginConfig, ok := pluginConfigs[ohMyOpencodePluginName]; ok {
+		return pluginConfig.Ports
+	}
+
+	return ""
+}
+
+func isPluginSelected(selections map[string]bool, pluginName string) bool {
+	for name, selected := range selections {
+		if selected && pluginNameKey(name) == pluginName {
+			return true
+		}
+	}
+
+	return false
+}
+
+func runLaunchTUI(plugins []string, session tui.SessionItem, portsRange string, deps runtimeDeps) ([]string, error) {
+	launchModel := tui.NewLaunchModel(plugins, session, version, func(msgCh chan<- tea.Msg) {
 		defer close(msgCh)
 		portArgs := resolvePortArgs(portsRange, deps, func(line string) {
 			msgCh <- tui.LaunchLogMsg{Line: line}
@@ -311,4 +369,95 @@ func resolveOhMyOpencodePath(configDir string) string {
 	}
 
 	return jsonPath
+}
+
+type sessionRow struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Updated   int64  `json:"updated"`
+	Directory string `json:"directory"`
+}
+
+func listSessions(dir string) ([]tui.SessionItem, error) {
+	cmd := exec.Command("opencode", "session", "list", "--format", "json")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	var rows []sessionRow
+	if err := json.Unmarshal(out, &rows); err != nil {
+		return nil, err
+	}
+
+	sort.SliceStable(rows, func(i, j int) bool {
+		return rows[i].Updated > rows[j].Updated
+	})
+
+	var result []tui.SessionItem
+	for _, row := range rows {
+		if !sameDir(row.Directory, dir) {
+			continue
+		}
+		result = append(result, tui.SessionItem{ID: row.ID, Title: row.Title, UpdatedAt: unixTimestampToTime(row.Updated)})
+	}
+
+	return result, nil
+}
+
+func unixTimestampToTime(value int64) time.Time {
+	switch {
+	case value >= 1_000_000_000_000_000_000 || value <= -1_000_000_000_000_000_000:
+		return time.Unix(0, value).Local()
+	case value >= 1_000_000_000_000_000 || value <= -1_000_000_000_000_000:
+		return time.UnixMicro(value).Local()
+	case value >= 1_000_000_000_000 || value <= -1_000_000_000_000:
+		return time.UnixMilli(value).Local()
+	default:
+		return time.Unix(value, 0).Local()
+	}
+}
+
+func latestSession(items []tui.SessionItem) tui.SessionItem {
+	if len(items) == 0 {
+		return tui.SessionItem{}
+	}
+	return items[0]
+}
+
+func sameDir(left string, right string) bool {
+	left = filepath.Clean(left)
+	right = filepath.Clean(right)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
+}
+
+func appendSessionArgs(args []string, session tui.SessionItem) []string {
+	if session.ID == "" || hasSessionArgs(args) {
+		return append([]string(nil), args...)
+	}
+
+	result := append([]string(nil), args...)
+	result = append(result, "-s", session.ID)
+	return result
+}
+
+func hasSessionArgs(args []string) bool {
+	for i, arg := range args {
+		if arg == "-s" || arg == "--session" || arg == "-c" || arg == "--continue" {
+			return true
+		}
+		if strings.HasPrefix(arg, "--session=") {
+			return true
+		}
+		if arg == "-s=" || arg == "--continue=" {
+			return true
+		}
+		if arg == "-s" && i < len(args)-1 {
+			return true
+		}
+	}
+	return false
 }
