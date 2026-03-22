@@ -425,26 +425,34 @@ func TestEditRequested_Method(t *testing.T) {
 	}
 }
 
-func TestRenderHeader_HighlightsOpenCodeOnly(t *testing.T) {
+func TestRenderHeader_HighlightsBrandFragmentsOnly(t *testing.T) {
 	headerLine := Model{version: testVersion}.renderHeader()
 	headerAccentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Bold(true)
 
-	if !strings.Contains(headerLine, headerAccentStyle.Render("OpenCode")) {
-		t.Fatalf("expected styled OpenCode in header, got %q", headerLine)
+	if !strings.Contains(headerLine, " with plugins") {
+		t.Fatalf("expected header suffix to remain unchanged, got %q", headerLine)
 	}
-	if !strings.Contains(headerLine, "⚡ oc "+testVersion+" : Launching ") {
-		t.Fatalf("expected versioned launch prefix, got %q", headerLine)
+	if !strings.Contains(headerLine, "⚡ "+headerAccentStyle.Render("o")+"c "+testVersion+" : Launching ") {
+		t.Fatalf("expected accented oc fragment in header, got %q", headerLine)
 	}
-	if strings.Contains(headerLine, headerAccentStyle.Render(" with plugins")) {
-		t.Fatalf("expected plain header suffix, got %q", headerLine)
+	if !strings.Contains(headerLine, headerAccentStyle.Render("Open")+"Code") {
+		t.Fatalf("expected accented Open fragment in header, got %q", headerLine)
+	}
+	if strings.Contains(headerLine, headerAccentStyle.Render("OpenCode")) {
+		t.Fatalf("expected OpenCode to be only partially accented, got %q", headerLine)
 	}
 }
 
 func TestRenderHeader_IncludesVersion(t *testing.T) {
 	headerLine := Model{version: testVersion}.renderHeader()
+	headerAccentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Bold(true)
 
-	if !strings.HasPrefix(headerLine, "⚡ oc "+testVersion+" : ") {
-		t.Fatalf("expected header to start with version, got %q", headerLine)
+	expectedPrefix := "⚡ " + headerAccentStyle.Render("o") + "c " + testVersion + " : "
+	if !strings.HasPrefix(headerLine, expectedPrefix) {
+		t.Fatalf("expected header to start with %q, got %q", expectedPrefix, headerLine)
+	}
+	if !strings.Contains(headerLine, "Launching ") {
+		t.Fatalf("expected launch copy to remain present, got %q", headerLine)
 	}
 }
 

@@ -42,7 +42,8 @@ var (
 )
 
 func (m Model) renderHeader() string {
-	return "⚡ oc " + m.version + " : Launching " + headerAccentStyle.Render("OpenCode") + " with plugins"
+	return "⚡ " + headerAccentStyle.Render("o") + "c " + m.version + " : Launching " +
+		headerAccentStyle.Render("Open") + "Code with plugins"
 }
 
 func stylePluginRow(line string, focused bool, selected bool) string {
