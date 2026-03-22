@@ -48,10 +48,10 @@ type tuiResponse struct {
 	err        error
 }
 
-func scriptedTUI(t *testing.T, responses ...tuiResponse) func([]tui.PluginItem, []tui.EditChoice, string) (map[string]bool, bool, string, []string, error) {
+func scriptedTUI(t *testing.T, responses ...tuiResponse) func([]tui.PluginItem, []tui.EditChoice, string, bool) (map[string]bool, bool, string, []string, error) {
 	t.Helper()
 	call := 0
-	return func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string) (map[string]bool, bool, string, []string, error) {
+	return func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string, _ bool) (map[string]bool, bool, string, []string, error) {
 		if call >= len(responses) {
 			t.Fatalf("unexpected TUI call %d", call+1)
 		}
@@ -83,6 +83,10 @@ func TestRunWithDeps_FullHappyPath(t *testing.T) {
 
 	r := &fakeRunner{}
 	calledTUI := 0
+	ocConfigPath := filepath.Join(tmp, ".oc")
+	if err := os.WriteFile(ocConfigPath, []byte("allow_multiple_plugins = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	err := runWithDeps([]string{"--model", "gpt-5"}, runtimeDeps{
 		newRunner:    func() runnerAPI { return r },
@@ -93,8 +97,11 @@ func TestRunWithDeps_FullHappyPath(t *testing.T) {
 		filterByWhitelist: func(p []config.Plugin, w []string) ([]config.Plugin, []config.Plugin) {
 			return defaultDeps().filterByWhitelist(p, w)
 		},
-		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string) (map[string]bool, bool, string, []string, error) {
+		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string, allowMultiplePlugins bool) (map[string]bool, bool, string, []string, error) {
 			calledTUI++
+			if !allowMultiplePlugins {
+				t.Fatal("expected allow_multiple_plugins=true from .oc config")
+			}
 			if len(items) != 3 {
 				t.Fatalf("expected 3 visible items, got %d", len(items))
 			}
@@ -136,6 +143,51 @@ func TestRunWithDeps_FullHappyPath(t *testing.T) {
 	}
 	if !strings.Contains(out, "// \"plugin-c\"") {
 		t.Fatalf("plugin-c should be disabled, got:\n%s", out)
+	}
+}
+
+func TestRunWithDeps_DefaultsAllowMultiplePluginsToFalse(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, ".config", "opencode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	configPath := filepath.Join(configDir, "opencode.json")
+	if err := os.WriteFile(configPath, []byte("{\n  \"plugin\": [\n    \"plugin-a\"\n  ]\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &fakeRunner{}
+	seenFlags := []bool{}
+	err := runWithDeps(nil, runtimeDeps{
+		newRunner:         func() runnerAPI { return r },
+		userHomeDir:       func() (string, error) { return tmp, nil },
+		readFile:          os.ReadFile,
+		loadOcConfig:      config.LoadOcConfig,
+		parsePlugins:      config.ParsePlugins,
+		filterByWhitelist: defaultDeps().filterByWhitelist,
+		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string, allowMultiplePlugins bool) (map[string]bool, bool, string, []string, error) {
+			seenFlags = append(seenFlags, allowMultiplePlugins)
+			if r.runCalls == 0 {
+				return map[string]bool{"plugin-a": true}, false, "", nil, nil
+			}
+			return nil, true, "", nil, nil
+		},
+		applySelections: config.ApplySelections,
+		writeConfigFile: config.WriteConfigFile,
+		openEditor:      func(string, string) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("runWithDeps returned error: %v", err)
+	}
+	if len(seenFlags) != 2 {
+		t.Fatalf("expected TUI to be shown twice, got %d", len(seenFlags))
+	}
+	for _, flag := range seenFlags {
+		if flag {
+			t.Fatal("expected allow_multiple_plugins to default to false")
+		}
 	}
 }
 
@@ -197,6 +249,9 @@ func TestRunWithDeps_DoesNotPrintPreLaunchText(t *testing.T) {
 			t.Fatalf("expected no direct pre-launch output %q, got %q", unwanted, outputStr)
 		}
 	}
+	if strings.Contains(outputStr, "\033[H\033[2J") {
+		t.Fatalf("expected no terminal clear sequence when stdout is not a TTY, got %q", outputStr)
+	}
 }
 
 func TestRunWithDeps_EmptyPluginArraySkipsTUI(t *testing.T) {
@@ -221,7 +276,7 @@ func TestRunWithDeps_EmptyPluginArraySkipsTUI(t *testing.T) {
 		loadOcConfig:      config.LoadOcConfig,
 		parsePlugins:      config.ParsePlugins,
 		filterByWhitelist: defaultDeps().filterByWhitelist,
-		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string) (map[string]bool, bool, string, []string, error) {
+		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string, _ bool) (map[string]bool, bool, string, []string, error) {
 			tuiCalled = true
 			return map[string]bool{}, false, "", nil, nil
 		},
@@ -274,7 +329,7 @@ func TestRunWithDeps_WhitelistFiltersVisibleAndPreservesHidden(t *testing.T) {
 		loadOcConfig:      config.LoadOcConfig,
 		parsePlugins:      config.ParsePlugins,
 		filterByWhitelist: defaultDeps().filterByWhitelist,
-		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string) (map[string]bool, bool, string, []string, error) {
+		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string, _ bool) (map[string]bool, bool, string, []string, error) {
 			if len(items) != 2 {
 				t.Fatalf("expected only whitelisted plugins in TUI, got %d", len(items))
 			}
@@ -331,7 +386,7 @@ func TestRunWithDeps_CancelledTUIDoesNotModifyFile(t *testing.T) {
 		loadOcConfig:      config.LoadOcConfig,
 		parsePlugins:      config.ParsePlugins,
 		filterByWhitelist: defaultDeps().filterByWhitelist,
-		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string) (map[string]bool, bool, string, []string, error) {
+		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string, _ bool) (map[string]bool, bool, string, []string, error) {
 			return nil, true, "", nil, nil
 		},
 		applySelections: config.ApplySelections,
@@ -376,7 +431,7 @@ func TestRunWithDeps_ContinuesAfterOpencodeExitCode(t *testing.T) {
 		loadOcConfig:      config.LoadOcConfig,
 		parsePlugins:      config.ParsePlugins,
 		filterByWhitelist: defaultDeps().filterByWhitelist,
-		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string) (map[string]bool, bool, string, []string, error) {
+		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string, _ bool) (map[string]bool, bool, string, []string, error) {
 			tuiCalls++
 			if tuiCalls == 1 {
 				return map[string]bool{"plugin-a": true}, false, "", nil, nil
@@ -425,7 +480,7 @@ func TestRunWithDeps_ReloadsConfigBeforeReturningToTUI(t *testing.T) {
 		loadOcConfig:      config.LoadOcConfig,
 		parsePlugins:      config.ParsePlugins,
 		filterByWhitelist: defaultDeps().filterByWhitelist,
-		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string) (map[string]bool, bool, string, []string, error) {
+		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string, _ bool) (map[string]bool, bool, string, []string, error) {
 			tuiCalls++
 			switch tuiCalls {
 			case 1:
@@ -617,7 +672,7 @@ func TestRunWithDeps_PassesResolvedEditChoicesToTUI(t *testing.T) {
 		loadOcConfig:      config.LoadOcConfig,
 		parsePlugins:      config.ParsePlugins,
 		filterByWhitelist: defaultDeps().filterByWhitelist,
-		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string) (map[string]bool, bool, string, []string, error) {
+		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string, _ bool) (map[string]bool, bool, string, []string, error) {
 			tuiCalls++
 			gotChoices = append([]tui.EditChoice(nil), editChoices...)
 			if tuiCalls == 1 {
@@ -699,7 +754,7 @@ func baseDepsWithPort(tmp string, r *fakeRunner) runtimeDeps {
 		loadOcConfig:      config.LoadOcConfig,
 		parsePlugins:      config.ParsePlugins,
 		filterByWhitelist: defaultDeps().filterByWhitelist,
-		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string) (map[string]bool, bool, string, []string, error) {
+		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string, _ bool) (map[string]bool, bool, string, []string, error) {
 			return map[string]bool{}, false, "", nil, nil
 		},
 		applySelections: config.ApplySelections,
@@ -740,7 +795,7 @@ func TestRunWithDeps_PortSelectionAddsPortFlag(t *testing.T) {
 
 	r := &fakeRunner{}
 	deps := baseDepsWithPort(tmp, r)
-	deps.runTUI = func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string) (map[string]bool, bool, string, []string, error) {
+	deps.runTUI = func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
 		if portsRange != "50000-55000" {
 			t.Fatalf("expected ports range to reach TUI, got %q", portsRange)
 		}
@@ -775,7 +830,7 @@ func TestRunWithDeps_PortSelectionFailsFallback(t *testing.T) {
 
 	r := &fakeRunner{}
 	deps := baseDepsWithPort(tmp, r)
-	deps.runTUI = func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string) (map[string]bool, bool, string, []string, error) {
+	deps.runTUI = func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
 		if portsRange != "50000-55000" {
 			t.Fatalf("expected ports range to reach TUI, got %q", portsRange)
 		}
@@ -807,7 +862,7 @@ func TestRunWithDeps_NoPortsConfigNoPortFlag(t *testing.T) {
 
 	r := &fakeRunner{}
 	deps := baseDepsWithPort(tmp, r)
-	deps.runTUI = func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string) (map[string]bool, bool, string, []string, error) {
+	deps.runTUI = func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
 		if portsRange != "" {
 			t.Fatalf("expected empty ports range, got %q", portsRange)
 		}
@@ -839,7 +894,7 @@ func TestRunWithDeps_InvalidPortsConfigFallback(t *testing.T) {
 
 	r := &fakeRunner{}
 	deps := baseDepsWithPort(tmp, r)
-	deps.runTUI = func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string) (map[string]bool, bool, string, []string, error) {
+	deps.runTUI = func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
 		if portsRange != "invalid" {
 			t.Fatalf("expected invalid ports range to reach TUI, got %q", portsRange)
 		}
@@ -885,5 +940,36 @@ func TestRunWithDeps_PortSelectionSkipsTUIPath(t *testing.T) {
 	}
 	if len(r.args) != 3 || r.args[1] != "--port" || r.args[2] != "52000" {
 		t.Fatalf("expected --port 52000 appended, got %v", r.args)
+	}
+}
+
+func TestRunWithDeps_UsesPluginSectionPortsForSingleVisiblePlugin(t *testing.T) {
+	tmp := t.TempDir()
+	setupPortTestFiles(t, tmp,
+		"{\n  \"plugin\": [\n    \"oh-my-opencode@latest\",\n    \"superpowers\"\n  ]\n}\n",
+		"[oc]\nplugins = [\"oh-my-opencode\"]\nports = \"50000-51000\"\n\n[plugin.oh-my-opencode]\nports = \"55000-55500\"\n",
+	)
+
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+	deps.runTUI = func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
+		if portsRange != "55000-55500" {
+			t.Fatalf("expected plugin section ports to reach TUI, got %q", portsRange)
+		}
+		if r.runCalls > 0 {
+			return nil, true, "", nil, nil
+		}
+		return map[string]bool{"oh-my-opencode@latest": true}, false, "", []string{"--port", "51234"}, nil
+	}
+
+	err := runWithDeps([]string{"--model", "gpt-5"}, deps)
+	if err != nil {
+		t.Fatalf("runWithDeps returned error: %v", err)
+	}
+	if !r.ran {
+		t.Fatal("runner.Run should be called")
+	}
+	if len(r.args) != 4 || r.args[2] != "--port" || r.args[3] != "51234" {
+		t.Fatalf("expected plugin section port to be appended, got %v", r.args)
 	}
 }

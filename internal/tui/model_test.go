@@ -22,7 +22,7 @@ func TestNewModel_InitialState(t *testing.T) {
 		{Name: "plugin-c", InitiallyEnabled: true},
 	}
 
-	m := NewModel(items, nil, testVersion)
+	m := NewModel(items, nil, testVersion, true)
 
 	if m.cursor != 0 {
 		t.Errorf("expected cursor=0, got %d", m.cursor)
@@ -48,13 +48,34 @@ func TestNewModel_InitialState(t *testing.T) {
 }
 
 func TestNewModel_EmptyList(t *testing.T) {
-	m := NewModel([]PluginItem{}, nil, testVersion)
+	m := NewModel([]PluginItem{}, nil, testVersion, true)
 
 	if !m.confirmed {
 		t.Error("expected confirmed=true for empty list")
 	}
 	if m.cancelled {
 		t.Error("expected cancelled=false for empty list")
+	}
+}
+
+func TestNewModel_SingleSelectKeepsOnlyFirstInitiallyEnabledPlugin(t *testing.T) {
+	items := []PluginItem{
+		{Name: "plugin-a", InitiallyEnabled: true},
+		{Name: "plugin-b", InitiallyEnabled: true},
+		{Name: "plugin-c", InitiallyEnabled: false},
+	}
+
+	m := NewModel(items, nil, testVersion, false)
+	selections := m.Selections()
+
+	if !selections["plugin-a"] {
+		t.Fatal("expected first initially enabled plugin to stay selected")
+	}
+	if selections["plugin-b"] {
+		t.Fatal("expected second initially enabled plugin to be dropped in single-select mode")
+	}
+	if selections["plugin-c"] {
+		t.Fatal("expected disabled plugin to remain unselected")
 	}
 }
 
@@ -65,7 +86,7 @@ func TestUpdate_ArrowDown(t *testing.T) {
 		{Name: "plugin-c", InitiallyEnabled: false},
 	}
 
-	m := NewModel(items, nil, testVersion)
+	m := NewModel(items, nil, testVersion, true)
 
 	// Move down from 0 to 1
 	newModel, _ := m.Update(mockKeyMsg("down"))
@@ -88,7 +109,7 @@ func TestUpdate_ArrowDownBoundary(t *testing.T) {
 		{Name: "plugin-b", InitiallyEnabled: false},
 	}
 
-	m := NewModel(items, nil, testVersion)
+	m := NewModel(items, nil, testVersion, true)
 	m.cursor = 1 // Last item
 
 	// Try to move down past last item
@@ -106,7 +127,7 @@ func TestUpdate_ArrowUp(t *testing.T) {
 		{Name: "plugin-c", InitiallyEnabled: false},
 	}
 
-	m := NewModel(items, nil, testVersion)
+	m := NewModel(items, nil, testVersion, true)
 	m.cursor = 2
 
 	// Move up from 2 to 1
@@ -130,7 +151,7 @@ func TestUpdate_ArrowUpBoundary(t *testing.T) {
 		{Name: "plugin-b", InitiallyEnabled: false},
 	}
 
-	m := NewModel(items, nil, testVersion)
+	m := NewModel(items, nil, testVersion, true)
 	// cursor already at 0
 
 	// Try to move up past first item
@@ -148,7 +169,7 @@ func TestUpdate_VimBindings(t *testing.T) {
 		{Name: "plugin-c", InitiallyEnabled: false},
 	}
 
-	m := NewModel(items, nil, testVersion)
+	m := NewModel(items, nil, testVersion, true)
 
 	// j moves down
 	newModel, _ := m.Update(mockKeyMsg("j"))
@@ -171,7 +192,7 @@ func TestUpdate_SpaceToggle(t *testing.T) {
 		{Name: "plugin-b", InitiallyEnabled: false},
 	}
 
-	m := NewModel(items, nil, testVersion)
+	m := NewModel(items, nil, testVersion, true)
 
 	// plugin-a starts unselected
 	selections := m.Selections()
@@ -196,12 +217,51 @@ func TestUpdate_SpaceToggle(t *testing.T) {
 	}
 }
 
+func TestUpdate_SpaceToggleSingleSelectMode(t *testing.T) {
+	items := []PluginItem{
+		{Name: "plugin-a", InitiallyEnabled: true},
+		{Name: "plugin-b", InitiallyEnabled: false},
+	}
+
+	m := NewModel(items, nil, testVersion, false)
+	newModel, _ := m.Update(mockKeyMsg("down"))
+	m = newModel.(Model)
+	newModel, _ = m.Update(mockKeyMsg("space"))
+	m = newModel.(Model)
+
+	selections := m.Selections()
+	if selections["plugin-a"] {
+		t.Error("expected plugin-a to be deselected in single-select mode")
+	}
+	if !selections["plugin-b"] {
+		t.Error("expected plugin-b to be selected in single-select mode")
+	}
+}
+
+func TestUpdate_SpaceToggleMultiSelectMode(t *testing.T) {
+	items := []PluginItem{
+		{Name: "plugin-a", InitiallyEnabled: true},
+		{Name: "plugin-b", InitiallyEnabled: false},
+	}
+
+	m := NewModel(items, nil, testVersion, true)
+	newModel, _ := m.Update(mockKeyMsg("down"))
+	m = newModel.(Model)
+	newModel, _ = m.Update(mockKeyMsg("space"))
+	m = newModel.(Model)
+
+	selections := m.Selections()
+	if !selections["plugin-a"] || !selections["plugin-b"] {
+		t.Fatalf("expected both plugins selected in multi-select mode, got %+v", selections)
+	}
+}
+
 func TestUpdate_EnterConfirm(t *testing.T) {
 	items := []PluginItem{
 		{Name: "plugin-a", InitiallyEnabled: false},
 	}
 
-	m := NewModel(items, nil, testVersion)
+	m := NewModel(items, nil, testVersion, true)
 
 	// Press enter to confirm
 	newModel, cmd := m.Update(mockKeyMsg("enter"))
@@ -223,7 +283,7 @@ func TestUpdate_CtrlCCancel(t *testing.T) {
 		{Name: "plugin-a", InitiallyEnabled: false},
 	}
 
-	m := NewModel(items, nil, testVersion)
+	m := NewModel(items, nil, testVersion, true)
 
 	// Press ctrl+c to cancel
 	newModel, cmd := m.Update(mockKeyMsg("ctrl+c"))
@@ -254,7 +314,7 @@ func TestUpdate_QuitKeys(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		m := NewModel(items, nil, testVersion)
+		m := NewModel(items, nil, testVersion, true)
 		newModel, cmd := m.Update(mockKeyMsg(tt.key))
 		m = newModel.(Model)
 
@@ -276,7 +336,7 @@ func TestUpdate_EditRequest(t *testing.T) {
 	}
 	editChoices := []EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}}
 
-	m := NewModel(items, editChoices, testVersion)
+	m := NewModel(items, editChoices, testVersion, true)
 
 	newModel, cmd := m.Update(mockKeyMsg("e"))
 	m = newModel.(Model)
@@ -305,7 +365,7 @@ func TestUpdate_EditModeEnterSelectsTarget(t *testing.T) {
 		{Label: "opencode.json", Path: "/tmp/opencode.json"},
 	}
 
-	m := NewModel(items, editChoices, testVersion)
+	m := NewModel(items, editChoices, testVersion, true)
 	newModel, _ := m.Update(mockKeyMsg("e"))
 	m = newModel.(Model)
 	newModel, _ = m.Update(mockKeyMsg("down"))
@@ -328,7 +388,7 @@ func TestUpdate_EditModeEscReturnsToPluginList(t *testing.T) {
 	items := []PluginItem{{Name: "plugin-a", InitiallyEnabled: false}}
 	editChoices := []EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}}
 
-	m := NewModel(items, editChoices, testVersion)
+	m := NewModel(items, editChoices, testVersion, true)
 	newModel, _ := m.Update(mockKeyMsg("e"))
 	m = newModel.(Model)
 	newModel, cmd := m.Update(mockKeyMsg("esc"))
@@ -352,7 +412,7 @@ func TestSelections_Output(t *testing.T) {
 		{Name: "plugin-c", InitiallyEnabled: true},
 	}
 
-	m := NewModel(items, nil, testVersion)
+	m := NewModel(items, nil, testVersion, true)
 
 	// Verify initial selections
 	selections := m.Selections()
@@ -386,7 +446,7 @@ func TestCancelled_Method(t *testing.T) {
 		{Name: "plugin-a", InitiallyEnabled: false},
 	}
 
-	m := NewModel(items, nil, testVersion)
+	m := NewModel(items, nil, testVersion, true)
 	if m.Cancelled() {
 		t.Error("expected Cancelled()=false initially")
 	}
@@ -404,7 +464,7 @@ func TestEditRequested_Method(t *testing.T) {
 	}
 	editChoices := []EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}}
 
-	m := NewModel(items, editChoices, testVersion)
+	m := NewModel(items, editChoices, testVersion, true)
 	if m.EditRequested() {
 		t.Error("expected EditRequested()=false initially")
 	}
@@ -501,7 +561,7 @@ func TestRenderHelpLine_IncludesStyledKeyTokens(t *testing.T) {
 }
 
 func TestView_RendersStyledHeaderLine(t *testing.T) {
-	view := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, testVersion).View().Content
+	view := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, testVersion, true).View().Content
 	headerLine := strings.Split(view, "\n")[0]
 
 	expected := Model{version: testVersion}.renderHeader()
@@ -511,7 +571,7 @@ func TestView_RendersStyledHeaderLine(t *testing.T) {
 }
 
 func TestView_RendersPluginSelectionPrompt(t *testing.T) {
-	view := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, testVersion).View().Content
+	view := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, testVersion, true).View().Content
 	promptLine := strings.Split(view, "\n")[2]
 
 	if promptLine != "📋 Choose plugins to enable" {
@@ -520,7 +580,7 @@ func TestView_RendersPluginSelectionPrompt(t *testing.T) {
 }
 
 func TestView_RendersFocusedSelectedRowLine(t *testing.T) {
-	view := NewModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}, nil, testVersion).View().Content
+	view := NewModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}, nil, testVersion, true).View().Content
 	rowLine := strings.Split(view, "\n")[4]
 	expected := stylePluginRow("> ✔  plugin-a", true, true)
 
@@ -530,7 +590,7 @@ func TestView_RendersFocusedSelectedRowLine(t *testing.T) {
 }
 
 func TestView_EditModeRendersStyledHeaderLine(t *testing.T) {
-	model := NewModel([]PluginItem{{Name: "plugin-a"}}, []EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}}, testVersion)
+	model := NewModel([]PluginItem{{Name: "plugin-a"}}, []EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}}, testVersion, true)
 	updatedModel, _ := model.Update(mockKeyMsg("e"))
 	view := updatedModel.(Model).View().Content
 	headerLine := strings.Split(view, "\n")[0]
@@ -542,7 +602,7 @@ func TestView_EditModeRendersStyledHeaderLine(t *testing.T) {
 }
 
 func TestView_RendersStyledHelpLine(t *testing.T) {
-	view := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, testVersion).View().Content
+	view := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, testVersion, true).View().Content
 	helpLine := strings.Split(view, "\n")[6]
 
 	if helpLine != renderHelpLine() {
@@ -551,7 +611,7 @@ func TestView_RendersStyledHelpLine(t *testing.T) {
 }
 
 func TestView_ClearsOnConfirm(t *testing.T) {
-	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, testVersion)
+	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, testVersion, true)
 	updatedModel, _ := model.Update(mockKeyMsg("enter"))
 
 	if got := updatedModel.(Model).View().Content; got != "" {
@@ -560,7 +620,7 @@ func TestView_ClearsOnConfirm(t *testing.T) {
 }
 
 func TestView_ClearsOnCancel(t *testing.T) {
-	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, testVersion)
+	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, testVersion, true)
 	updatedModel, _ := model.Update(mockKeyMsg("ctrl+c"))
 
 	if got := updatedModel.(Model).View().Content; got != "" {
@@ -573,6 +633,7 @@ func TestView_ClearsOnEditSelection(t *testing.T) {
 		[]PluginItem{{Name: "plugin-a"}},
 		[]EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}},
 		testVersion,
+		true,
 	)
 	updatedModel, _ := model.Update(mockKeyMsg("e"))
 	updatedModel, _ = updatedModel.(Model).Update(mockKeyMsg("enter"))

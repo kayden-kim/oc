@@ -15,6 +15,10 @@ func comparisonName(name string) string {
 	return name[:lastAt]
 }
 
+func ComparisonName(name string) string {
+	return comparisonName(name)
+}
+
 // FilterByWhitelist separates plugins into visible and hidden groups based on a whitelist.
 // - If whitelist is nil, all plugins are visible (empty hidden)
 // - If whitelist is empty []string{}, all plugins are hidden (empty visible)

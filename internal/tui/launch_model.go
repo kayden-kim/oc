@@ -113,6 +113,10 @@ func (m LaunchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m LaunchModel) View() tea.View {
+	if m.ready != nil {
+		return tea.NewView("")
+	}
+
 	var sections []string
 	sections = append(sections, Model{version: m.version}.renderHeader())
 	sections = append(sections, launchTitleStyle.Render(fmt.Sprintf("%s Launching opencode", launchFrames[m.frame])))

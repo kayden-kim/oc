@@ -139,6 +139,15 @@ func TestLaunchModelUpdateReadyQuitsAndStoresPortArgs(t *testing.T) {
 	}
 }
 
+func TestLaunchModelViewIsEmptyWhenReady(t *testing.T) {
+	m := NewLaunchModel([]string{"plugin-a"}, testVersion, nil)
+	updated, _ := m.Update(LaunchReadyMsg{PortArgs: []string{"--port", "51234"}})
+
+	if view := updated.(LaunchModel).View().Content; view != "" {
+		t.Fatalf("expected empty view after launch ready, got %q", view)
+	}
+}
+
 func TestLaunchModelIgnoresKeyPresses(t *testing.T) {
 	m := NewLaunchModel([]string{"plugin-a"}, testVersion, nil)
 	updated, cmd := m.Update(mockKeyMsg("q"))

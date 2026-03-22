@@ -44,7 +44,7 @@ type runtimeDeps struct {
 	loadOcConfig      func(string) (*config.OcConfig, error)
 	parsePlugins      func([]byte) ([]config.Plugin, string, error)
 	filterByWhitelist func([]config.Plugin, []string) ([]config.Plugin, []config.Plugin)
-	runTUI            func([]tui.PluginItem, []tui.EditChoice, string) (map[string]bool, bool, string, []string, error)
+	runTUI            func([]tui.PluginItem, []tui.EditChoice, string, bool) (map[string]bool, bool, string, []string, error)
 	applySelections   func([]byte, map[string]bool) ([]byte, error)
 	writeConfigFile   func(string, []byte) error
 	openEditor        func(string, string) error
@@ -69,8 +69,8 @@ func defaultDeps() runtimeDeps {
 		isPortAvailable:   port.IsAvailable,
 	}
 
-	deps.runTUI = func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string) (map[string]bool, bool, string, []string, error) {
-		model := tui.NewModel(items, editChoices, version)
+	deps.runTUI = func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, allowMultiplePlugins bool) (map[string]bool, bool, string, []string, error) {
+		model := tui.NewModel(items, editChoices, version, allowMultiplePlugins)
 		result, err := tea.NewProgram(model).Run()
 		if err != nil {
 			return nil, false, "", nil, err
@@ -126,10 +126,14 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 		var whitelist []string
 		var configEditor string
 		var portsRange string
+		var pluginConfigs map[string]config.PluginConfig
+		allowMultiplePlugins := false
 		if ocConfig != nil {
 			whitelist = ocConfig.Plugins
 			configEditor = ocConfig.Editor
 			portsRange = ocConfig.Ports
+			pluginConfigs = ocConfig.PluginConfigs
+			allowMultiplePlugins = ocConfig.AllowMultiplePlugins
 		}
 
 		content, err := deps.readFile(configPath)
@@ -164,7 +168,14 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 			{Label: "3) oh-my-opencode.json file", Path: resolveOhMyOpencodePath(configDir)},
 		}
 
-		selections, cancelled, editTarget, portArgs, err := deps.runTUI(items, editChoices, portsRange)
+		effectivePortsRange := portsRange
+		if len(visible) == 1 {
+			if pluginConfig, ok := pluginConfigs[pluginNameKey(visible[0].Name)]; ok && pluginConfig.Ports != "" {
+				effectivePortsRange = pluginConfig.Ports
+			}
+		}
+
+		selections, cancelled, editTarget, portArgs, err := deps.runTUI(items, editChoices, effectivePortsRange, allowMultiplePlugins)
 		if err != nil {
 			return fmt.Errorf("TUI error: %w", err)
 		}
@@ -216,6 +227,10 @@ func selectedPluginNames(selections map[string]bool) []string {
 	}
 	sort.Strings(enabled)
 	return enabled
+}
+
+func pluginNameKey(name string) string {
+	return plugin.ComparisonName(name)
 }
 
 func runLaunchTUI(plugins []string, portsRange string, deps runtimeDeps) ([]string, error) {

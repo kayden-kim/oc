@@ -21,17 +21,18 @@ type EditChoice struct {
 
 // Model holds the state of the multi-select TUI
 type Model struct {
-	plugins     []PluginItem
-	editChoices []EditChoice
-	version     string
-	cursor      int
-	editCursor  int
-	selected    map[int]struct{}
-	cancelled   bool
-	confirmed   bool
-	edit        bool
-	editMode    bool
-	editTarget  string
+	plugins              []PluginItem
+	editChoices          []EditChoice
+	version              string
+	allowMultiplePlugins bool
+	cursor               int
+	editCursor           int
+	selected             map[int]struct{}
+	cancelled            bool
+	confirmed            bool
+	edit                 bool
+	editMode             bool
+	editTarget           string
 }
 
 var (
@@ -73,10 +74,13 @@ func renderEditHelpLine() string {
 }
 
 // NewModel creates a new TUI model with the given plugin items
-func NewModel(items []PluginItem, editChoices []EditChoice, version string) Model {
+func NewModel(items []PluginItem, editChoices []EditChoice, version string, allowMultiplePlugins bool) Model {
 	selected := make(map[int]struct{})
 	for i, item := range items {
 		if item.InitiallyEnabled {
+			if !allowMultiplePlugins && len(selected) > 0 {
+				continue
+			}
 			selected[i] = struct{}{}
 		}
 	}
@@ -85,13 +89,14 @@ func NewModel(items []PluginItem, editChoices []EditChoice, version string) Mode
 	confirmed := len(items) == 0
 
 	return Model{
-		plugins:     items,
-		editChoices: editChoices,
-		version:     version,
-		cursor:      0,
-		editCursor:  0,
-		selected:    selected,
-		confirmed:   confirmed,
+		plugins:              items,
+		editChoices:          editChoices,
+		version:              version,
+		allowMultiplePlugins: allowMultiplePlugins,
+		cursor:               0,
+		editCursor:           0,
+		selected:             selected,
+		confirmed:            confirmed,
 	}
 }
 
@@ -126,6 +131,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if _, ok := m.selected[m.cursor]; ok {
 					delete(m.selected, m.cursor)
 				} else {
+					if !m.allowMultiplePlugins {
+						m.selected = map[int]struct{}{}
+					}
 					m.selected[m.cursor] = struct{}{}
 				}
 			}

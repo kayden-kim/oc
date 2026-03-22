@@ -205,3 +205,138 @@ func TestLoadOcConfigWithoutPorts(t *testing.T) {
 		t.Errorf("expected ports to be empty, got '%s'", config.Ports)
 	}
 }
+
+// TestLoadOcConfigWithAllowMultiplePlugins tests loading TOML with allow_multiple_plugins field
+func TestLoadOcConfigWithAllowMultiplePlugins(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.toml")
+
+	content := `plugins = ["plugin-a"]
+allow_multiple_plugins = true`
+	err := os.WriteFile(configPath, []byte(content), 0644)
+	if err != nil {
+		t.Fatalf("failed to write test TOML file: %v", err)
+	}
+
+	config, err := LoadOcConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadOcConfig failed: %v", err)
+	}
+
+	if config == nil {
+		t.Fatal("expected config to be non-nil, got nil")
+	}
+
+	if !config.AllowMultiplePlugins {
+		t.Error("expected allow_multiple_plugins to be true")
+	}
+}
+
+// TestLoadOcConfigWithoutAllowMultiplePlugins tests default false when the field is omitted
+func TestLoadOcConfigWithoutAllowMultiplePlugins(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.toml")
+
+	content := `plugins = ["plugin-a"]`
+	err := os.WriteFile(configPath, []byte(content), 0644)
+	if err != nil {
+		t.Fatalf("failed to write test TOML file: %v", err)
+	}
+
+	config, err := LoadOcConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadOcConfig failed: %v", err)
+	}
+
+	if config == nil {
+		t.Fatal("expected config to be non-nil, got nil")
+	}
+
+	if config.AllowMultiplePlugins {
+		t.Error("expected allow_multiple_plugins to default to false")
+	}
+}
+
+func TestLoadOcConfigSupportsOcSection(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.toml")
+
+	content := `[oc]
+plugins = ["oh-my-opencode", "superpowers"]
+allow_multiple_plugins = false
+editor = "nvim"
+
+[plugin.oh-my-opencode]
+ports = "55000-55500"`
+	err := os.WriteFile(configPath, []byte(content), 0644)
+	if err != nil {
+		t.Fatalf("failed to write test TOML file: %v", err)
+	}
+
+	config, err := LoadOcConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadOcConfig failed: %v", err)
+	}
+
+	if config == nil {
+		t.Fatal("expected config to be non-nil, got nil")
+	}
+
+	if len(config.Plugins) != 2 {
+		t.Fatalf("expected 2 plugins, got %d", len(config.Plugins))
+	}
+	if config.Plugins[0] != "oh-my-opencode" || config.Plugins[1] != "superpowers" {
+		t.Fatalf("unexpected plugins: %#v", config.Plugins)
+	}
+	if config.Editor != "nvim" {
+		t.Fatalf("expected editor nvim, got %q", config.Editor)
+	}
+	if config.AllowMultiplePlugins {
+		t.Fatal("expected allow_multiple_plugins to be false")
+	}
+	pluginConfig, ok := config.PluginConfigs["oh-my-opencode"]
+	if !ok {
+		t.Fatal("expected plugin config for oh-my-opencode")
+	}
+	if pluginConfig.Ports != "55000-55500" {
+		t.Fatalf("expected plugin ports 55000-55500, got %q", pluginConfig.Ports)
+	}
+}
+
+func TestLoadOcConfigOcSectionOverridesFlatKeys(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.toml")
+
+	content := `plugins = ["top-level"]
+editor = "vim"
+ports = "50000-51000"
+allow_multiple_plugins = true
+
+[oc]
+plugins = ["section-plugin"]
+editor = "nvim"
+ports = "55000-55500"
+allow_multiple_plugins = false`
+	err := os.WriteFile(configPath, []byte(content), 0644)
+	if err != nil {
+		t.Fatalf("failed to write test TOML file: %v", err)
+	}
+
+	config, err := LoadOcConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadOcConfig failed: %v", err)
+	}
+
+	if len(config.Plugins) != 1 || config.Plugins[0] != "section-plugin" {
+		t.Fatalf("expected [oc] plugins to override flat keys, got %#v", config.Plugins)
+	}
+	if config.Editor != "nvim" {
+		t.Fatalf("expected [oc] editor to override flat key, got %q", config.Editor)
+	}
+	if config.Ports != "55000-55500" {
+		t.Fatalf("expected [oc] ports to override flat key, got %q", config.Ports)
+	}
+	if config.AllowMultiplePlugins {
+		t.Fatal("expected [oc] allow_multiple_plugins to override flat key")
+	}
+}
