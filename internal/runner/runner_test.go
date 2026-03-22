@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -109,26 +110,36 @@ func TestRunnerArgsForwarding(t *testing.T) {
 	}
 }
 
-// TestRunnerExitCodePropagation tests that exit codes are propagated correctly.
+// TestRunnerExitCodePropagation tests that exit codes are returned correctly.
 func TestRunnerExitCodePropagation(t *testing.T) {
 	r := &Runner{Command: os.Args[0]}
+	args := []string{"-test.run=TestHelperProcess", "--"}
+	t.Setenv("GO_TEST_PROCESS", "1")
+	t.Setenv("TEST_MODE", "exit42")
 
-	cmd := exec.Command(r.Command, "-test.run=TestHelperProcess", "--")
-	cmd.Env = append(os.Environ(), "GO_TEST_PROCESS=1", "TEST_MODE=exit42")
-
-	err := cmd.Run()
+	err := r.Run(args)
 	if err == nil {
 		t.Fatal("Expected error for exit code 42, got nil")
 	}
 
-	exitErr, ok := err.(*exec.ExitError)
-	if !ok {
-		t.Fatalf("Expected *exec.ExitError, got %T", err)
+	var exitErr *ExitCodeError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("Expected *ExitCodeError, got %T", err)
 	}
 
-	code := exitErr.ExitCode()
-	if code != 42 {
-		t.Errorf("Expected exit code 42, got %d", code)
+	if exitErr.Code != 42 {
+		t.Errorf("Expected exit code 42, got %d", exitErr.Code)
+	}
+}
+
+func TestIsExitCode(t *testing.T) {
+	err := &ExitCodeError{Code: 42}
+	got, ok := IsExitCode(err)
+	if !ok {
+		t.Fatal("expected exit code error to be recognized")
+	}
+	if got.Code != 42 {
+		t.Fatalf("expected exit code 42, got %d", got.Code)
 	}
 }
 

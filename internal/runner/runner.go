@@ -1,10 +1,28 @@
 package runner
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 )
+
+// ExitCodeError reports a command exit code without terminating the parent process.
+type ExitCodeError struct {
+	Code int
+}
+
+func (e *ExitCodeError) Error() string {
+	return fmt.Sprintf("process exited with code %d", e.Code)
+}
+
+func IsExitCode(err error) (*ExitCodeError, bool) {
+	var exitErr *ExitCodeError
+	if errors.As(err, &exitErr) {
+		return exitErr, true
+	}
+	return nil, false
+}
 
 // Runner is a wrapper around os/exec for launching the opencode CLI.
 type Runner struct {
@@ -31,7 +49,7 @@ func (r *Runner) CheckAvailable() error {
 // Run executes the command with the provided arguments.
 // All arguments are passed through unchanged.
 // stdin, stdout, and stderr are connected directly to os.Stdin, os.Stdout, os.Stderr.
-// If the command exits with a non-zero code, os.Exit is called with that code.
+// If the command exits with a non-zero code, an ExitCodeError is returned.
 func (r *Runner) Run(args []string) error {
 	cmd := exec.Command(r.Command, args...)
 	cmd.Stdin = os.Stdin
@@ -40,12 +58,9 @@ func (r *Runner) Run(args []string) error {
 
 	err := cmd.Run()
 	if err != nil {
-		// Extract exit code and propagate via os.Exit
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			code := exitErr.ExitCode()
-			os.Exit(code)
+			return &ExitCodeError{Code: exitErr.ExitCode()}
 		}
-		// For other errors, return the error
 		return err
 	}
 
