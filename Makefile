@@ -3,8 +3,14 @@
 VERSION ?= v0.1.1
 LDFLAGS := -X main.version=$(VERSION)
 
+ifeq ($(OS),Windows_NT)
+  EXT := .exe
+else
+  EXT :=
+endif
+
 build:
-	go build -ldflags="$(LDFLAGS)" -o oc ./cmd/oc
+	go build -ldflags="$(LDFLAGS)" -o oc$(EXT) ./cmd/oc
 
 test:
 	go test ./...

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/kayden-kim/oc/internal/config"
+	"github.com/kayden-kim/oc/internal/port"
 	"github.com/kayden-kim/oc/internal/tui"
 )
 
@@ -479,4 +480,188 @@ func TestResolveOhMyOpencodePath(t *testing.T) {
 			t.Fatalf("expected %q, got %q", want, got)
 		}
 	})
+}
+
+// --- Port selection tests ---
+
+func baseDepsWithPort(tmp string, r *fakeRunner) runtimeDeps {
+	return runtimeDeps{
+		newRunner:         func() runnerAPI { return r },
+		userHomeDir:       func() (string, error) { return tmp, nil },
+		readFile:          os.ReadFile,
+		loadOcConfig:      config.LoadOcConfig,
+		parsePlugins:      config.ParsePlugins,
+		filterByWhitelist: defaultDeps().filterByWhitelist,
+		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice) (map[string]bool, bool, string, error) {
+			return map[string]bool{}, false, "", nil
+		},
+		applySelections: config.ApplySelections,
+		writeConfigFile: config.WriteConfigFile,
+		openEditor:      func(string, string) error { return nil },
+		parsePortRange:  port.ParseRange,
+		selectPort: func(minPort, maxPort int, checkAvailable func(int) bool, logFn func(attempt, p int, available bool)) port.SelectResult {
+			return port.SelectResult{Port: 51234, Attempts: 1, Found: true}
+		},
+		isPortAvailable: func(int) bool { return true },
+	}
+}
+
+func setupPortTestFiles(t *testing.T, tmp string, pluginContent string, ocContent string) {
+	t.Helper()
+	configDir := filepath.Join(tmp, ".config", "opencode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "opencode.json")
+	if err := os.WriteFile(configPath, []byte(pluginContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if ocContent != "" {
+		ocConfigPath := filepath.Join(tmp, ".oc")
+		if err := os.WriteFile(ocConfigPath, []byte(ocContent), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRunWithDeps_PortSelectionAddsPortFlag(t *testing.T) {
+	tmp := t.TempDir()
+	setupPortTestFiles(t, tmp,
+		"{\n  \"plugin\": [\n    \"plugin-a\"\n  ]\n}\n",
+		"plugins = [\"plugin-a\"]\nports = \"50000-55000\"\n",
+	)
+
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+	deps.runTUI = func(items []tui.PluginItem, editChoices []tui.EditChoice) (map[string]bool, bool, string, error) {
+		return map[string]bool{"plugin-a": true}, false, "", nil
+	}
+	deps.selectPort = func(minPort, maxPort int, checkAvailable func(int) bool, logFn func(attempt, p int, available bool)) port.SelectResult {
+		if minPort != 50000 || maxPort != 55000 {
+			t.Fatalf("expected range 50000-55000, got %d-%d", minPort, maxPort)
+		}
+		return port.SelectResult{Port: 51234, Attempts: 1, Found: true}
+	}
+
+	err := runWithDeps([]string{"--model", "gpt-5"}, deps)
+	if err != nil {
+		t.Fatalf("runWithDeps returned error: %v", err)
+	}
+	if !r.ran {
+		t.Fatal("runner.Run should be called")
+	}
+	// Args should include original args plus --port 51234
+	if len(r.args) != 4 {
+		t.Fatalf("expected 4 args, got %d: %v", len(r.args), r.args)
+	}
+	if r.args[2] != "--port" || r.args[3] != "51234" {
+		t.Fatalf("expected --port 51234 appended, got %v", r.args)
+	}
+}
+
+func TestRunWithDeps_PortSelectionFailsFallback(t *testing.T) {
+	tmp := t.TempDir()
+	setupPortTestFiles(t, tmp,
+		"{\n  \"plugin\": [\n    \"plugin-a\"\n  ]\n}\n",
+		"plugins = [\"plugin-a\"]\nports = \"50000-55000\"\n",
+	)
+
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+	deps.runTUI = func(items []tui.PluginItem, editChoices []tui.EditChoice) (map[string]bool, bool, string, error) {
+		return map[string]bool{"plugin-a": true}, false, "", nil
+	}
+	deps.selectPort = func(minPort, maxPort int, checkAvailable func(int) bool, logFn func(attempt, p int, available bool)) port.SelectResult {
+		return port.SelectResult{Found: false, Attempts: 15}
+	}
+
+	err := runWithDeps([]string{"--model", "gpt-5"}, deps)
+	if err != nil {
+		t.Fatalf("runWithDeps returned error: %v", err)
+	}
+	if !r.ran {
+		t.Fatal("runner.Run should be called even when port selection fails")
+	}
+	// Args should NOT include --port
+	if len(r.args) != 2 {
+		t.Fatalf("expected 2 args (no --port), got %d: %v", len(r.args), r.args)
+	}
+}
+
+func TestRunWithDeps_NoPortsConfigNoPortFlag(t *testing.T) {
+	tmp := t.TempDir()
+	setupPortTestFiles(t, tmp,
+		"{\n  \"plugin\": [\n    \"plugin-a\"\n  ]\n}\n",
+		"plugins = [\"plugin-a\"]\n",
+	)
+
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+	deps.runTUI = func(items []tui.PluginItem, editChoices []tui.EditChoice) (map[string]bool, bool, string, error) {
+		return map[string]bool{"plugin-a": true}, false, "", nil
+	}
+
+	err := runWithDeps([]string{"--model", "gpt-5"}, deps)
+	if err != nil {
+		t.Fatalf("runWithDeps returned error: %v", err)
+	}
+	if !r.ran {
+		t.Fatal("runner.Run should be called")
+	}
+	// No --port should be added
+	if len(r.args) != 2 {
+		t.Fatalf("expected 2 args (no --port), got %d: %v", len(r.args), r.args)
+	}
+}
+
+func TestRunWithDeps_InvalidPortsConfigFallback(t *testing.T) {
+	tmp := t.TempDir()
+	setupPortTestFiles(t, tmp,
+		"{\n  \"plugin\": [\n    \"plugin-a\"\n  ]\n}\n",
+		"plugins = [\"plugin-a\"]\nports = \"invalid\"\n",
+	)
+
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+	deps.runTUI = func(items []tui.PluginItem, editChoices []tui.EditChoice) (map[string]bool, bool, string, error) {
+		return map[string]bool{"plugin-a": true}, false, "", nil
+	}
+
+	err := runWithDeps([]string{"--model", "gpt-5"}, deps)
+	if err != nil {
+		t.Fatalf("runWithDeps returned error: %v", err)
+	}
+	if !r.ran {
+		t.Fatal("runner.Run should be called even with invalid port config")
+	}
+	// No --port should be added
+	if len(r.args) != 2 {
+		t.Fatalf("expected 2 args (no --port), got %d: %v", len(r.args), r.args)
+	}
+}
+
+func TestRunWithDeps_PortSelectionSkipsTUIPath(t *testing.T) {
+	// When there are no visible plugins (TUI is skipped), port selection should still work
+	tmp := t.TempDir()
+	setupPortTestFiles(t, tmp,
+		"{\n  \"plugin\": []\n}\n",
+		"ports = \"50000-55000\"\n",
+	)
+
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+	deps.selectPort = func(minPort, maxPort int, checkAvailable func(int) bool, logFn func(attempt, p int, available bool)) port.SelectResult {
+		return port.SelectResult{Port: 52000, Attempts: 1, Found: true}
+	}
+
+	err := runWithDeps([]string{"--verbose"}, deps)
+	if err != nil {
+		t.Fatalf("runWithDeps returned error: %v", err)
+	}
+	if !r.ran {
+		t.Fatal("runner.Run should be called")
+	}
+	if len(r.args) != 3 || r.args[1] != "--port" || r.args[2] != "52000" {
+		t.Fatalf("expected --port 52000 appended, got %v", r.args)
+	}
 }

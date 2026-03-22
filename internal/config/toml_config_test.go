@@ -154,3 +154,54 @@ func TestLoadOcConfigWithoutEditor(t *testing.T) {
 		t.Errorf("expected editor to be empty, got '%s'", config.Editor)
 	}
 }
+
+// TestLoadOcConfigWithPorts tests loading TOML with ports field
+func TestLoadOcConfigWithPorts(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.toml")
+
+	content := `plugins = ["plugin-a"]
+ports = "50000-55000"`
+	err := os.WriteFile(configPath, []byte(content), 0644)
+	if err != nil {
+		t.Fatalf("failed to write test TOML file: %v", err)
+	}
+
+	config, err := LoadOcConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadOcConfig failed: %v", err)
+	}
+
+	if config == nil {
+		t.Fatal("expected config to be non-nil, got nil")
+	}
+
+	if config.Ports != "50000-55000" {
+		t.Errorf("expected ports to be '50000-55000', got '%s'", config.Ports)
+	}
+}
+
+// TestLoadOcConfigWithoutPorts tests loading TOML without ports field
+func TestLoadOcConfigWithoutPorts(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.toml")
+
+	content := `plugins = ["plugin-a"]`
+	err := os.WriteFile(configPath, []byte(content), 0644)
+	if err != nil {
+		t.Fatalf("failed to write test TOML file: %v", err)
+	}
+
+	config, err := LoadOcConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadOcConfig failed: %v", err)
+	}
+
+	if config == nil {
+		t.Fatal("expected config to be non-nil, got nil")
+	}
+
+	if config.Ports != "" {
+		t.Errorf("expected ports to be empty, got '%s'", config.Ports)
+	}
+}

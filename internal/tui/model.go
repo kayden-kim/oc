@@ -35,15 +35,14 @@ type Model struct {
 }
 
 var (
-	headerAccentStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("green")).Bold(true)
-	cursorStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("cyan")).Bold(true)
-	selectedStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("green"))
-	cursorSelectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("yellow")).Bold(true)
-	helpKeyStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("blue")).Bold(true)
+	headerAccentStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Bold(true)
+	cursorStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
+	cursorSelectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
+	helpKeyStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Bold(true)
 )
 
 func (m Model) renderHeader() string {
-	return "oc " + m.version + " : Launching " + headerAccentStyle.Render("OpenCode") + " with plugins"
+	return "⚡ oc " + m.version + " : Launching " + headerAccentStyle.Render("OpenCode") + " with plugins"
 }
 
 func stylePluginRow(line string, focused bool, selected bool) string {
@@ -52,15 +51,13 @@ func stylePluginRow(line string, focused bool, selected bool) string {
 		return cursorSelectedStyle.Render(line)
 	case focused:
 		return cursorStyle.Render(line)
-	case selected:
-		return selectedStyle.Render(line)
 	default:
 		return line
 	}
 }
 
 func renderHelpLine() string {
-	return helpKeyStyle.Render("↑/↓") + ": navigate • " +
+	return "💡 " + helpKeyStyle.Render("↑/↓") + ": navigate • " +
 		helpKeyStyle.Render("space") + ": toggle • " +
 		helpKeyStyle.Render("enter") + ": confirm • " +
 		helpKeyStyle.Render("e") + ": edit config... • " +
@@ -68,7 +65,7 @@ func renderHelpLine() string {
 }
 
 func renderEditHelpLine() string {
-	return helpKeyStyle.Render("↑/↓") + ": navigate • " +
+	return "💡 " + helpKeyStyle.Render("↑/↓") + ": navigate • " +
 		helpKeyStyle.Render("enter") + ": edit • " +
 		helpKeyStyle.Render("esc") + ": back"
 }
@@ -162,7 +159,7 @@ func (m Model) View() tea.View {
 	}
 
 	if m.editMode {
-		s := "Choose config to edit\n\n"
+		s := "📂 Choose config to edit\n\n"
 
 		for i, choice := range m.editChoices {
 			cursor := "  "
@@ -191,13 +188,13 @@ func (m Model) View() tea.View {
 			cursor = "> "
 		}
 
-		checked := " "
+		checked := "   "
 		_, selected := m.selected[i]
 		if selected {
-			checked = "*"
+			checked = "✔  "
 		}
 
-		line := fmt.Sprintf("%s[%s] %s", cursor, checked, p.Name)
+		line := fmt.Sprintf("%s%s%s", cursor, checked, p.Name)
 		line = stylePluginRow(line, focused, selected)
 
 		s += line + "\n"

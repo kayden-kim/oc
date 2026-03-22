@@ -4,11 +4,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/kayden-kim/oc/internal/config"
 	"github.com/kayden-kim/oc/internal/editor"
 	"github.com/kayden-kim/oc/internal/plugin"
+	"github.com/kayden-kim/oc/internal/port"
 	"github.com/kayden-kim/oc/internal/runner"
 	"github.com/kayden-kim/oc/internal/tui"
 )
@@ -42,6 +45,9 @@ type runtimeDeps struct {
 	applySelections   func([]byte, map[string]bool) ([]byte, error)
 	writeConfigFile   func(string, []byte) error
 	openEditor        func(string, string) error
+	parsePortRange    func(string) (int, int, error)
+	selectPort        func(minPort, maxPort int, checkAvailable func(int) bool, logFn func(attempt, port int, available bool)) port.SelectResult
+	isPortAvailable   func(int) bool
 }
 
 func defaultDeps() runtimeDeps {
@@ -67,6 +73,9 @@ func defaultDeps() runtimeDeps {
 		applySelections: config.ApplySelections,
 		writeConfigFile: config.WriteConfigFile,
 		openEditor:      editor.OpenWithConfig,
+		parsePortRange:  port.ParseRange,
+		selectPort:      port.Select,
+		isPortAvailable: port.IsAvailable,
 	}
 }
 
@@ -96,9 +105,11 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 
 	var whitelist []string
 	var configEditor string
+	var portsRange string
 	if ocConfig != nil {
 		whitelist = ocConfig.Plugins
 		configEditor = ocConfig.Editor
+		portsRange = ocConfig.Ports
 	}
 
 	content, err := deps.readFile(configPath)
@@ -116,7 +127,7 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 
 	visible, _ := deps.filterByWhitelist(plugins, whitelist)
 	if len(visible) == 0 {
-		return r.Run(args)
+		return runOpencode(r, args, portsRange, deps)
 	}
 
 	items := make([]tui.PluginItem, len(visible))
@@ -151,7 +162,66 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 		return fmt.Errorf("failed to write config: %w", err)
 	}
 
+	printSelectedPlugins(selections)
+
+	return runOpencode(r, args, portsRange, deps)
+}
+
+func runOpencode(r runnerAPI, args []string, portsRange string, deps runtimeDeps) error {
+	if portsRange == "" {
+		return r.Run(args)
+	}
+
+	minPort, maxPort, err := deps.parsePortRange(portsRange)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: invalid ports config %q: %v\n", portsRange, err)
+		fmt.Fprintln(os.Stderr, "Launching opencode without --port flag.")
+		fmt.Println()
+		return r.Run(args)
+	}
+
+	fmt.Printf("Port selection: range %d-%d\n", minPort, maxPort)
+
+	result := deps.selectPort(minPort, maxPort, deps.isPortAvailable, func(attempt, p int, available bool) {
+		status := "in use"
+		if available {
+			status = "available"
+		}
+		fmt.Printf("  [%2d/15] port %d ... %s\n", attempt, p, status)
+	})
+
+	if !result.Found {
+		fmt.Fprintln(os.Stderr, "Warning: no available port found after 15 attempts.")
+		fmt.Fprintln(os.Stderr, "Launching opencode without --port flag.")
+		fmt.Println()
+		return r.Run(args)
+	}
+
+	fmt.Printf("Using port %d\n", result.Port)
+	fmt.Println()
+
+	args = append(args, "--port", strconv.Itoa(result.Port))
 	return r.Run(args)
+}
+
+func printSelectedPlugins(selections map[string]bool) {
+	var enabled []string
+	for name, selected := range selections {
+		if selected {
+			enabled = append(enabled, name)
+		}
+	}
+	sort.Strings(enabled)
+
+	if len(enabled) == 0 {
+		fmt.Println("Selected plugins: (none)")
+	} else {
+		fmt.Println("Selected plugins:")
+		for _, name := range enabled {
+			fmt.Printf("  - %s\n", name)
+		}
+	}
+	fmt.Println()
 }
 
 func resolveOhMyOpencodePath(configDir string) string {

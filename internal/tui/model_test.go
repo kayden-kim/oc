@@ -427,12 +427,12 @@ func TestEditRequested_Method(t *testing.T) {
 
 func TestRenderHeader_HighlightsOpenCodeOnly(t *testing.T) {
 	headerLine := Model{version: testVersion}.renderHeader()
-	headerAccentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("green")).Bold(true)
+	headerAccentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Bold(true)
 
 	if !strings.Contains(headerLine, headerAccentStyle.Render("OpenCode")) {
 		t.Fatalf("expected styled OpenCode in header, got %q", headerLine)
 	}
-	if !strings.Contains(headerLine, "oc "+testVersion+" : Launching ") {
+	if !strings.Contains(headerLine, "⚡ oc "+testVersion+" : Launching ") {
 		t.Fatalf("expected versioned launch prefix, got %q", headerLine)
 	}
 	if strings.Contains(headerLine, headerAccentStyle.Render(" with plugins")) {
@@ -443,15 +443,15 @@ func TestRenderHeader_HighlightsOpenCodeOnly(t *testing.T) {
 func TestRenderHeader_IncludesVersion(t *testing.T) {
 	headerLine := Model{version: testVersion}.renderHeader()
 
-	if !strings.HasPrefix(headerLine, "oc "+testVersion+" : ") {
+	if !strings.HasPrefix(headerLine, "⚡ oc "+testVersion+" : ") {
 		t.Fatalf("expected header to start with version, got %q", headerLine)
 	}
 }
 
 func TestStylePluginRow_UsesCombinedStyleForFocusedSelectedRow(t *testing.T) {
-	cursorSelectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("yellow")).Bold(true)
-	rowLine := stylePluginRow("> [*] plugin-a", true, true)
-	expected := cursorSelectedStyle.Render("> [*] plugin-a")
+	cursorSelectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
+	rowLine := stylePluginRow("> ✔  plugin-a", true, true)
+	expected := cursorSelectedStyle.Render("> ✔  plugin-a")
 
 	if !strings.Contains(rowLine, expected) {
 		t.Fatalf("expected focused+selected style %q in %q", expected, rowLine)
@@ -459,7 +459,7 @@ func TestStylePluginRow_UsesCombinedStyleForFocusedSelectedRow(t *testing.T) {
 }
 
 func TestRenderHelpLine_IncludesStyledKeyTokens(t *testing.T) {
-	helpKeyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("blue")).Bold(true)
+	helpKeyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Bold(true)
 	helpLine := renderHelpLine()
 
 	for _, token := range []string{"↑/↓", "space", "enter", "e", "q"} {
@@ -491,7 +491,7 @@ func TestView_RendersStyledHeaderLine(t *testing.T) {
 func TestView_RendersFocusedSelectedRowLine(t *testing.T) {
 	view := NewModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}, nil, testVersion).View().Content
 	rowLine := strings.Split(view, "\n")[2]
-	expected := stylePluginRow("> [*] plugin-a", true, true)
+	expected := stylePluginRow("> ✔  plugin-a", true, true)
 
 	if rowLine != expected {
 		t.Fatalf("expected row line %q, got %q", expected, rowLine)

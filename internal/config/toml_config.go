@@ -10,6 +10,7 @@ import (
 type OcConfig struct {
 	Plugins []string `toml:"plugins"`
 	Editor  string   `toml:"editor"`
+	Ports   string   `toml:"ports"`
 }
 
 // LoadOcConfig loads the TOML configuration from the specified path.
