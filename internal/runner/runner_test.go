@@ -3,6 +3,7 @@ package runner
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -129,6 +130,46 @@ func TestRunnerExitCodePropagation(t *testing.T) {
 
 	if exitErr.Code != 42 {
 		t.Errorf("Expected exit code 42, got %d", exitErr.Code)
+	}
+}
+
+func TestRunnerDoesNotClearScreenBeforeLaunch(t *testing.T) {
+	r := &Runner{Command: os.Args[0]}
+	args := []string{"-test.run=TestHelperProcess", "--", "child-output"}
+
+	t.Setenv("GO_TEST_PROCESS", "1")
+	t.Setenv("TEST_MODE", "echo")
+
+	originalStdout := os.Stdout
+	readPipe, writePipe, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create stdout pipe: %v", err)
+	}
+	os.Stdout = writePipe
+	defer func() {
+		os.Stdout = originalStdout
+	}()
+
+	runErr := r.Run(args)
+	writePipe.Close()
+	output, readErr := io.ReadAll(readPipe)
+	readPipe.Close()
+	if readErr != nil {
+		t.Fatalf("failed to read captured stdout: %v", readErr)
+	}
+	if runErr != nil {
+		t.Fatalf("expected no error, got %v", runErr)
+	}
+
+	outputStr := string(output)
+	if strings.HasPrefix(outputStr, "\x1b[2J\x1b[H") {
+		t.Fatalf("did not expect clear-screen prefix, got %q", outputStr)
+	}
+	if !strings.Contains(outputStr, "child-output") {
+		t.Fatalf("expected child output without clear-screen prefix, got %q", outputStr)
+	}
+	if strings.Index(outputStr, "child-output") != 0 {
+		t.Fatalf("expected child output at start when clear-screen is skipped, got %q", outputStr)
 	}
 }
 

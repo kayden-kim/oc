@@ -44,7 +44,7 @@ type runtimeDeps struct {
 	loadOcConfig      func(string) (*config.OcConfig, error)
 	parsePlugins      func([]byte) ([]config.Plugin, string, error)
 	filterByWhitelist func([]config.Plugin, []string) ([]config.Plugin, []config.Plugin)
-	runTUI            func([]tui.PluginItem, []tui.EditChoice) (map[string]bool, bool, string, error)
+	runTUI            func([]tui.PluginItem, []tui.EditChoice, string) (map[string]bool, bool, string, []string, error)
 	applySelections   func([]byte, map[string]bool) ([]byte, error)
 	writeConfigFile   func(string, []byte) error
 	openEditor        func(string, string) error
@@ -54,32 +54,46 @@ type runtimeDeps struct {
 }
 
 func defaultDeps() runtimeDeps {
-	return runtimeDeps{
+	deps := runtimeDeps{
 		newRunner:         func() runnerAPI { return runner.NewRunner() },
 		userHomeDir:       os.UserHomeDir,
 		readFile:          os.ReadFile,
 		loadOcConfig:      config.LoadOcConfig,
 		parsePlugins:      config.ParsePlugins,
 		filterByWhitelist: plugin.FilterByWhitelist,
-		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice) (map[string]bool, bool, string, error) {
-			model := tui.NewModel(items, editChoices, version)
-			result, err := tea.NewProgram(model).Run()
-			if err != nil {
-				return nil, false, "", err
-			}
-			finalModel, ok := result.(tui.Model)
-			if !ok {
-				return nil, false, "", fmt.Errorf("unexpected TUI model type %T", result)
-			}
-			return finalModel.Selections(), finalModel.Cancelled(), finalModel.EditTarget(), nil
-		},
-		applySelections: config.ApplySelections,
-		writeConfigFile: config.WriteConfigFile,
-		openEditor:      editor.OpenWithConfig,
-		parsePortRange:  port.ParseRange,
-		selectPort:      port.Select,
-		isPortAvailable: port.IsAvailable,
+		applySelections:   config.ApplySelections,
+		writeConfigFile:   config.WriteConfigFile,
+		openEditor:        editor.OpenWithConfig,
+		parsePortRange:    port.ParseRange,
+		selectPort:        port.Select,
+		isPortAvailable:   port.IsAvailable,
 	}
+
+	deps.runTUI = func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string) (map[string]bool, bool, string, []string, error) {
+		model := tui.NewModel(items, editChoices, version)
+		result, err := tea.NewProgram(model).Run()
+		if err != nil {
+			return nil, false, "", nil, err
+		}
+		finalModel, ok := result.(tui.Model)
+		if !ok {
+			return nil, false, "", nil, fmt.Errorf("unexpected TUI model type %T", result)
+		}
+
+		selections := finalModel.Selections()
+		if finalModel.Cancelled() || finalModel.EditTarget() != "" {
+			return selections, finalModel.Cancelled(), finalModel.EditTarget(), nil, nil
+		}
+
+		portArgs, err := runLaunchTUI(selectedPluginNames(selections), portsRange, deps)
+		if err != nil {
+			return nil, false, "", nil, err
+		}
+
+		return selections, false, "", portArgs, nil
+	}
+
+	return deps
 }
 
 func run() error {
@@ -133,7 +147,11 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 
 		visible, _ := deps.filterByWhitelist(plugins, whitelist)
 		if len(visible) == 0 {
-			return runOpencode(r, args, portsRange, deps)
+			portArgs, err := runLaunchTUI(nil, portsRange, deps)
+			if err != nil {
+				return fmt.Errorf("launch TUI error: %w", err)
+			}
+			return runOpencode(r, args, portArgs)
 		}
 
 		items := make([]tui.PluginItem, len(visible))
@@ -146,7 +164,7 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 			{Label: "3) oh-my-opencode.json file", Path: resolveOhMyOpencodePath(configDir)},
 		}
 
-		selections, cancelled, editTarget, err := deps.runTUI(items, editChoices)
+		selections, cancelled, editTarget, portArgs, err := deps.runTUI(items, editChoices, portsRange)
 		if err != nil {
 			return fmt.Errorf("TUI error: %w", err)
 		}
@@ -171,9 +189,7 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 			return fmt.Errorf("failed to write config: %w", err)
 		}
 
-		printSelectedPlugins(selections)
-
-		err = runOpencode(r, args, portsRange, deps)
+		err = runOpencode(r, args, portArgs)
 		if exitErr, ok := runner.IsExitCode(err); ok {
 			lastExitErr = exitErr
 			fmt.Fprintf(os.Stderr, "opencode exited with code %d\n\n", exitErr.Code)
@@ -186,44 +202,12 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 	}
 }
 
-func runOpencode(r runnerAPI, args []string, portsRange string, deps runtimeDeps) error {
-	if portsRange == "" {
-		return r.Run(args)
-	}
-
-	minPort, maxPort, err := deps.parsePortRange(portsRange)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: invalid ports config %q: %v\n", portsRange, err)
-		fmt.Fprintln(os.Stderr, "Launching opencode without --port flag.")
-		fmt.Println()
-		return r.Run(args)
-	}
-
-	fmt.Printf("Port selection: range %d-%d\n", minPort, maxPort)
-
-	result := deps.selectPort(minPort, maxPort, deps.isPortAvailable, func(attempt, p int, available bool) {
-		status := "in use"
-		if available {
-			status = "available"
-		}
-		fmt.Printf("  [%2d/15] port %d ... %s\n", attempt, p, status)
-	})
-
-	if !result.Found {
-		fmt.Fprintln(os.Stderr, "Warning: no available port found after 15 attempts.")
-		fmt.Fprintln(os.Stderr, "Launching opencode without --port flag.")
-		fmt.Println()
-		return r.Run(args)
-	}
-
-	fmt.Printf("Using port %d\n", result.Port)
-	fmt.Println()
-
-	args = append(args, "--port", strconv.Itoa(result.Port))
+func runOpencode(r runnerAPI, args []string, portArgs []string) error {
+	args = append(args, portArgs...)
 	return r.Run(args)
 }
 
-func printSelectedPlugins(selections map[string]bool) {
+func selectedPluginNames(selections map[string]bool) []string {
 	var enabled []string
 	for name, selected := range selections {
 		if selected {
@@ -231,16 +215,73 @@ func printSelectedPlugins(selections map[string]bool) {
 		}
 	}
 	sort.Strings(enabled)
+	return enabled
+}
 
-	if len(enabled) == 0 {
-		fmt.Println("Selected plugins: (none)")
-	} else {
-		fmt.Println("Selected plugins:")
-		for _, name := range enabled {
-			fmt.Printf("  - %s\n", name)
-		}
+func runLaunchTUI(plugins []string, portsRange string, deps runtimeDeps) ([]string, error) {
+	launchModel := tui.NewLaunchModel(plugins, version, func(msgCh chan<- tea.Msg) {
+		defer close(msgCh)
+		portArgs := resolvePortArgs(portsRange, deps, func(line string) {
+			msgCh <- tui.LaunchLogMsg{Line: line}
+		})
+		msgCh <- tui.LaunchReadyMsg{PortArgs: portArgs}
+	})
+
+	launchResult, err := tea.NewProgram(launchModel).Run()
+	if err != nil {
+		return nil, err
 	}
-	fmt.Println()
+
+	finalLaunchModel, ok := launchResult.(tui.LaunchModel)
+	if !ok {
+		return nil, fmt.Errorf("unexpected launch TUI model type %T", launchResult)
+	}
+
+	return finalLaunchModel.PortArgs(), nil
+}
+
+func resolvePortArgs(portsRange string, deps runtimeDeps, logFn func(string)) []string {
+	if portsRange == "" {
+		return nil
+	}
+
+	minPort, maxPort, err := deps.parsePortRange(portsRange)
+	if err != nil {
+		if logFn != nil {
+			logFn(fmt.Sprintf("Warning: invalid ports config %q: %v", portsRange, err))
+			logFn("Launching opencode without --port flag.")
+		}
+		return nil
+	}
+
+	if logFn != nil {
+		logFn(fmt.Sprintf("Port selection: range %d-%d", minPort, maxPort))
+	}
+
+	result := deps.selectPort(minPort, maxPort, deps.isPortAvailable, func(attempt, p int, available bool) {
+		if logFn == nil {
+			return
+		}
+
+		status := "in use"
+		if available {
+			status = "available"
+		}
+		logFn(fmt.Sprintf("  [%2d/15] port %d ... %s", attempt, p, status))
+	})
+	if !result.Found {
+		if logFn != nil {
+			logFn("Warning: no available port found after 15 attempts.")
+			logFn("Launching opencode without --port flag.")
+		}
+		return nil
+	}
+
+	if logFn != nil {
+		logFn(fmt.Sprintf("Using port %d", result.Port))
+	}
+
+	return []string{"--port", strconv.Itoa(result.Port)}
 }
 
 func resolveOhMyOpencodePath(configDir string) string {

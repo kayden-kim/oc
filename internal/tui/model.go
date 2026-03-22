@@ -36,14 +36,15 @@ type Model struct {
 
 var (
 	headerAccentStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Bold(true)
+	headerBaseStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
 	cursorStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
 	cursorSelectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
 	helpKeyStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Bold(true)
 )
 
 func (m Model) renderHeader() string {
-	return "⚡ " + headerAccentStyle.Render("o") + "c " + m.version + " : Launching " +
-		headerAccentStyle.Render("Open") + "Code with plugins"
+	return "⚡ " + headerAccentStyle.Render("O") + headerBaseStyle.Render("C") + " " + m.version + " - " +
+		"Open" + headerBaseStyle.Render("Code") + " launcher"
 }
 
 func stylePluginRow(line string, focused bool, selected bool) string {
@@ -155,12 +156,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the TUI
 func (m Model) View() tea.View {
+	if m.confirmed || m.cancelled || m.edit {
+		return tea.NewView("")
+	}
+
 	if len(m.plugins) == 0 {
 		return tea.NewView("")
 	}
 
 	if m.editMode {
-		s := "📂 Choose config to edit\n\n"
+		s := m.renderHeader() + "\n\n" + "📂 Choose config to edit\n\n"
 
 		for i, choice := range m.editChoices {
 			cursor := "  "
@@ -180,7 +185,7 @@ func (m Model) View() tea.View {
 		return tea.NewView(s)
 	}
 
-	s := m.renderHeader() + "\n\n"
+	s := m.renderHeader() + "\n\n📋 Choose plugins to enable\n\n"
 
 	for i, p := range m.plugins {
 		cursor := "  "

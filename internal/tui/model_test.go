@@ -428,15 +428,22 @@ func TestEditRequested_Method(t *testing.T) {
 func TestRenderHeader_HighlightsBrandFragmentsOnly(t *testing.T) {
 	headerLine := Model{version: testVersion}.renderHeader()
 	headerAccentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Bold(true)
+	headerBaseStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
 
-	if !strings.Contains(headerLine, " with plugins") {
-		t.Fatalf("expected header suffix to remain unchanged, got %q", headerLine)
+	if !strings.Contains(headerLine, "Open"+headerBaseStyle.Render("Code")+" launcher") {
+		t.Fatalf("expected updated header copy, got %q", headerLine)
 	}
-	if !strings.Contains(headerLine, "⚡ "+headerAccentStyle.Render("o")+"c "+testVersion+" : Launching ") {
-		t.Fatalf("expected accented oc fragment in header, got %q", headerLine)
+	if strings.Contains(headerLine, "Launching") {
+		t.Fatalf("expected removed launch wording, got %q", headerLine)
 	}
-	if !strings.Contains(headerLine, headerAccentStyle.Render("Open")+"Code") {
-		t.Fatalf("expected accented Open fragment in header, got %q", headerLine)
+	if strings.Contains(headerLine, "with plugins") {
+		t.Fatalf("expected removed plugin wording, got %q", headerLine)
+	}
+	if !strings.Contains(headerLine, "⚡ "+headerAccentStyle.Render("O")+headerBaseStyle.Render("C")+" "+testVersion+" - ") {
+		t.Fatalf("expected accented OC fragment in header, got %q", headerLine)
+	}
+	if !strings.Contains(headerLine, "Open"+headerBaseStyle.Render("Code")+" launcher") {
+		t.Fatalf("expected explicit white style for Code in header, got %q", headerLine)
 	}
 	if strings.Contains(headerLine, headerAccentStyle.Render("OpenCode")) {
 		t.Fatalf("expected OpenCode to be only partially accented, got %q", headerLine)
@@ -446,13 +453,20 @@ func TestRenderHeader_HighlightsBrandFragmentsOnly(t *testing.T) {
 func TestRenderHeader_IncludesVersion(t *testing.T) {
 	headerLine := Model{version: testVersion}.renderHeader()
 	headerAccentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Bold(true)
+	headerBaseStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
 
-	expectedPrefix := "⚡ " + headerAccentStyle.Render("o") + "c " + testVersion + " : "
+	expectedPrefix := "⚡ " + headerAccentStyle.Render("O") + headerBaseStyle.Render("C") + " " + testVersion + " - "
 	if !strings.HasPrefix(headerLine, expectedPrefix) {
 		t.Fatalf("expected header to start with %q, got %q", expectedPrefix, headerLine)
 	}
-	if !strings.Contains(headerLine, "Launching ") {
-		t.Fatalf("expected launch copy to remain present, got %q", headerLine)
+	if !strings.Contains(headerLine, "Open"+headerBaseStyle.Render("Code")+" launcher") {
+		t.Fatalf("expected new launcher wording, got %q", headerLine)
+	}
+	if strings.Contains(headerLine, "Launching ") {
+		t.Fatalf("expected removed launch wording, got %q", headerLine)
+	}
+	if strings.Contains(headerLine, "with plugins") {
+		t.Fatalf("expected removed plugin wording, got %q", headerLine)
 	}
 }
 
@@ -496,9 +510,18 @@ func TestView_RendersStyledHeaderLine(t *testing.T) {
 	}
 }
 
+func TestView_RendersPluginSelectionPrompt(t *testing.T) {
+	view := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, testVersion).View().Content
+	promptLine := strings.Split(view, "\n")[2]
+
+	if promptLine != "📋 Choose plugins to enable" {
+		t.Fatalf("expected plugin prompt line %q, got %q", "📋 Choose plugins to enable", promptLine)
+	}
+}
+
 func TestView_RendersFocusedSelectedRowLine(t *testing.T) {
 	view := NewModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}, nil, testVersion).View().Content
-	rowLine := strings.Split(view, "\n")[2]
+	rowLine := strings.Split(view, "\n")[4]
 	expected := stylePluginRow("> ✔  plugin-a", true, true)
 
 	if rowLine != expected {
@@ -506,11 +529,55 @@ func TestView_RendersFocusedSelectedRowLine(t *testing.T) {
 	}
 }
 
+func TestView_EditModeRendersStyledHeaderLine(t *testing.T) {
+	model := NewModel([]PluginItem{{Name: "plugin-a"}}, []EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}}, testVersion)
+	updatedModel, _ := model.Update(mockKeyMsg("e"))
+	view := updatedModel.(Model).View().Content
+	headerLine := strings.Split(view, "\n")[0]
+
+	expected := Model{version: testVersion}.renderHeader()
+	if headerLine != expected {
+		t.Fatalf("expected edit-mode header line %q, got %q", expected, headerLine)
+	}
+}
+
 func TestView_RendersStyledHelpLine(t *testing.T) {
 	view := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, testVersion).View().Content
-	helpLine := strings.Split(view, "\n")[4]
+	helpLine := strings.Split(view, "\n")[6]
 
 	if helpLine != renderHelpLine() {
 		t.Fatalf("expected help line %q, got %q", renderHelpLine(), helpLine)
+	}
+}
+
+func TestView_ClearsOnConfirm(t *testing.T) {
+	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, testVersion)
+	updatedModel, _ := model.Update(mockKeyMsg("enter"))
+
+	if got := updatedModel.(Model).View().Content; got != "" {
+		t.Fatalf("expected empty view after confirm, got %q", got)
+	}
+}
+
+func TestView_ClearsOnCancel(t *testing.T) {
+	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, testVersion)
+	updatedModel, _ := model.Update(mockKeyMsg("ctrl+c"))
+
+	if got := updatedModel.(Model).View().Content; got != "" {
+		t.Fatalf("expected empty view after cancel, got %q", got)
+	}
+}
+
+func TestView_ClearsOnEditSelection(t *testing.T) {
+	model := NewModel(
+		[]PluginItem{{Name: "plugin-a"}},
+		[]EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}},
+		testVersion,
+	)
+	updatedModel, _ := model.Update(mockKeyMsg("e"))
+	updatedModel, _ = updatedModel.(Model).Update(mockKeyMsg("enter"))
+
+	if got := updatedModel.(Model).View().Content; got != "" {
+		t.Fatalf("expected empty view after edit selection, got %q", got)
 	}
 }
