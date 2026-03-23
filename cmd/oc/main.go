@@ -240,6 +240,13 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 		}
 
 		err = runOpencode(r, args, portArgs, selectedSession)
+		cwd, cwdErr := deps.getwd()
+		if cwdErr == nil {
+			refreshedSessions, listErr := deps.listSessions(cwd)
+			if listErr == nil {
+				selectedSession = latestSession(refreshedSessions)
+			}
+		}
 		if exitErr, ok := runner.IsExitCode(err); ok {
 			lastExitErr = exitErr
 			fmt.Fprintf(os.Stderr, "opencode exited with code %d\n\n", exitErr.Code)

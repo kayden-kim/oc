@@ -202,7 +202,7 @@ func TestRunWithDeps_AutoSelectsLatestSession(t *testing.T) {
 	}
 }
 
-func TestRunWithDeps_PreservesUserSelectedSessionAcrossLoop(t *testing.T) {
+func TestRunWithDeps_RefreshesFromManualSelectionToLatestSessionAcrossLoop(t *testing.T) {
 	tmp := t.TempDir()
 	configDir := filepath.Join(tmp, ".config", "opencode")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
@@ -225,7 +225,10 @@ func TestRunWithDeps_PreservesUserSelectedSessionAcrossLoop(t *testing.T) {
 		filterByWhitelist: defaultDeps().filterByWhitelist,
 		getwd:             func() (string, error) { return tmp, nil },
 		listSessions: func(string) ([]tui.SessionItem, error) {
-			return []tui.SessionItem{{ID: "ses_latest", Title: "Latest session"}, {ID: "ses_manual", Title: "Manual session"}}, nil
+			if call == 0 {
+				return []tui.SessionItem{{ID: "ses_latest", Title: "Latest session"}, {ID: "ses_manual", Title: "Manual session"}}, nil
+			}
+			return []tui.SessionItem{{ID: "ses_after", Title: "After session"}, {ID: "ses_manual", Title: "Manual session"}}, nil
 		},
 		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice, sessions []tui.SessionItem, session tui.SessionItem, _ string, _ bool) (map[string]bool, bool, string, []string, tui.SessionItem, error) {
 			call++
@@ -236,8 +239,8 @@ func TestRunWithDeps_PreservesUserSelectedSessionAcrossLoop(t *testing.T) {
 				}
 				return map[string]bool{"plugin-a": true}, false, "", nil, tui.SessionItem{ID: "ses_manual", Title: "Manual session"}, nil
 			case 2:
-				if session.ID != "ses_manual" {
-					t.Fatalf("expected second TUI call to preserve selected session, got %+v", session)
+				if session.ID != "ses_after" {
+					t.Fatalf("expected second TUI call to refresh to latest session, got %+v", session)
 				}
 				return nil, true, "", nil, session, nil
 			default:
@@ -256,7 +259,74 @@ func TestRunWithDeps_PreservesUserSelectedSessionAcrossLoop(t *testing.T) {
 		t.Fatal("runner.Run should be called")
 	}
 	if len(r.args) != 2 || r.args[0] != "-s" || r.args[1] != "ses_manual" {
-		t.Fatalf("expected preserved session args, got %#v", r.args)
+		t.Fatalf("expected first launch to use manually selected session args, got %#v", r.args)
+	}
+}
+
+func TestRunWithDeps_RefreshesToLatestSessionAfterOpencodeExit(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, ".config", "opencode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	configPath := filepath.Join(configDir, "opencode.json")
+	if err := os.WriteFile(configPath, []byte("{\n  \"plugin\": [\n    \"plugin-a\"\n  ]\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &fakeRunner{}
+	listCalls := 0
+	tuiCalls := 0
+	err := runWithDeps(nil, runtimeDeps{
+		newRunner:         func() runnerAPI { return r },
+		userHomeDir:       func() (string, error) { return tmp, nil },
+		readFile:          os.ReadFile,
+		loadOcConfig:      config.LoadOcConfig,
+		parsePlugins:      config.ParsePlugins,
+		filterByWhitelist: defaultDeps().filterByWhitelist,
+		getwd:             func() (string, error) { return tmp, nil },
+		listSessions: func(string) ([]tui.SessionItem, error) {
+			listCalls++
+			switch listCalls {
+			case 1:
+				return []tui.SessionItem{{ID: "ses_initial", Title: "Initial session"}}, nil
+			case 2:
+				return []tui.SessionItem{{ID: "ses_updated", Title: "Updated session"}, {ID: "ses_initial", Title: "Initial session"}}, nil
+			default:
+				return []tui.SessionItem{{ID: "ses_updated", Title: "Updated session"}, {ID: "ses_initial", Title: "Initial session"}}, nil
+			}
+		},
+		runTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice, sessions []tui.SessionItem, session tui.SessionItem, _ string, _ bool) (map[string]bool, bool, string, []string, tui.SessionItem, error) {
+			tuiCalls++
+			switch tuiCalls {
+			case 1:
+				if session.ID != "ses_initial" {
+					t.Fatalf("expected first TUI call to use initial latest session, got %+v", session)
+				}
+				return map[string]bool{"plugin-a": true}, false, "", nil, session, nil
+			case 2:
+				if session.ID != "ses_updated" {
+					t.Fatalf("expected second TUI call to refresh to updated latest session, got %+v", session)
+				}
+				return nil, true, "", nil, session, nil
+			default:
+				t.Fatalf("unexpected TUI call %d", tuiCalls)
+				return nil, false, "", nil, tui.SessionItem{}, nil
+			}
+		},
+		applySelections: config.ApplySelections,
+		writeConfigFile: config.WriteConfigFile,
+		openEditor:      func(string, string) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("runWithDeps returned error: %v", err)
+	}
+	if !r.ran {
+		t.Fatal("runner.Run should be called")
+	}
+	if len(r.args) != 2 || r.args[0] != "-s" || r.args[1] != "ses_initial" {
+		t.Fatalf("expected first launch to use initial session args, got %#v", r.args)
 	}
 }
 
