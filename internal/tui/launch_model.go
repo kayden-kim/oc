@@ -122,8 +122,7 @@ func (m LaunchModel) View() tea.View {
 	}
 
 	var sections []string
-	sections = append(sections, Model{version: m.version}.renderHeader())
-	sections = append(sections, renderSelectedSession(m.session))
+	sections = append(sections, Model{version: m.version, session: m.session}.renderTopBadge())
 	sections = append(sections, launchTitleStyle.Render(fmt.Sprintf("%s Launching opencode", launchFrames[m.frame])))
 
 	if len(m.plugins) == 0 {

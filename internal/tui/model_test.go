@@ -19,6 +19,15 @@ func newTestModelWithSession(items []PluginItem, editChoices []EditChoice, sessi
 	return NewModel(items, editChoices, sessions, session, testVersion, allowMultiplePlugins)
 }
 
+func expectedTopBadge(version string, session SessionItem) string {
+	return sessionContainerStyle.Render(lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		sessionLabelStyle.Render("OC"),
+		sessionContentStyle.Render(sessionValueStyle.Render(version)),
+		sessionMetaStyle.Render(selectedSessionSummary(session)),
+	))
+}
+
 // mockKeyMsg creates a KeyPressMsg for testing
 func mockKeyMsg(key string) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Text: key}
@@ -584,60 +593,22 @@ func TestEditRequested_Method(t *testing.T) {
 	}
 }
 
-func TestRenderHeader_HighlightsBrandFragmentsOnly(t *testing.T) {
-	headerLine := Model{version: testVersion}.renderHeader()
-	headerAccentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Bold(true)
-	headerBaseStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
-	headerWordStyle := lipgloss.NewStyle().Bold(true)
-	defaultTextStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#7A7A7A"))
+func TestRenderTopBadge_ContainsBrandAndVersion(t *testing.T) {
+	rendered := Model{version: testVersion}.renderTopBadge()
+	expected := expectedTopBadge(testVersion, SessionItem{})
 
-	if !strings.Contains(headerLine, headerWordStyle.Render("Code")) {
-		t.Fatalf("expected updated header copy, got %q", headerLine)
-	}
-	if !strings.Contains(headerLine, "Open") || !strings.Contains(headerLine, "launcher") {
-		t.Fatalf("expected header text fragments to remain present, got %q", headerLine)
-	}
-	if strings.Contains(headerLine, "Launching") {
-		t.Fatalf("expected removed launch wording, got %q", headerLine)
-	}
-	if strings.Contains(headerLine, "with plugins") {
-		t.Fatalf("expected removed plugin wording, got %q", headerLine)
-	}
-	if !strings.Contains(headerLine, headerAccentStyle.Render("O")) || !strings.Contains(headerLine, headerWordStyle.Render("Open")) {
-		t.Fatalf("expected accented O and bold-only Open fragment in header, got %q", headerLine)
-	}
-	if !strings.Contains(headerLine, defaultTextStyle.Render("⚡ ")) || !strings.Contains(headerLine, defaultTextStyle.Render(" launcher")) {
-		t.Fatalf("expected default text color around highlighted header fragments, got %q", headerLine)
-	}
-	if !strings.Contains(headerLine, headerBaseStyle.Render("C")) || !strings.Contains(headerLine, headerWordStyle.Render("Code")) {
-		t.Fatalf("expected C to stay white bold and Code to use bold-only styling, got %q", headerLine)
+	if rendered != expected {
+		t.Fatalf("expected top badge %q, got %q", expected, rendered)
 	}
 }
 
-func TestRenderHeader_IncludesVersion(t *testing.T) {
-	headerLine := Model{version: testVersion}.renderHeader()
-	headerAccentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Bold(true)
-	headerBaseStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
-	headerWordStyle := lipgloss.NewStyle().Bold(true)
-	defaultTextStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#7A7A7A"))
+func TestRenderTopBadge_IncludesSelectedSessionInfoWithMetaBackground(t *testing.T) {
+	session := SessionItem{ID: "ses_latest", Title: "Latest session", UpdatedAt: time.Now()}
+	rendered := Model{version: testVersion, session: session}.renderTopBadge()
+	expected := expectedTopBadge(testVersion, session)
 
-	if !strings.HasPrefix(headerLine, defaultTextStyle.Render("⚡ ")+headerAccentStyle.Render("O")+headerBaseStyle.Render("C")) {
-		t.Fatalf("expected header to start with accented OC fragment, got %q", headerLine)
-	}
-	if !strings.Contains(headerLine, testVersion) {
-		t.Fatalf("expected version in header, got %q", headerLine)
-	}
-	if !strings.Contains(headerLine, headerWordStyle.Render("Open")) {
-		t.Fatalf("expected Open to use bold-only styling, got %q", headerLine)
-	}
-	if !strings.Contains(headerLine, headerWordStyle.Render("Code")) || !strings.Contains(headerLine, defaultTextStyle.Render(" launcher")) {
-		t.Fatalf("expected new launcher wording, got %q", headerLine)
-	}
-	if strings.Contains(headerLine, "Launching ") {
-		t.Fatalf("expected removed launch wording, got %q", headerLine)
-	}
-	if strings.Contains(headerLine, "with plugins") {
-		t.Fatalf("expected removed plugin wording, got %q", headerLine)
+	if rendered != expected {
+		t.Fatalf("expected top badge %q, got %q", expected, rendered)
 	}
 }
 
@@ -679,15 +650,15 @@ func TestView_RendersStyledHeaderLine(t *testing.T) {
 	view := newTestModel([]PluginItem{{Name: "plugin-a"}}, nil, true).View().Content
 	headerLine := strings.Split(view, "\n")[0]
 
-	expected := Model{version: testVersion}.renderHeader()
+	expected := Model{version: testVersion}.renderTopBadge()
 	if headerLine != expected {
-		t.Fatalf("expected header line %q, got %q", expected, headerLine)
+		t.Fatalf("expected top badge %q, got %q", expected, headerLine)
 	}
 }
 
 func TestView_RendersPluginSelectionPrompt(t *testing.T) {
 	view := newTestModel([]PluginItem{{Name: "plugin-a"}}, nil, true).View().Content
-	promptLine := strings.Split(view, "\n")[4]
+	promptLine := strings.Split(view, "\n")[2]
 
 	expected := lipgloss.NewStyle().Foreground(lipgloss.Color("#999999")).Render("📋 Choose plugins to enable")
 	if promptLine != expected {
@@ -699,7 +670,7 @@ func TestView_EditModeRendersInstructionPrompt(t *testing.T) {
 	model := newTestModel([]PluginItem{{Name: "plugin-a"}}, []EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}}, true)
 	updatedModel, _ := model.Update(mockKeyMsg("e"))
 	view := updatedModel.(Model).View().Content
-	promptLine := strings.Split(view, "\n")[4]
+	promptLine := strings.Split(view, "\n")[2]
 
 	expected := lipgloss.NewStyle().Foreground(lipgloss.Color("#999999")).Render("📂 Choose config to edit")
 	if promptLine != expected {
@@ -711,7 +682,7 @@ func TestView_SessionModeRendersInstructionPrompt(t *testing.T) {
 	model := newTestModelWithSession([]PluginItem{{Name: "plugin-a"}}, nil, []SessionItem{{ID: "ses_latest", Title: "Latest session"}}, SessionItem{}, true)
 	updatedModel, _ := model.Update(mockKeyMsg("s"))
 	view := updatedModel.(Model).View().Content
-	promptLine := strings.Split(view, "\n")[4]
+	promptLine := strings.Split(view, "\n")[2]
 
 	expected := lipgloss.NewStyle().Foreground(lipgloss.Color("#999999")).Render("🕘 Choose session")
 	if promptLine != expected {
@@ -767,8 +738,8 @@ func TestView_SessionModeRendersUnboxedSessionRow(t *testing.T) {
 	model := newTestModelWithSession([]PluginItem{{Name: "plugin-a"}}, nil, []SessionItem{session}, session, true)
 	updatedModel, _ := model.Update(mockKeyMsg("s"))
 	view := updatedModel.(Model).View().Content
-	rowLine := strings.Split(view, "\n")[7]
-	expected := stylePluginRow("> "+sessionTimestampPrefix(now, now)+"Latest session (ses_latest)", true, true)
+	rowLine := strings.Split(view, "\n")[5]
+	expected := stylePluginRow("> "+sessionLine(session), true, true)
 
 	if rowLine != expected {
 		t.Fatalf("expected unboxed session row %q, got %q", expected, rowLine)
@@ -777,7 +748,7 @@ func TestView_SessionModeRendersUnboxedSessionRow(t *testing.T) {
 
 func TestView_RendersFocusedSelectedRowLine(t *testing.T) {
 	view := newTestModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}, nil, true).View().Content
-	rowLine := strings.Split(view, "\n")[6]
+	rowLine := strings.Split(view, "\n")[4]
 	expected := stylePluginRow("> ✔  plugin-a", true, true)
 
 	if rowLine != expected {
@@ -791,39 +762,18 @@ func TestView_EditModeRendersStyledHeaderLine(t *testing.T) {
 	view := updatedModel.(Model).View().Content
 	headerLine := strings.Split(view, "\n")[0]
 
-	expected := Model{version: testVersion}.renderHeader()
+	expected := Model{version: testVersion}.renderTopBadge()
 	if headerLine != expected {
-		t.Fatalf("expected edit-mode header line %q, got %q", expected, headerLine)
+		t.Fatalf("expected edit-mode top badge %q, got %q", expected, headerLine)
 	}
 }
 
 func TestView_RendersStyledHelpLine(t *testing.T) {
 	view := newTestModel([]PluginItem{{Name: "plugin-a"}}, nil, true).View().Content
-	helpLine := strings.Split(view, "\n")[8]
+	helpLine := strings.Split(view, "\n")[6]
 
 	if helpLine != renderHelpLine() {
 		t.Fatalf("expected help line %q, got %q", renderHelpLine(), helpLine)
-	}
-}
-
-func TestView_RendersSelectedSessionLineAfterHeader(t *testing.T) {
-	session := SessionItem{ID: "ses_latest", Title: "Latest session", UpdatedAt: time.Date(2026, time.March, 23, 9, 8, 7, 0, time.Local)}
-	view := newTestModelWithSession([]PluginItem{{Name: "plugin-a"}}, nil, []SessionItem{session}, session, true).View().Content
-	line := strings.Split(view, "\n")[2]
-
-	if line != renderSelectedSession(session) {
-		t.Fatalf("expected selected session line %q, got %q", renderSelectedSession(session), line)
-	}
-}
-
-func TestRenderSelectedSession_PlacesTimestampAfterLabel(t *testing.T) {
-	now := time.Now()
-	session := SessionItem{ID: "ses_latest", Title: "Latest session", UpdatedAt: now.Add(-2 * time.Hour)}
-	rendered := renderSelectedSession(session)
-	expectedPrefix := sessionLabelStyle.Render("Session") + ": " + sessionStyle.Render(sessionTimestampPrefix(session.UpdatedAt, now))
-
-	if !strings.HasPrefix(rendered, expectedPrefix) {
-		t.Fatalf("expected selected session prefix %q, got %q", expectedPrefix, rendered)
 	}
 }
 

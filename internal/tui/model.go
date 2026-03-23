@@ -49,23 +49,38 @@ type Model struct {
 }
 
 var (
-	defaultTextStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#7A7A7A"))
-	instructionTextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#999999"))
-	headerAccentStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Bold(true)
-	headerBaseStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
-	cursorStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Bold(true)
-	cursorSelectedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Bold(true)
-	helpKeyStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Bold(true)
-	sessionStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("#B7C0CC"))
-	sessionLabelStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Bold(true)
-	sessionValueStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Bold(true)
-	sessionNoneStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#7A8594"))
+	defaultTextStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#7A7A7A"))
+	instructionTextStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#999999"))
+	cursorStyle           = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Bold(true)
+	cursorSelectedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Bold(true)
+	helpKeyStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Bold(true)
+	sessionContainerStyle = lipgloss.NewStyle()
+	sessionLabelStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Background(lipgloss.Color("#393939")).Bold(true).Padding(0, 1)
+	sessionContentStyle   = lipgloss.NewStyle().Background(lipgloss.Color("#292929")).Padding(0, 1)
+	sessionValueStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Background(lipgloss.Color("#292929")).Bold(true)
+	sessionMetaStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Background(lipgloss.Color("#191919")).Bold(false).Padding(0, 1)
 )
 
-func (m Model) renderHeader() string {
-	headerWordStyle := lipgloss.NewStyle().Bold(true)
-	return defaultTextStyle.Render("⚡ ") + headerAccentStyle.Render("O") + headerBaseStyle.Render("C") + defaultTextStyle.Render(" "+m.version+" - ") + headerWordStyle.Render("Open") +
-		headerWordStyle.Render("Code") + defaultTextStyle.Render(" launcher")
+func (m Model) renderTopBadge() string {
+	return sessionContainerStyle.Render(lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		sessionLabelStyle.Render("OC"),
+		sessionContentStyle.Render(sessionValueStyle.Render(m.version)),
+		sessionMetaStyle.Render(selectedSessionSummary(m.session)),
+	))
+}
+
+func selectedSessionSummary(session SessionItem) string {
+	if session.ID == "" {
+		return "none"
+	}
+
+	prefix := sessionTimestampPrefix(session.UpdatedAt, time.Now())
+	if session.Title == "" {
+		return prefix + session.ID
+	}
+
+	return prefix + session.Title + " (" + session.ID + ")"
 }
 
 func stylePluginRow(line string, focused bool, selected bool) string {
@@ -98,23 +113,6 @@ func renderSessionHelpLine() string {
 	return defaultTextStyle.Render("💡 ") + helpKeyStyle.Render("↑/↓") + defaultTextStyle.Render(": navigate • ") +
 		helpKeyStyle.Render("enter") + defaultTextStyle.Render(": select • ") +
 		helpKeyStyle.Render("esc") + defaultTextStyle.Render(": back")
-}
-
-func renderSelectedSession(session SessionItem) string {
-	if session.ID == "" {
-		return sessionStyle.Render(sessionLabelStyle.Render("Session") + ": " + sessionNoneStyle.Render("none"))
-	}
-
-	prefix := sessionTimestampPrefix(session.UpdatedAt, time.Now())
-	text := sessionLabelStyle.Render("Session") + ": " + sessionStyle.Render(prefix)
-	if session.Title == "" {
-		text += sessionValueStyle.Render(session.ID)
-		return text
-	}
-
-	text += sessionValueStyle.Render(session.Title)
-	text += sessionStyle.Render(" (") + sessionValueStyle.Render(session.ID) + sessionStyle.Render(")")
-	return text
 }
 
 func sessionTimestampPrefix(updatedAt time.Time, now time.Time) string {
@@ -305,7 +303,7 @@ func (m Model) View() tea.View {
 	}
 
 	if m.editMode {
-		s := m.renderHeader() + "\n\n" + renderSelectedSession(m.session) + "\n\n" + instructionTextStyle.Render("📂 Choose config to edit") + "\n\n"
+		s := m.renderTopBadge() + "\n\n" + instructionTextStyle.Render("📂 Choose config to edit") + "\n\n"
 
 		for i, choice := range m.editChoices {
 			cursor := "  "
@@ -326,7 +324,7 @@ func (m Model) View() tea.View {
 	}
 
 	if m.sessionMode {
-		s := m.renderHeader() + "\n\n" + renderSelectedSession(m.session) + "\n\n" + instructionTextStyle.Render("🕘 Choose session") + "\n\n"
+		s := m.renderTopBadge() + "\n\n" + instructionTextStyle.Render("🕘 Choose session") + "\n\n"
 
 		for i := 0; i <= len(m.sessions); i++ {
 			cursor := "  "
@@ -345,7 +343,7 @@ func (m Model) View() tea.View {
 		return tea.NewView(s)
 	}
 
-	parts := []string{m.renderHeader(), renderSelectedSession(m.session), instructionTextStyle.Render("📋 Choose plugins to enable")}
+	parts := []string{m.renderTopBadge(), instructionTextStyle.Render("📋 Choose plugins to enable")}
 	s := strings.Join(parts, "\n\n") + "\n\n"
 
 	for i, p := range m.plugins {

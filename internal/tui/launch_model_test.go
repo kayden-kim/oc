@@ -34,7 +34,7 @@ func TestLaunchModelViewRendersPluginsAndPlaceholder(t *testing.T) {
 	view := m.View().Content
 
 	for _, want := range []string{
-		Model{version: testVersion}.renderHeader(),
+		Model{version: testVersion}.renderTopBadge(),
 		"⠋ Launching opencode",
 		"Plugins",
 		"  - plugin-a",
@@ -55,12 +55,12 @@ func TestLaunchModelViewRendersNoPlugins(t *testing.T) {
 	}
 }
 
-func TestLaunchModelViewRendersSelectedSession(t *testing.T) {
+func TestLaunchModelViewRendersSelectedSessionInTopBadge(t *testing.T) {
 	session := SessionItem{ID: "ses_latest", Title: "Latest session"}
 	m := newTestLaunchModel([]string{"plugin-a"}, session, nil)
 
-	if view := m.View().Content; !strings.Contains(view, renderSelectedSession(session)) {
-		t.Fatalf("expected selected session line in view, got %q", view)
+	if view := m.View().Content; !strings.Contains(view, selectedSessionSummary(session)) {
+		t.Fatalf("expected launch top badge to include selected session info, got %q", view)
 	}
 }
 
