@@ -1012,6 +1012,20 @@ func loopbackServerPort(server *httptest.Server) string {
 	return serverURL[strings.LastIndex(serverURL, ":")+1:]
 }
 
+func TestRunLaunchTUI_ReturnsPortArgsWithoutRenderer(t *testing.T) {
+	tmp := t.TempDir()
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+
+	portArgs, err := runLaunchTUI([]string{"oh-my-opencode"}, tui.SessionItem{}, "50000-55000", deps, "test")
+	if err != nil {
+		t.Fatalf("runLaunchTUI returned error: %v", err)
+	}
+	if len(portArgs) != 2 || portArgs[0] != "--port" || portArgs[1] != "51234" {
+		t.Fatalf("expected --port 51234, got %v", portArgs)
+	}
+}
+
 func TestRunWithDeps_PortSelectionAddsPortFlag(t *testing.T) {
 	tmp := t.TempDir()
 	setupPortTestFiles(t, tmp,

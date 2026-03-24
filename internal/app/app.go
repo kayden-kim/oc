@@ -363,7 +363,7 @@ func runLaunchTUI(plugins []string, selectedSession tui.SessionItem, portsRange 
 		msgCh <- tui.LaunchReadyMsg{PortArgs: portArgs}
 	})
 
-	launchResult, err := tea.NewProgram(launchModel).Run()
+	launchResult, err := tea.NewProgram(launchModel, tea.WithoutRenderer()).Run()
 	if err != nil {
 		return nil, err
 	}
