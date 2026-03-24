@@ -1,8 +1,6 @@
 package main
 
 import (
-	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -11,8 +9,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -22,16 +18,14 @@ import (
 	"github.com/kayden-kim/oc/internal/port"
 	"github.com/kayden-kim/oc/internal/runner"
 	"github.com/kayden-kim/oc/internal/tui"
-	_ "modernc.org/sqlite"
 )
 
 type fakeRunner struct {
-	checkErr          error
-	runErr            error
-	ran               bool
-	runCalls          int
-	args              []string
-	onSuccessCallback func()
+	checkErr error
+	runErr   error
+	ran      bool
+	runCalls int
+	args     []string
 }
 
 type fakeEditor struct {
@@ -45,18 +39,14 @@ func (f *fakeRunner) CheckAvailable() error {
 	return f.checkErr
 }
 
-func (f *fakeRunner) Run(args []string) error {
+func (f *fakeRunner) Run(args []string, onStart func()) error {
 	f.ran = true
 	f.runCalls++
 	f.args = append([]string(nil), args...)
-	if f.runErr == nil && f.onSuccessCallback != nil {
-		go f.onSuccessCallback()
+	if f.runErr == nil && onStart != nil {
+		go onStart()
 	}
 	return f.runErr
-}
-
-func (f *fakeRunner) OnSuccess(fn func()) {
-	f.onSuccessCallback = fn
 }
 
 type tuiResponse struct {
@@ -98,12 +88,6 @@ func (f *fakeEditor) Open(path string, configEditor string) error {
 	f.path = path
 	f.configEditor = configEditor
 	return f.openErr
-}
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return fn(req)
 }
 
 func TestRunWithDeps_FullHappyPath(t *testing.T) {
@@ -1296,9 +1280,6 @@ func TestRunWithDeps_SendsToastAfterLaunchWithPortAndPlugins(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Logf("Runner was called with args: %v", r.args)
-		if r.onSuccessCallback != nil {
-			t.Log("OnSuccess callback was registered")
-		}
 		t.Fatal("toast endpoint was not called within timeout")
 	}
 }
@@ -1455,169 +1436,6 @@ func TestRunWithDeps_SkipsToastWhenNoPortSelected(t *testing.T) {
 	}
 }
 
-func TestSendLaunchToast_PostsOnceAfterHealthResponse(t *testing.T) {
-	var attempts atomic.Int32
-	server := newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/global/health":
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"healthy":true,"version":"test"}`)
-		case "/tui/show-toast":
-			attempts.Add(1)
-			fmt.Fprint(w, "true")
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-
-	port, err := strconv.Atoi(loopbackServerPort(server))
-	if err != nil {
-		t.Fatalf("failed to parse server port: %v", err)
-	}
-
-	err = sendLaunchToast(port, []string{"oh-my-opencode"})
-	if err != nil {
-		t.Fatalf("sendLaunchToast returned error: %v", err)
-	}
-	if got := attempts.Load(); got != 1 {
-		t.Fatalf("expected 1 toast attempt, got %d", got)
-	}
-}
-
-func TestSendLaunchToast_RetriesUntilSuccess(t *testing.T) {
-	var attempts atomic.Int32
-	server := newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/global/health":
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"healthy":true,"version":"test"}`)
-		case "/tui/show-toast":
-			attempt := attempts.Add(1)
-			if attempt < 3 {
-				w.WriteHeader(http.StatusServiceUnavailable)
-				fmt.Fprint(w, "false")
-				return
-			}
-			fmt.Fprint(w, "true")
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-
-	port, err := strconv.Atoi(loopbackServerPort(server))
-	if err != nil {
-		t.Fatalf("failed to parse server port: %v", err)
-	}
-
-	err = sendLaunchToast(port, []string{"oh-my-opencode"})
-	if err != nil {
-		t.Fatalf("sendLaunchToast returned error: %v", err)
-	}
-	if got := attempts.Load(); got != 3 {
-		t.Fatalf("expected 3 toast attempts, got %d", got)
-	}
-}
-
-func TestSendLaunchToast_ReturnsErrorAfterMaxRetries(t *testing.T) {
-	var attempts atomic.Int32
-	server := newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/global/health":
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"healthy":true,"version":"test"}`)
-		case "/tui/show-toast":
-			attempts.Add(1)
-			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprint(w, "false")
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-
-	port, err := strconv.Atoi(loopbackServerPort(server))
-	if err != nil {
-		t.Fatalf("failed to parse server port: %v", err)
-	}
-
-	err = sendLaunchToast(port, []string{"oh-my-opencode"})
-	if err == nil {
-		t.Fatal("expected sendLaunchToast to fail after exhausting retries")
-	}
-	if got := attempts.Load(); got != toastMaxAttempts {
-		t.Fatalf("expected %d toast attempts, got %d", toastMaxAttempts, got)
-	}
-}
-
-func TestWaitForServerHealthy_AcceptsErrorResponse(t *testing.T) {
-	server := newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/global/health" {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprint(w, `{"error":"not ready"}`)
-	}))
-
-	port, err := strconv.Atoi(loopbackServerPort(server))
-	if err != nil {
-		t.Fatalf("failed to parse server port: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	client := &http.Client{Timeout: toastClientTimeout}
-
-	if err := waitForServerHealthy(ctx, client, port); err != nil {
-		t.Fatalf("expected any health response to be accepted, got %v", err)
-	}
-}
-
-func TestWaitForServerHealthy_RetriesAtOneSecondIntervals(t *testing.T) {
-	var calledAt []time.Time
-	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		calledAt = append(calledAt, time.Now())
-		if len(calledAt) == 1 {
-			return nil, errors.New("connection refused")
-		}
-		return &http.Response{
-			StatusCode: http.StatusInternalServerError,
-			Body:       io.NopCloser(strings.NewReader("boom")),
-			Header:     make(http.Header),
-		}, nil
-	})}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	if err := waitForServerHealthy(ctx, client, 12345); err != nil {
-		t.Fatalf("waitForServerHealthy returned error: %v", err)
-	}
-	if len(calledAt) != 2 {
-		t.Fatalf("expected 2 health attempts, got %d", len(calledAt))
-	}
-	interval := calledAt[1].Sub(calledAt[0])
-	if interval < 900*time.Millisecond {
-		t.Fatalf("expected retry interval around 1s, got %v", interval)
-	}
-}
-
-func TestWaitForServerHealthy_TimesOutAfterFiveSeconds(t *testing.T) {
-	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return nil, errors.New("connection refused")
-	})}
-
-	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), toastHealthTimeout)
-	defer cancel()
-	err := waitForServerHealthy(ctx, client, 12345)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("expected deadline exceeded, got %v", err)
-	}
-	if elapsed := time.Since(start); elapsed < 5*time.Second {
-		t.Fatalf("expected health wait to last about 5s, got %v", elapsed)
-	}
-}
-
 func TestRunWithDeps_LogsToastFailureWithoutBreakingLaunch(t *testing.T) {
 	tmp := t.TempDir()
 	setupPortTestFiles(t, tmp,
@@ -1633,7 +1451,7 @@ func TestRunWithDeps_LogsToastFailureWithoutBreakingLaunch(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprint(w, `{"healthy":true,"version":"test"}`)
 		case "/tui/show-toast":
-			if attempts.Add(1) == toastMaxAttempts {
+			if attempts.Add(1) == 5 {
 				close(done)
 			}
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -1681,95 +1499,5 @@ func TestRunWithDeps_LogsToastFailureWithoutBreakingLaunch(t *testing.T) {
 
 	if !strings.Contains(string(output), "oc: toast failed on port") {
 		t.Fatalf("expected toast failure log, got %q", string(output))
-	}
-}
-
-func TestListSessionsDB_ReadsMatchingRootSessions(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (
-			id TEXT PRIMARY KEY,
-			title TEXT NOT NULL,
-			directory TEXT NOT NULL,
-			parent_id TEXT,
-			time_updated INTEGER NOT NULL
-		)
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	dir := filepath.Join(tmp, "work")
-	other := filepath.Join(tmp, "other")
-	for _, path := range []string{dir, other} {
-		if err := os.MkdirAll(path, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	_, err = db.Exec(`
-		INSERT INTO session (id, title, directory, parent_id, time_updated) VALUES
-			('ses_old', 'Old', ?, NULL, ?),
-			('ses_new', 'New', ?, NULL, ?),
-			('ses_child', 'Child', ?, 'ses_new', ?),
-			('ses_other', 'Other', ?, NULL, ?)
-	`, dir, time.Now().Add(-2*time.Hour).UnixMilli(), dir, time.Now().Add(-time.Hour).UnixMilli(), dir, time.Now().UnixMilli(), other, time.Now().UnixMilli())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	t.Setenv("OPENCODE_DB", dbPath)
-	items, err := listSessionsDB(dir)
-	if err != nil {
-		t.Fatalf("listSessionsDB returned error: %v", err)
-	}
-	if len(items) != 2 {
-		t.Fatalf("expected 2 root sessions, got %d", len(items))
-	}
-	if items[0].ID != "ses_new" || items[1].ID != "ses_old" {
-		t.Fatalf("unexpected session order: %+v", items)
-	}
-	if items[0].Title != "New" || items[1].Title != "Old" {
-		t.Fatalf("unexpected session titles: %+v", items)
-	}
-}
-
-func TestOpencodeDBPath_ReturnsErrorForMissingOverride(t *testing.T) {
-	t.Setenv("OPENCODE_DB", filepath.Join(t.TempDir(), "missing.db"))
-	_, err := opencodeDBPath()
-	if err == nil {
-		t.Fatal("expected missing override DB to return error")
-	}
-}
-
-func TestOpencodeDataDir_DefaultsByPlatform(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("XDG_DATA_HOME", "")
-
-	dir, err := opencodeDataDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if runtime.GOOS == "darwin" {
-		want := filepath.Join(home, "Library", "Application Support", "opencode")
-		if dir != want {
-			t.Fatalf("expected %q, got %q", want, dir)
-		}
-		return
-	}
-
-	want := filepath.Join(home, ".local", "share", "opencode")
-	if dir != want {
-		t.Fatalf("expected %q, got %q", want, dir)
 	}
 }
