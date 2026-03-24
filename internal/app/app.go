@@ -40,6 +40,7 @@ type RuntimeDeps struct {
 	ParsePortRange    func(string) (int, int, error)
 	SelectPort        func(minPort, maxPort int, checkAvailable func(int) bool, logFn func(attempt, port int, available bool)) port.SelectResult
 	IsPortAvailable   func(int) bool
+	SendToast         func(int, []string) error
 }
 
 type runtimePaths struct {
@@ -76,6 +77,7 @@ func DefaultDeps(version string) RuntimeDeps {
 		ParsePortRange:    port.ParseRange,
 		SelectPort:        port.Select,
 		IsPortAvailable:   port.IsAvailable,
+		SendToast:         launch.SendToast,
 	}
 
 	deps.RunTUI = func(items []tui.PluginItem, editChoices []tui.EditChoice, sessions []tui.SessionItem, selectedSession tui.SessionItem, portsRange string, allowMultiplePlugins bool) (map[string]bool, bool, string, []string, tui.SessionItem, error) {
@@ -136,7 +138,7 @@ func RunWithDeps(args []string, deps RuntimeDeps) error {
 
 		if len(state.visible) == 0 {
 			portArgs := launch.ResolvePortArgs(state.effectivePortsRange, deps.ParsePortRange, deps.SelectPort, deps.IsPortAvailable, nil)
-			return runOpencode(r, args, portArgs, state.selectedSession, nil)
+			return runOpencode(r, args, portArgs, state.selectedSession, nil, deps.SendToast)
 		}
 
 		selections, cancelled, editTarget, portArgs, nextSession, err := deps.RunTUI(
@@ -168,7 +170,7 @@ func RunWithDeps(args []string, deps RuntimeDeps) error {
 			return err
 		}
 
-		err = runOpencode(r, args, portArgs, selectedSession, selections)
+		err = runOpencode(r, args, portArgs, selectedSession, selections, deps.SendToast)
 		selectedSession = refreshSelectedSession(deps, state.cwd, selectedSession)
 		if exitErr, ok := runner.IsExitCode(err); ok {
 			lastExitErr = exitErr
@@ -190,6 +192,9 @@ func normalizeDeps(deps RuntimeDeps) RuntimeDeps {
 		deps.ListSessions = func(string) ([]tui.SessionItem, error) {
 			return nil, nil
 		}
+	}
+	if deps.SendToast == nil {
+		deps.SendToast = launch.SendToast
 	}
 	return deps
 }
@@ -321,15 +326,15 @@ func refreshSelectedSession(deps RuntimeDeps, cwd string, current tui.SessionIte
 	return latest
 }
 
-func runOpencode(r RunnerAPI, args []string, portArgs []string, selectedSession tui.SessionItem, selections map[string]bool) error {
+func runOpencode(r RunnerAPI, args []string, portArgs []string, selectedSession tui.SessionItem, selections map[string]bool, sendToast func(int, []string) error) error {
 	args = appendSessionArgs(args, selectedSession)
 	args = append(args, portArgs...)
 	plugins := selectedPluginNames(selections)
 
 	var onStart func()
-	if port, ok := launch.Port(args); ok {
+	if port, ok := launch.Port(args); ok && sendToast != nil {
 		onStart = func() {
-			if err := launch.SendToast(port, plugins); err != nil {
+			if err := sendToast(port, plugins); err != nil {
 				logToastFailure(port, err)
 			}
 		}

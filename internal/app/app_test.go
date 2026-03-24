@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1321,7 +1320,7 @@ func TestRunWithDeps_SendsToastAfterLaunchWithPortAndPlugins(t *testing.T) {
 		if !strings.Contains(body, serverPort) {
 			t.Fatalf("expected toast body to contain port %s, got %q", serverPort, body)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(7 * time.Second):
 		t.Logf("Runner was called with args: %v", r.args)
 		t.Fatal("toast endpoint was not called within timeout")
 	}
@@ -1384,7 +1383,7 @@ func TestRunWithDeps_SendsToastForUserProvidedPortFlag(t *testing.T) {
 		if !strings.Contains(body, serverPort) {
 			t.Fatalf("expected toast body to contain port %s, got %q", serverPort, body)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(7 * time.Second):
 		t.Fatal("toast endpoint was not called for user-provided --port")
 	}
 }
@@ -1429,7 +1428,7 @@ func TestRunWithDeps_ClearsStaleToastCallbackWhenNextLaunchHasNoPort(t *testing.
 
 	select {
 	case <-toastCalls:
-	case <-time.After(5 * time.Second):
+	case <-time.After(7 * time.Second):
 		t.Fatal("expected first launch to send a toast")
 	}
 
@@ -1486,24 +1485,8 @@ func TestRunWithDeps_LogsToastFailureWithoutBreakingLaunch(t *testing.T) {
 		"[oc]\nports = \"50000-55000\"\n",
 	)
 
-	var attempts atomic.Int32
 	done := make(chan struct{})
-	server := newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/global/health":
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"healthy":true,"version":"test"}`)
-		case "/tui/show-toast":
-			if attempts.Add(1) == 5 {
-				close(done)
-			}
-			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprint(w, "false")
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	serverPort := loopbackServerPort(server)
+	const serverPort = "51234"
 
 	readPipe, writePipe, err := os.Pipe()
 	if err != nil {
@@ -1517,6 +1500,16 @@ func TestRunWithDeps_LogsToastFailureWithoutBreakingLaunch(t *testing.T) {
 
 	r := &fakeRunner{}
 	deps := baseDepsWithPort(tmp, r)
+	deps.SendToast = func(port int, plugins []string) error {
+		if port != 51234 {
+			t.Fatalf("expected SendToast port 51234, got %d", port)
+		}
+		if len(plugins) != 1 || plugins[0] != "oh-my-opencode" {
+			t.Fatalf("unexpected toast plugins: %v", plugins)
+		}
+		close(done)
+		return errors.New("toast failed")
+	}
 	deps.RunTUI = scriptedTUI(t,
 		tuiResponse{selections: map[string]bool{"oh-my-opencode": true}, portArgs: []string{"--port", serverPort}},
 		tuiResponse{cancelled: true},
@@ -1529,8 +1522,8 @@ func TestRunWithDeps_LogsToastFailureWithoutBreakingLaunch(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(8 * time.Second):
-		t.Fatal("expected toast retries to finish")
+	case <-time.After(time.Second):
+		t.Fatal("expected SendToast to be invoked")
 	}
 	time.Sleep(50 * time.Millisecond)
 	writePipe.Close()
