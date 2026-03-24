@@ -10,16 +10,19 @@ import (
 
 var version = "v0.1.5" // Overridden by ldflags at build time
 
+var runApp = app.Run
+var exitFunc = os.Exit
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "--version" {
 		fmt.Println(version)
-		os.Exit(0)
+		exitFunc(0)
 	}
-	if err := app.Run(os.Args[1:], version); err != nil {
+	if err := runApp(os.Args[1:], version); err != nil {
 		if exitErr, ok := runner.IsExitCode(err); ok {
-			os.Exit(exitErr.Code)
+			exitFunc(exitErr.Code)
 		}
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		exitFunc(1)
 	}
 }
