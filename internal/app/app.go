@@ -135,10 +135,7 @@ func RunWithDeps(args []string, deps RuntimeDeps) error {
 		selectedSession = state.selectedSession
 
 		if len(state.visible) == 0 {
-			portArgs, err := runLaunchTUI(nil, state.selectedSession, state.effectivePortsRange, deps, deps.Version)
-			if err != nil {
-				return fmt.Errorf("launch TUI error: %w", err)
-			}
+			portArgs := launch.ResolvePortArgs(state.effectivePortsRange, deps.ParsePortRange, deps.SelectPort, deps.IsPortAvailable, nil)
 			return runOpencode(r, args, portArgs, state.selectedSession, nil)
 		}
 
