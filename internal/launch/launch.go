@@ -15,14 +15,21 @@ import (
 	"github.com/kayden-kim/oc/internal/port"
 )
 
-const (
-	healthTimeout  = 5 * time.Second
-	healthInterval = 1 * time.Second
-	clientTimeout  = 1 * time.Second
-	requestTimeout = 5 * time.Second
-	retryInterval  = 1 * time.Second
-	maxAttempts    = 5
-)
+type toastConfig struct {
+	startupDelay   time.Duration
+	clientTimeout  time.Duration
+	requestTimeout time.Duration
+	retryInterval  time.Duration
+	readyTimeout   time.Duration
+}
+
+var defaultToastConfig = toastConfig{
+	startupDelay:   5 * time.Second,
+	clientTimeout:  1 * time.Second,
+	requestTimeout: 1 * time.Second,
+	retryInterval:  500 * time.Millisecond,
+	readyTimeout:   10 * time.Second,
+}
 
 func Port(args []string) (int, bool) {
 	for i, arg := range args {
@@ -100,13 +107,11 @@ func ResolvePortArgs(portsRange string, parsePortRange func(string) (int, int, e
 }
 
 func SendToast(port int, plugins []string) error {
-	client := &http.Client{Timeout: clientTimeout}
-	healthCtx, cancel := context.WithTimeout(context.Background(), healthTimeout)
-	defer cancel()
-	if err := waitForServerHealthy(healthCtx, client, port); err != nil {
-		return err
-	}
+	return sendToastWithConfig(port, plugins, defaultToastConfig)
+}
 
+func sendToastWithConfig(port int, plugins []string, cfg toastConfig) error {
+	client := &http.Client{Timeout: cfg.clientTimeout}
 	payload := struct {
 		Title   string `json:"title,omitempty"`
 		Message string `json:"message"`
@@ -121,50 +126,50 @@ func SendToast(port int, plugins []string) error {
 		return err
 	}
 
+	if err := waitForStartupDelay(context.Background(), cfg.startupDelay); err != nil {
+		return fmt.Errorf("toast startup delay interrupted: %w", err)
+	}
+
+	readyCtx, cancel := context.WithTimeout(context.Background(), cfg.readyTimeout)
+	defer cancel()
+
 	var lastErr error
-	for attempt := range maxAttempts {
-		err = postToast(client, port, body)
+	for {
+		err = postToast(readyCtx, client, port, body, cfg.requestTimeout)
 		if err == nil {
 			return nil
 		}
 		lastErr = err
-		if attempt < maxAttempts-1 {
-			time.Sleep(retryInterval)
-		}
-	}
 
-	return lastErr
-}
-
-func waitForServerHealthy(ctx context.Context, client *http.Client, port int) error {
-	url := fmt.Sprintf("http://127.0.0.1:%d/global/health", port)
-	ticker := time.NewTicker(healthInterval)
-	defer ticker.Stop()
-
-	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return err
-		}
-		applyServerAuth(req)
-
-		resp, err := client.Do(req)
-		if err == nil {
-			resp.Body.Close()
-			return nil
-		}
-
+		timer := time.NewTimer(cfg.retryInterval)
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
+		case <-readyCtx.Done():
+			timer.Stop()
+			return fmt.Errorf("toast endpoint did not become ready within %s: %w", cfg.readyTimeout, lastErr)
+		case <-timer.C:
 		}
 	}
 }
 
-func postToast(client *http.Client, port int, body []byte) error {
+func waitForStartupDelay(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func postToast(ctx context.Context, client *http.Client, port int, body []byte, requestTimeout time.Duration) error {
 	url := fmt.Sprintf("http://127.0.0.1:%d/tui/show-toast", port)
-	toastCtx, toastCancel := context.WithTimeout(context.Background(), requestTimeout)
+	toastCtx, toastCancel := context.WithTimeout(ctx, requestTimeout)
 	defer toastCancel()
 
 	req, err := http.NewRequestWithContext(toastCtx, http.MethodPost, url, bytes.NewReader(body))
