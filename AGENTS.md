@@ -18,6 +18,8 @@
 |- internal/port/    port range parsing and random free-port selection
 |- internal/runner/  external `opencode` process execution
 |- internal/editor/  editor resolution and invocation
+|- .github/workflows/ GitHub Actions release automation
+|- .goreleaser.yaml  GoReleaser release and Homebrew config
 |- docs/             product notes and specs
 ```
 
@@ -36,6 +38,7 @@
 | Change port behavior | `internal/port/port.go` | `min-max`, 15 random attempts |
 | Change editor resolution | `internal/editor/editor.go` | `OC_EDITOR > EDITOR > ~/.oc > platform default` |
 | Change runner behavior | `internal/runner/runner.go` | wraps external `opencode` command |
+| Change release automation | `.goreleaser.yaml`, `.github/workflows/release.yml` | tag-driven GitHub Release and Homebrew publishing |
 
 ## CODE MAP
 | Symbol | Type | Location | Role |
@@ -54,7 +57,7 @@
 | `Run` | method | `internal/runner/runner.go` | executes `opencode` with passthrough stdio |
 
 ## CONVENTIONS
-- Go-only repo; primary automation is `make build`, `make test`, `make build-all`, `make release`.
+- Go-only repo; primary automation is `make build`, `make test`, `make release-check`, and `make snapshot`.
 - Treat `go.mod` as the toolchain source of truth; README prerequisites may lag behind it.
 - Tests live beside code as `*_test.go`; package tests are the executable spec.
 - `opencode.json` edits are surgical: only the `plugin` array is touched and formatting is preserved.
@@ -77,22 +80,22 @@
 ```bash
 make build
 make test
-make build-all
-make release VERSION=vX.Y.Z
+make release-check
+make snapshot
 ```
 
 ## RELEASE GUIDE
-- Release tags use `vX.Y.Z`; use the same value for the git tag, `Makefile` `VERSION`, and `gh release create`.
-- Build-time version injection comes from `Makefile`: `LDFLAGS := -X main.version=$(VERSION)` overrides the fallback value in `cmd/oc/main.go`.
-- Before tagging, sync every human-facing version literal that currently drifts independently: `Makefile`, `cmd/oc/main.go`, `README.md`, `AGENTS.md` examples, and `internal/tui/model_test.go` `testVersion`.
-- Recommended order: update version literals -> run `make test` -> commit -> create annotated tag `vX.Y.Z` -> push branch and tag -> run `make build-all VERSION=vX.Y.Z` -> run `make release VERSION=vX.Y.Z`.
-- `make release` publishes `dist/*` with `gh release create $(VERSION) dist/* --title "$(VERSION)" --generate-notes`; `gh` must be authenticated.
-- `--generate-notes` uses GitHub's Release Notes API and compares the new release against the previous release by default; use `--notes-start-tag` only when you need a non-default comparison range.
-- `gh release create` can auto-create a missing tag from the default branch, but this repo should stay tag-first: create and push the annotated tag before publishing so the release points at an explicit commit.
+- Release tags use `vX.Y.Z`; GitHub Actions watches `v*` tags and runs GoReleaser automatically.
+- CI release automation lives in `.github/workflows/release.yml`; it runs `goreleaser check` first, then `goreleaser release --clean`, and requires `permissions: contents: write`.
+- Build-time version injection comes from GoReleaser with `-X main.version={{ .Tag }}`; local `make build` keeps using `LDFLAGS := -X main.version=$(VERSION)` with `VERSION ?= dev` as the fallback.
+- Local release verification uses `make release-check` for config validation and `make snapshot` for `goreleaser release --snapshot --clean`; snapshot mode builds `./dist/` artifacts and a local Homebrew cask without publishing.
+- One-time setup before the first real release: create the tap repo `kayden-kim/homebrew-tap`, add a fine-grained PAT with write access to that repo, and store it in `kayden-kim/oc` as the GitHub Actions secret `HOMEBREW_TAP_TOKEN`.
+- Homebrew naming is intentionally split between GitHub repo form and brew shorthand: GoReleaser pushes to `kayden-kim/homebrew-tap`, while users install it with `brew tap kayden-kim/tap` and `brew install --cask oc`.
+- Recommended release order: run `make test` -> run `make release-check` -> optionally run `make snapshot` -> create annotated tag `vX.Y.Z` -> push branch and tag -> wait for `.github/workflows/release.yml` to publish the GitHub release and update `kayden-kim/homebrew-tap`.
+- First-release verification after the workflow completes: confirm the Actions run is green, confirm the GitHub release contains the expected archives plus `checksums.txt`, confirm `kayden-kim/homebrew-tap` received an updated `Casks/oc.rb`, then verify `brew update && brew install --cask oc && oc --version` from a clean shell.
 
 ## NOTES
-- `make release` requires authenticated `gh`.
 - Windows builds use `.exe`, but the Makefile still assumes POSIX shell utilities for `mkdir -p` and `rm -rf`.
 - Root `oc.exe` may exist locally as a build artifact and is ignored by git; treat it as output, not source of truth.
-- This repo does not yet have a single version file; release version drift is possible because literals are duplicated across code, tests, and docs.
+- GoReleaser publishes GitHub release assets and updates the Homebrew cask in `kayden-kim/homebrew-tap`.
 - Child knowledge bases live in `cmd/oc/AGENTS.md`, `internal/config/AGENTS.md`, and `internal/tui/AGENTS.md`.

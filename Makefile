@@ -1,7 +1,9 @@
-.PHONY: build test build-all clean release
+.PHONY: build test release-check snapshot clean
 
-VERSION ?= v0.1.5
+VERSION ?= dev
 LDFLAGS := -X main.version=$(VERSION)
+GORELEASER_VERSION ?= v2.14.3
+GORELEASER ?= go run github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
 
 ifeq ($(OS),Windows_NT)
   EXT := .exe
@@ -15,15 +17,11 @@ build:
 test:
 	go test ./...
 
-build-all: clean
-	mkdir -p dist
-	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o dist/oc-darwin-arm64 ./cmd/oc
-	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o dist/oc-darwin-amd64 ./cmd/oc
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o dist/oc-windows-amd64.exe ./cmd/oc
+release-check:
+	$(GORELEASER) check
+
+snapshot: clean
+	$(GORELEASER) release --snapshot --clean
 
 clean:
 	rm -rf dist/
-
-release: build-all
-	@echo "Creating GitHub release $(VERSION)..."
-	gh release create $(VERSION) dist/* --title "$(VERSION)" --generate-notes

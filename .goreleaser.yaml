@@ -1,0 +1,78 @@
+version: 2
+
+before:
+  hooks:
+    - go test ./...
+
+builds:
+  - id: oc
+    binary: oc
+    main: ./cmd/oc
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Tag }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - ids:
+      - oc
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  use: github
+
+release:
+  github:
+    owner: kayden-kim
+    name: oc
+
+homebrew_casks:
+  - name: oc
+    repository:
+      owner: kayden-kim
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Casks
+    homepage: "https://github.com/kayden-kim/oc"
+    description: "The OpenCode Launcher"
+    license: "MIT"
+    binaries:
+      - oc
+    url:
+      verified: github.com/kayden-kim/oc/
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/oc"]
+          end
+    commit_msg_template: "Update oc cask to {{ .Tag }}"

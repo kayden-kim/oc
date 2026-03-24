@@ -8,7 +8,7 @@
 <p align="center">
   <a href="https://github.com/kayden-kim/oc/releases"><img src="https://img.shields.io/github/v/release/kayden-kim/oc?style=flat-square" alt="Release"></a>
   <a href="https://github.com/kayden-kim/oc/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License"></a>
-  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey?style=flat-square" alt="Platform">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=flat-square" alt="Platform">
 </p>
 
 ---
@@ -26,7 +26,7 @@ $ oc --model gpt-4
 ```
 
 ```
-⚡ OC v0.1.5 - OpenCode launcher
+⚡ OC vX.Y.Z - OpenCode launcher
 ─────────────────────────────────
   Choose plugins to enable
   > [x] oh-my-opencode
@@ -52,14 +52,22 @@ $ oc --model gpt-4
 
 ## Installation
 
-Download a pre-built binary from [GitHub Releases](https://github.com/kayden-kim/oc/releases):
+Install with Homebrew on macOS or Linux:
+
+```bash
+brew tap kayden-kim/tap
+brew install --cask oc
+```
+
+If you prefer a manual install, download a pre-built archive from [GitHub Releases](https://github.com/kayden-kim/oc/releases), extract it, and move the binary into your `PATH`.
 
 <details>
 <summary><strong>macOS (Apple Silicon)</strong></summary>
 
 ```bash
-curl -L https://github.com/kayden-kim/oc/releases/download/v0.1.5/oc-darwin-arm64 -o /usr/local/bin/oc
-chmod +x /usr/local/bin/oc
+curl -L https://github.com/kayden-kim/oc/releases/download/vX.Y.Z/oc_X.Y.Z_Darwin_arm64.tar.gz -o oc.tar.gz
+tar -xzf oc.tar.gz
+install oc /usr/local/bin/oc
 ```
 
 </details>
@@ -68,8 +76,9 @@ chmod +x /usr/local/bin/oc
 <summary><strong>macOS (Intel)</strong></summary>
 
 ```bash
-curl -L https://github.com/kayden-kim/oc/releases/download/v0.1.5/oc-darwin-amd64 -o /usr/local/bin/oc
-chmod +x /usr/local/bin/oc
+curl -L https://github.com/kayden-kim/oc/releases/download/vX.Y.Z/oc_X.Y.Z_Darwin_x86_64.tar.gz -o oc.tar.gz
+tar -xzf oc.tar.gz
+install oc /usr/local/bin/oc
 ```
 
 </details>
@@ -77,7 +86,7 @@ chmod +x /usr/local/bin/oc
 <details>
 <summary><strong>Windows</strong></summary>
 
-Download `oc-windows-amd64.exe` from the [releases page](https://github.com/kayden-kim/oc/releases) and add it to your `PATH`.
+Download `oc_X.Y.Z_Windows_x86_64.zip` from the [releases page](https://github.com/kayden-kim/oc/releases), extract `oc.exe`, and add it to your `PATH`.
 
 </details>
 
@@ -257,10 +266,12 @@ git clone https://github.com/kayden-kim/oc.git
 cd oc
 
 make build          # build for current platform  -> ./oc
-make build-all      # cross-compile all targets   -> ./dist/
 make test           # run tests
-make release VERSION=v0.1.5   # build + create GitHub release (requires gh)
+make release-check  # validate .goreleaser.yaml
+make snapshot       # build snapshot release assets into ./dist/
 ```
+
+Tagged releases are published by GitHub Actions through GoReleaser. Push a tag like `v0.1.6` to create the GitHub release and update the Homebrew tap.
 
 ## License
 

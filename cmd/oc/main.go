@@ -8,7 +8,7 @@ import (
 	"github.com/kayden-kim/oc/internal/runner"
 )
 
-var version = "v0.1.5" // Overridden by ldflags at build time
+var version = "dev" // Overridden by ldflags at build time
 
 var runApp = app.Run
 var exitFunc = os.Exit
