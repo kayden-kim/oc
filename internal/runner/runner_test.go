@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestHelperProcess is the mock subprocess for testing.
@@ -199,5 +200,50 @@ func TestRunnerStderrConnection(t *testing.T) {
 	outputStr := string(output)
 	if !strings.Contains(outputStr, "Error message") {
 		t.Errorf("Expected stderr output not found: %s", outputStr)
+	}
+}
+
+// TestRunnerOnSuccessCallback tests that OnSuccess callback is invoked after process starts.
+func TestRunnerOnSuccessCallback(t *testing.T) {
+	r := &Runner{Command: os.Args[0]}
+	args := []string{"-test.run=TestHelperProcess", "--"}
+
+	t.Setenv("GO_TEST_PROCESS", "1")
+	t.Setenv("TEST_MODE", "echo")
+
+	called := make(chan bool, 1)
+	r.OnSuccess(func() {
+		called <- true
+	})
+
+	go func() {
+		_ = r.Run(args)
+	}()
+
+	select {
+	case <-called:
+		// Success
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnSuccess callback was not invoked")
+	}
+}
+
+// TestRunnerOnSuccessSkipsWhenProcessFailsToStart tests that callback is not invoked on exec error.
+func TestRunnerOnSuccessSkipsWhenProcessFailsToStart(t *testing.T) {
+	r := &Runner{Command: "nonexistent-binary-xyz-12345"}
+
+	called := false
+	r.OnSuccess(func() {
+		called = true
+	})
+
+	err := r.Run([]string{})
+	if err == nil {
+		t.Fatal("expected error for nonexistent command")
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	if called {
+		t.Fatal("OnSuccess callback should not be invoked when process fails to start")
 	}
 }

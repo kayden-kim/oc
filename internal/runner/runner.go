@@ -26,7 +26,8 @@ func IsExitCode(err error) (*ExitCodeError, bool) {
 
 // Runner is a wrapper around os/exec for launching the opencode CLI.
 type Runner struct {
-	Command string // The executable name to run (default: "opencode")
+	Command            string // The executable name to run (default: "opencode")
+	postLaunchCallback func() // Optional callback fired after successful process start
 }
 
 // NewRunner creates a new Runner with the default "opencode" command.
@@ -46,17 +47,30 @@ func (r *Runner) CheckAvailable() error {
 	return nil
 }
 
+func (r *Runner) OnSuccess(fn func()) {
+	r.postLaunchCallback = fn
+}
+
 // Run executes the command with the provided arguments.
 // All arguments are passed through unchanged.
 // stdin, stdout, and stderr are connected directly to os.Stdin, os.Stdout, os.Stderr.
 // If the command exits with a non-zero code, an ExitCodeError is returned.
+// If an OnSuccess callback was registered, it is invoked after the process starts successfully.
 func (r *Runner) Run(args []string) error {
 	cmd := exec.Command(r.Command, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	err := cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	if r.postLaunchCallback != nil {
+		go r.postLaunchCallback()
+	}
+
+	err := cmd.Wait()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return &ExitCodeError{Code: exitErr.ExitCode()}

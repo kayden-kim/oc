@@ -18,7 +18,7 @@ Instead of hand-editing JSON every time you want to toggle a plugin or resume a 
 
 1. **Select plugins** to enable or disable
 2. **Pick a previous session** to continue -- or start fresh
-3. **Auto-allocate a port** for `oh-my-opencode` (tmux-friendly)
+3. **Auto-allocate a port** from your configured launcher range
 4. **Launch `opencode`** -- and come right back to the TUI when it exits
 
 ```
@@ -150,23 +150,22 @@ Press **`s`** in the TUI to open the session picker.
 
 ## Port Auto-Selection
 
-When `oh-my-opencode` is enabled and a port range is configured, `oc` automatically finds an available port before launching `opencode`.
+When a port range is configured in `~/.oc` and you do not pass `--port` yourself, `oc` automatically finds an available port before launching `opencode`.
 
-**Why this matters:** In tmux or terminal multiplexer setups, multiple `opencode` instances run side by side. Each `oh-my-opencode` instance needs its own port. Manual port management doesn't scale -- `oc` handles it automatically.
+**Why this matters:** In tmux or terminal multiplexer setups, multiple `opencode` instances run side by side. Manual port management does not scale -- `oc` handles it automatically and reuses that same chosen port for launch-time toast requests.
 
 **How it works:**
 
 1. Configure a port range in `~/.oc`:
    ```toml
-   [plugin.oh-my-opencode]
+   [oc]
    ports = "55000-55500"
    ```
 2. When you hit Enter in the TUI, `oc` shows a launch progress screen with a spinner.
 3. It randomly probes ports in the range (up to 15 attempts) until it finds one that's free.
 4. The selected port is passed as `--port <port>` to `opencode`.
-5. If no port is available or the range is not configured, `opencode` launches without a port flag.
-
-Port selection only runs when `oh-my-opencode` is in your active selections. Other plugins are unaffected.
+5. The same port is used for the post-launch `show-toast` request.
+6. If no port is available, the range is not configured, or you already passed `--port`, `oc` launches without adding another port flag.
 
 ## Editor Integration
 
@@ -208,8 +207,6 @@ plugins = [
 ]
 allow_multiple_plugins = false
 editor = "nvim"
-
-[plugin.oh-my-opencode]
 ports = "55000-55500"
 ```
 
@@ -218,9 +215,9 @@ ports = "55000-55500"
 | `plugins` | `string[]` | `nil` (show all) | Whitelist of plugins visible in the TUI. Unlisted plugins are hidden but preserved in `opencode.json`. |
 | `allow_multiple_plugins` | `bool` | `false` | Allow enabling more than one plugin at a time. |
 | `editor` | `string` | platform default | Fallback editor command (used when `OC_EDITOR` and `EDITOR` are unset). |
-| `[plugin.<name>].ports` | `string` | -- | Port range for auto-selection (e.g. `"55000-55500"`). |
+| `ports` | `string` | -- | Port range for auto-selection (e.g. `"55000-55500"`). |
 
-> Both flat top-level keys and the `[oc]` section format are supported. When both are present, the `[oc]` section takes precedence.
+> `ports` must be configured inside the `[oc]` section. A top-level `ports = ...` entry is ignored.
 
 ### `~/.config/opencode/opencode.json`
 

@@ -35,6 +35,7 @@ func TestLoadOcConfig_FieldParsing(t *testing.T) {
 		wantPlugins          []string
 		wantEditor           string
 		wantAllowMultiPlugin bool
+		wantPorts            string
 	}{
 		{
 			name:                 "plugins list",
@@ -42,6 +43,7 @@ func TestLoadOcConfig_FieldParsing(t *testing.T) {
 			wantPlugins:          []string{"plugin-a", "plugin-b"},
 			wantEditor:           "",
 			wantAllowMultiPlugin: false,
+			wantPorts:            "",
 		},
 		{
 			name:                 "empty plugins",
@@ -49,6 +51,7 @@ func TestLoadOcConfig_FieldParsing(t *testing.T) {
 			wantPlugins:          []string{},
 			wantEditor:           "",
 			wantAllowMultiPlugin: false,
+			wantPorts:            "",
 		},
 		{
 			name: "editor configured",
@@ -57,6 +60,7 @@ editor = "code --wait"`,
 			wantPlugins:          []string{"plugin-a"},
 			wantEditor:           "code --wait",
 			wantAllowMultiPlugin: false,
+			wantPorts:            "",
 		},
 		{
 			name: "allow multiple plugins true",
@@ -65,6 +69,7 @@ allow_multiple_plugins = true`,
 			wantPlugins:          []string{"plugin-a"},
 			wantEditor:           "",
 			wantAllowMultiPlugin: true,
+			wantPorts:            "",
 		},
 		{
 			name:                 "optional fields omitted use defaults",
@@ -72,6 +77,7 @@ allow_multiple_plugins = true`,
 			wantPlugins:          []string{"plugin-a"},
 			wantEditor:           "",
 			wantAllowMultiPlugin: false,
+			wantPorts:            "",
 		},
 	}
 
@@ -94,7 +100,18 @@ allow_multiple_plugins = true`,
 			if config.AllowMultiplePlugins != tt.wantAllowMultiPlugin {
 				t.Fatalf("expected allow_multiple_plugins=%v, got %v", tt.wantAllowMultiPlugin, config.AllowMultiplePlugins)
 			}
+			if config.Ports != tt.wantPorts {
+				t.Fatalf("expected ports %q, got %q", tt.wantPorts, config.Ports)
+			}
 		})
+	}
+}
+
+func TestLoadOcConfig_IgnoresTopLevelPorts(t *testing.T) {
+	config := mustLoadOcConfig(t, "plugins = [\"plugin-a\"]\nports = \"55000-55500\"")
+
+	if config.Ports != "" {
+		t.Fatalf("expected top-level ports to be ignored, got %q", config.Ports)
 	}
 }
 
@@ -127,6 +144,7 @@ func TestLoadOcConfigSupportsOcSection(t *testing.T) {
 plugins = ["oh-my-opencode", "superpowers"]
 allow_multiple_plugins = false
 editor = "nvim"
+ports = "55000-55500"
 
 [plugin.oh-my-opencode]
 ports = "55000-55500"`
@@ -145,6 +163,9 @@ ports = "55000-55500"`
 	if config.AllowMultiplePlugins {
 		t.Fatal("expected allow_multiple_plugins to be false")
 	}
+	if config.Ports != "55000-55500" {
+		t.Fatalf("expected oc ports 55000-55500, got %q", config.Ports)
+	}
 	pluginConfig, ok := config.PluginConfigs["oh-my-opencode"]
 	if !ok {
 		t.Fatal("expected plugin config for oh-my-opencode")
@@ -162,7 +183,8 @@ allow_multiple_plugins = true
 [oc]
 plugins = ["section-plugin"]
 editor = "nvim"
-allow_multiple_plugins = false`
+allow_multiple_plugins = false
+ports = "55000-55500"`
 
 	config := mustLoadOcConfig(t, content)
 
@@ -174,5 +196,14 @@ allow_multiple_plugins = false`
 	}
 	if config.AllowMultiplePlugins {
 		t.Fatal("expected [oc] allow_multiple_plugins to override flat key")
+	}
+	if config.Ports != "55000-55500" {
+		t.Fatalf("expected [oc] ports to be loaded, got %q", config.Ports)
+	}
+}
+
+func TestHasOcTableRecognizesPortsOnlyConfig(t *testing.T) {
+	if !hasOcTable(rawOcConfig{Oc: ocTable{Ports: "55000-55500"}}) {
+		t.Fatal("expected [oc].ports to count as an [oc] table")
 	}
 }

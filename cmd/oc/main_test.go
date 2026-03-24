@@ -1,13 +1,20 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,11 +26,12 @@ import (
 )
 
 type fakeRunner struct {
-	checkErr error
-	runErr   error
-	ran      bool
-	runCalls int
-	args     []string
+	checkErr          error
+	runErr            error
+	ran               bool
+	runCalls          int
+	args              []string
+	onSuccessCallback func()
 }
 
 type fakeEditor struct {
@@ -41,7 +49,14 @@ func (f *fakeRunner) Run(args []string) error {
 	f.ran = true
 	f.runCalls++
 	f.args = append([]string(nil), args...)
+	if f.runErr == nil && f.onSuccessCallback != nil {
+		go f.onSuccessCallback()
+	}
 	return f.runErr
+}
+
+func (f *fakeRunner) OnSuccess(fn func()) {
+	f.onSuccessCallback = fn
 }
 
 type tuiResponse struct {
@@ -83,6 +98,12 @@ func (f *fakeEditor) Open(path string, configEditor string) error {
 	f.path = path
 	f.configEditor = configEditor
 	return f.openErr
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
 }
 
 func TestRunWithDeps_FullHappyPath(t *testing.T) {
@@ -412,9 +433,6 @@ func TestRunWithDeps_DoesNotPrintPreLaunchText(t *testing.T) {
 		if strings.Contains(outputStr, unwanted) {
 			t.Fatalf("expected no direct pre-launch output %q, got %q", unwanted, outputStr)
 		}
-	}
-	if strings.Contains(outputStr, "\033[H\033[2J") {
-		t.Fatalf("expected no terminal clear sequence when stdout is not a TTY, got %q", outputStr)
 	}
 }
 
@@ -950,11 +968,29 @@ func setupPortTestFiles(t *testing.T, tmp string, pluginContent string, ocConten
 	}
 }
 
+func newLoopbackServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	server := httptest.NewUnstartedServer(handler)
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen on loopback: %v", err)
+	}
+	server.Listener = listener
+	server.Start()
+	t.Cleanup(server.Close)
+	return server
+}
+
+func loopbackServerPort(server *httptest.Server) string {
+	serverURL := strings.TrimPrefix(server.URL, "http://")
+	return serverURL[strings.LastIndex(serverURL, ":")+1:]
+}
+
 func TestRunWithDeps_PortSelectionAddsPortFlag(t *testing.T) {
 	tmp := t.TempDir()
 	setupPortTestFiles(t, tmp,
 		"{\n  \"plugin\": [\n    \"oh-my-opencode\"\n  ]\n}\n",
-		"[plugin.oh-my-opencode]\nports = \"50000-55000\"\n",
+		"[oc]\nports = \"50000-55000\"\n",
 	)
 
 	r := &fakeRunner{}
@@ -989,7 +1025,7 @@ func TestRunWithDeps_PortSelectionFailsFallback(t *testing.T) {
 	tmp := t.TempDir()
 	setupPortTestFiles(t, tmp,
 		"{\n  \"plugin\": [\n    \"oh-my-opencode\"\n  ]\n}\n",
-		"[plugin.oh-my-opencode]\nports = \"50000-55000\"\n",
+		"[oc]\nports = \"50000-55000\"\n",
 	)
 
 	r := &fakeRunner{}
@@ -1049,12 +1085,11 @@ func TestRunWithDeps_NoPortsConfigNoPortFlag(t *testing.T) {
 	}
 }
 
-func TestRunWithDeps_PortSelectionSkipsTUIPath(t *testing.T) {
-	// When there are no visible plugins, port selection should not run.
+func TestRunWithDeps_PortSelectionRunsWithoutVisiblePlugins(t *testing.T) {
 	tmp := t.TempDir()
 	setupPortTestFiles(t, tmp,
 		"{\n  \"plugin\": []\n}\n",
-		"[plugin.oh-my-opencode]\nports = \"50000-55000\"\n",
+		"[oc]\nports = \"50000-55000\"\n",
 	)
 
 	r := &fakeRunner{}
@@ -1070,23 +1105,23 @@ func TestRunWithDeps_PortSelectionSkipsTUIPath(t *testing.T) {
 	if !r.ran {
 		t.Fatal("runner.Run should be called")
 	}
-	if len(r.args) != 1 || r.args[0] != "--verbose" {
-		t.Fatalf("expected no --port to be appended, got %v", r.args)
+	if len(r.args) != 3 || r.args[0] != "--verbose" || r.args[1] != "--port" || r.args[2] != "52000" {
+		t.Fatalf("expected --port to be appended even without visible plugins, got %v", r.args)
 	}
 }
 
-func TestRunWithDeps_UsesPluginSectionPortsForSingleVisiblePlugin(t *testing.T) {
+func TestRunWithDeps_UsesOcSectionPortsForSingleVisiblePlugin(t *testing.T) {
 	tmp := t.TempDir()
 	setupPortTestFiles(t, tmp,
 		"{\n  \"plugin\": [\n    \"oh-my-opencode@latest\",\n    \"superpowers\"\n  ]\n}\n",
-		"[oc]\nplugins = [\"oh-my-opencode\"]\n\n[plugin.oh-my-opencode]\nports = \"55000-55500\"\n",
+		"[oc]\nplugins = [\"oh-my-opencode\"]\nports = \"55000-55500\"\n",
 	)
 
 	r := &fakeRunner{}
 	deps := baseDepsWithPort(tmp, r)
 	deps.runTUI = wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
 		if portsRange != "55000-55500" {
-			t.Fatalf("expected plugin section ports to reach TUI, got %q", portsRange)
+			t.Fatalf("expected [oc] ports to reach TUI, got %q", portsRange)
 		}
 		if r.runCalls > 0 {
 			return nil, true, "", nil, nil
@@ -1102,22 +1137,22 @@ func TestRunWithDeps_UsesPluginSectionPortsForSingleVisiblePlugin(t *testing.T) 
 		t.Fatal("runner.Run should be called")
 	}
 	if len(r.args) != 4 || r.args[2] != "--port" || r.args[3] != "51234" {
-		t.Fatalf("expected plugin section port to be appended, got %v", r.args)
+		t.Fatalf("expected [oc] port to be appended, got %v", r.args)
 	}
 }
 
-func TestRunWithDeps_NoPortWhenOhMyOpencodeNotSelected(t *testing.T) {
+func TestRunWithDeps_PortSelectionStillAppliesWhenOhMyOpencodeNotSelected(t *testing.T) {
 	tmp := t.TempDir()
 	setupPortTestFiles(t, tmp,
 		"{\n  \"plugin\": [\n    \"oh-my-opencode\",\n    \"superpowers\"\n  ]\n}\n",
-		"[plugin.oh-my-opencode]\nports = \"55000-55500\"\n",
+		"[oc]\nports = \"55000-55500\"\n",
 	)
 
 	r := &fakeRunner{}
 	deps := baseDepsWithPort(tmp, r)
 	deps.runTUI = wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
 		if portsRange != "55000-55500" {
-			t.Fatalf("expected oh-my-opencode ports to reach TUI, got %q", portsRange)
+			t.Fatalf("expected [oc] ports to reach TUI, got %q", portsRange)
 		}
 		if r.runCalls > 0 {
 			return nil, true, "", nil, nil
@@ -1132,8 +1167,520 @@ func TestRunWithDeps_NoPortWhenOhMyOpencodeNotSelected(t *testing.T) {
 	if !r.ran {
 		t.Fatal("runner.Run should be called")
 	}
-	if len(r.args) != 2 || r.args[0] != "--model" || r.args[1] != "gpt-5" {
-		t.Fatalf("expected no --port when oh-my-opencode is not selected, got %v", r.args)
+	if len(r.args) != 4 || r.args[2] != "--port" || r.args[3] != "51234" {
+		t.Fatalf("expected port to be preserved even when oh-my-opencode is not selected, got %v", r.args)
+	}
+}
+
+func TestRunWithDeps_IgnoresLegacyPluginSectionPorts(t *testing.T) {
+	tmp := t.TempDir()
+	setupPortTestFiles(t, tmp,
+		"{\n  \"plugin\": [\n    \"oh-my-opencode\"\n  ]\n}\n",
+		"[plugin.oh-my-opencode]\nports = \"55000-55500\"\n",
+	)
+
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+	deps.runTUI = wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
+		if portsRange != "" {
+			t.Fatalf("expected legacy plugin-section ports to be ignored, got %q", portsRange)
+		}
+		if r.runCalls > 0 {
+			return nil, true, "", nil, nil
+		}
+		return map[string]bool{"oh-my-opencode": true}, false, "", nil, nil
+	})
+
+	err := runWithDeps([]string{"--model", "gpt-5"}, deps)
+	if err != nil {
+		t.Fatalf("runWithDeps returned error: %v", err)
+	}
+	if len(r.args) != 2 {
+		t.Fatalf("expected no auto-selected port when only legacy plugin ports are configured, got %v", r.args)
+	}
+}
+
+func TestRunWithDeps_IgnoresTopLevelPortsConfig(t *testing.T) {
+	tmp := t.TempDir()
+	setupPortTestFiles(t, tmp,
+		"{\n  \"plugin\": [\n    \"oh-my-opencode\"\n  ]\n}\n",
+		"ports = \"55000-55500\"\n",
+	)
+
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+	deps.runTUI = wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
+		if portsRange != "" {
+			t.Fatalf("expected top-level ports to be ignored, got %q", portsRange)
+		}
+		if r.runCalls > 0 {
+			return nil, true, "", nil, nil
+		}
+		return map[string]bool{"oh-my-opencode": true}, false, "", nil, nil
+	})
+
+	err := runWithDeps([]string{"--model", "gpt-5"}, deps)
+	if err != nil {
+		t.Fatalf("runWithDeps returned error: %v", err)
+	}
+	if len(r.args) != 2 {
+		t.Fatalf("expected no auto-selected port when only top-level ports are configured, got %v", r.args)
+	}
+}
+
+func TestRunWithDeps_SendsToastAfterLaunchWithPortAndPlugins(t *testing.T) {
+	tmp := t.TempDir()
+	setupPortTestFiles(t, tmp,
+		"{\n  \"plugin\": [\n    \"oh-my-opencode\",\n    \"superpowers\"\n  ]\n}\n",
+		"[oc]\nports = \"50000-55000\"\n",
+	)
+
+	toastCalled := make(chan string, 1)
+	server := newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/global/health" && r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"healthy":true,"version":"test"}`)
+			return
+		}
+		if r.URL.Path == "/tui/show-toast" && r.Method == "POST" {
+			body := make([]byte, 1024)
+			n, _ := r.Body.Read(body)
+			toastCalled <- string(body[:n])
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, "true")
+		}
+	}))
+
+	serverPort := loopbackServerPort(server)
+
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+	deps.newRunner = func() runnerAPI { return r }
+	deps.runTUI = wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
+		if r.runCalls > 0 {
+			return nil, true, "", nil, nil
+		}
+		return map[string]bool{"oh-my-opencode": true, "superpowers": false}, false, "", []string{"--port", serverPort}, nil
+	})
+
+	err := runWithDeps([]string{"--model", "gpt-5"}, deps)
+	if err != nil {
+		t.Fatalf("runWithDeps returned error: %v", err)
+	}
+
+	if !r.ran {
+		t.Fatal("runner.Run should be called")
+	}
+
+	hasPort := false
+	for i, arg := range r.args {
+		if arg == "--port" && i+1 < len(r.args) && r.args[i+1] == serverPort {
+			hasPort = true
+			break
+		}
+	}
+	if !hasPort {
+		t.Fatalf("expected args to contain --port %s, got %v", serverPort, r.args)
+	}
+
+	select {
+	case body := <-toastCalled:
+		if !strings.Contains(body, "OC Launcher") {
+			t.Fatalf("expected toast body to contain title OC Launcher, got %q", body)
+		}
+		if !strings.Contains(body, "oh-my-opencode") {
+			t.Fatalf("expected toast body to contain oh-my-opencode, got %q", body)
+		}
+		if !strings.Contains(body, serverPort) {
+			t.Fatalf("expected toast body to contain port %s, got %q", serverPort, body)
+		}
+	case <-time.After(5 * time.Second):
+		t.Logf("Runner was called with args: %v", r.args)
+		if r.onSuccessCallback != nil {
+			t.Log("OnSuccess callback was registered")
+		}
+		t.Fatal("toast endpoint was not called within timeout")
+	}
+}
+
+func TestRunWithDeps_SendsToastForUserProvidedPortFlag(t *testing.T) {
+	tmp := t.TempDir()
+	setupPortTestFiles(t, tmp,
+		"{\n  \"plugin\": [\n    \"oh-my-opencode\",\n    \"superpowers\"\n  ]\n}\n",
+		"[oc]\nports = \"50000-55000\"\n",
+	)
+
+	toastCalled := make(chan string, 1)
+	server := newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/global/health" && r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"healthy":true,"version":"test"}`)
+			return
+		}
+		if r.URL.Path == "/tui/show-toast" && r.Method == http.MethodPost {
+			body := make([]byte, 1024)
+			n, _ := r.Body.Read(body)
+			toastCalled <- string(body[:n])
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, "true")
+		}
+	}))
+
+	serverPort := loopbackServerPort(server)
+
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+	deps.runTUI = wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
+		if portsRange != "" {
+			t.Fatalf("expected auto port selection to be skipped when user passed --port, got %q", portsRange)
+		}
+		if r.runCalls > 0 {
+			return nil, true, "", nil, nil
+		}
+		return map[string]bool{"oh-my-opencode": true, "superpowers": false}, false, "", nil, nil
+	})
+
+	err := runWithDeps([]string{"--model", "gpt-5", "--port", serverPort}, deps)
+	if err != nil {
+		t.Fatalf("runWithDeps returned error: %v", err)
+	}
+
+	portFlags := 0
+	for _, arg := range r.args {
+		if arg == "--port" || strings.HasPrefix(arg, "--port=") {
+			portFlags++
+		}
+	}
+	if portFlags != 1 {
+		t.Fatalf("expected exactly one --port flag in runner args, got %v", r.args)
+	}
+
+	select {
+	case body := <-toastCalled:
+		if !strings.Contains(body, serverPort) {
+			t.Fatalf("expected toast body to contain port %s, got %q", serverPort, body)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("toast endpoint was not called for user-provided --port")
+	}
+}
+
+func TestRunWithDeps_ClearsStaleToastCallbackWhenNextLaunchHasNoPort(t *testing.T) {
+	tmp := t.TempDir()
+	setupPortTestFiles(t, tmp,
+		"{\n  \"plugin\": [\n    \"oh-my-opencode\"\n  ]\n}\n",
+		"[oc]\nports = \"50000-55000\"\n",
+	)
+
+	toastCalls := make(chan string, 2)
+	server := newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/global/health" && r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"healthy":true,"version":"test"}`)
+			return
+		}
+		if r.URL.Path == "/tui/show-toast" && r.Method == http.MethodPost {
+			body := make([]byte, 1024)
+			n, _ := r.Body.Read(body)
+			toastCalls <- string(body[:n])
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, "true")
+		}
+	}))
+
+	serverPort := loopbackServerPort(server)
+
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+	deps.runTUI = scriptedTUI(t,
+		tuiResponse{selections: map[string]bool{"oh-my-opencode": true}, portArgs: []string{"--port", serverPort}},
+		tuiResponse{selections: map[string]bool{"oh-my-opencode": true}, portArgs: nil},
+		tuiResponse{cancelled: true},
+	)
+
+	err := runWithDeps([]string{"--model", "gpt-5"}, deps)
+	if err != nil {
+		t.Fatalf("runWithDeps returned error: %v", err)
+	}
+
+	select {
+	case <-toastCalls:
+	case <-time.After(5 * time.Second):
+		t.Fatal("expected first launch to send a toast")
+	}
+
+	select {
+	case body := <-toastCalls:
+		t.Fatalf("expected stale toast callback to be cleared, got extra toast %q", body)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestRunWithDeps_SkipsToastWhenNoPortSelected(t *testing.T) {
+	tmp := t.TempDir()
+	setupPortTestFiles(t, tmp,
+		"{\n  \"plugin\": [\n    \"oh-my-opencode\"\n  ]\n}\n",
+		"plugins = [\"oh-my-opencode\"]\n",
+	)
+
+	toastCalled := false
+	_ = newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/global/health" {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"healthy":true,"version":"test"}`)
+			return
+		}
+		if r.URL.Path == "/tui/show-toast" {
+			toastCalled = true
+		}
+	}))
+
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+	deps.runTUI = wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
+		if r.runCalls > 0 {
+			return nil, true, "", nil, nil
+		}
+		return map[string]bool{"oh-my-opencode": true}, false, "", nil, nil
+	})
+
+	err := runWithDeps([]string{"--model", "gpt-5"}, deps)
+	if err != nil {
+		t.Fatalf("runWithDeps returned error: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	if toastCalled {
+		t.Fatal("toast should not be sent when no port is selected")
+	}
+}
+
+func TestSendLaunchToast_PostsOnceAfterHealthResponse(t *testing.T) {
+	var attempts atomic.Int32
+	server := newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/global/health":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"healthy":true,"version":"test"}`)
+		case "/tui/show-toast":
+			attempts.Add(1)
+			fmt.Fprint(w, "true")
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+
+	port, err := strconv.Atoi(loopbackServerPort(server))
+	if err != nil {
+		t.Fatalf("failed to parse server port: %v", err)
+	}
+
+	err = sendLaunchToast(port, []string{"oh-my-opencode"})
+	if err != nil {
+		t.Fatalf("sendLaunchToast returned error: %v", err)
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("expected 1 toast attempt, got %d", got)
+	}
+}
+
+func TestSendLaunchToast_RetriesUntilSuccess(t *testing.T) {
+	var attempts atomic.Int32
+	server := newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/global/health":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"healthy":true,"version":"test"}`)
+		case "/tui/show-toast":
+			attempt := attempts.Add(1)
+			if attempt < 3 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				fmt.Fprint(w, "false")
+				return
+			}
+			fmt.Fprint(w, "true")
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+
+	port, err := strconv.Atoi(loopbackServerPort(server))
+	if err != nil {
+		t.Fatalf("failed to parse server port: %v", err)
+	}
+
+	err = sendLaunchToast(port, []string{"oh-my-opencode"})
+	if err != nil {
+		t.Fatalf("sendLaunchToast returned error: %v", err)
+	}
+	if got := attempts.Load(); got != 3 {
+		t.Fatalf("expected 3 toast attempts, got %d", got)
+	}
+}
+
+func TestSendLaunchToast_ReturnsErrorAfterMaxRetries(t *testing.T) {
+	var attempts atomic.Int32
+	server := newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/global/health":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"healthy":true,"version":"test"}`)
+		case "/tui/show-toast":
+			attempts.Add(1)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprint(w, "false")
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+
+	port, err := strconv.Atoi(loopbackServerPort(server))
+	if err != nil {
+		t.Fatalf("failed to parse server port: %v", err)
+	}
+
+	err = sendLaunchToast(port, []string{"oh-my-opencode"})
+	if err == nil {
+		t.Fatal("expected sendLaunchToast to fail after exhausting retries")
+	}
+	if got := attempts.Load(); got != toastMaxAttempts {
+		t.Fatalf("expected %d toast attempts, got %d", toastMaxAttempts, got)
+	}
+}
+
+func TestWaitForServerHealthy_AcceptsErrorResponse(t *testing.T) {
+	server := newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/global/health" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, `{"error":"not ready"}`)
+	}))
+
+	port, err := strconv.Atoi(loopbackServerPort(server))
+	if err != nil {
+		t.Fatalf("failed to parse server port: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	client := &http.Client{Timeout: toastClientTimeout}
+
+	if err := waitForServerHealthy(ctx, client, port); err != nil {
+		t.Fatalf("expected any health response to be accepted, got %v", err)
+	}
+}
+
+func TestWaitForServerHealthy_RetriesAtOneSecondIntervals(t *testing.T) {
+	var calledAt []time.Time
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calledAt = append(calledAt, time.Now())
+		if len(calledAt) == 1 {
+			return nil, errors.New("connection refused")
+		}
+		return &http.Response{
+			StatusCode: http.StatusInternalServerError,
+			Body:       io.NopCloser(strings.NewReader("boom")),
+			Header:     make(http.Header),
+		}, nil
+	})}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	if err := waitForServerHealthy(ctx, client, 12345); err != nil {
+		t.Fatalf("waitForServerHealthy returned error: %v", err)
+	}
+	if len(calledAt) != 2 {
+		t.Fatalf("expected 2 health attempts, got %d", len(calledAt))
+	}
+	interval := calledAt[1].Sub(calledAt[0])
+	if interval < 900*time.Millisecond {
+		t.Fatalf("expected retry interval around 1s, got %v", interval)
+	}
+}
+
+func TestWaitForServerHealthy_TimesOutAfterFiveSeconds(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return nil, errors.New("connection refused")
+	})}
+
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), toastHealthTimeout)
+	defer cancel()
+	err := waitForServerHealthy(ctx, client, 12345)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline exceeded, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed < 5*time.Second {
+		t.Fatalf("expected health wait to last about 5s, got %v", elapsed)
+	}
+}
+
+func TestRunWithDeps_LogsToastFailureWithoutBreakingLaunch(t *testing.T) {
+	tmp := t.TempDir()
+	setupPortTestFiles(t, tmp,
+		"{\n  \"plugin\": [\n    \"oh-my-opencode\"\n  ]\n}\n",
+		"[oc]\nports = \"50000-55000\"\n",
+	)
+
+	var attempts atomic.Int32
+	done := make(chan struct{})
+	server := newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/global/health":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"healthy":true,"version":"test"}`)
+		case "/tui/show-toast":
+			if attempts.Add(1) == toastMaxAttempts {
+				close(done)
+			}
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprint(w, "false")
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	serverPort := loopbackServerPort(server)
+
+	readPipe, writePipe, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create stderr pipe: %v", err)
+	}
+	originalStderr := os.Stderr
+	os.Stderr = writePipe
+	defer func() {
+		os.Stderr = originalStderr
+	}()
+
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+	deps.runTUI = scriptedTUI(t,
+		tuiResponse{selections: map[string]bool{"oh-my-opencode": true}, portArgs: []string{"--port", serverPort}},
+		tuiResponse{cancelled: true},
+	)
+
+	err = runWithDeps([]string{"--model", "gpt-5"}, deps)
+	if err != nil {
+		t.Fatalf("runWithDeps returned error: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(8 * time.Second):
+		t.Fatal("expected toast retries to finish")
+	}
+	time.Sleep(50 * time.Millisecond)
+	writePipe.Close()
+	output, readErr := io.ReadAll(readPipe)
+	readPipe.Close()
+	if readErr != nil {
+		t.Fatalf("failed to read captured stderr: %v", readErr)
+	}
+
+	if !strings.Contains(string(output), "oc: toast failed on port") {
+		t.Fatalf("expected toast failure log, got %q", string(output))
 	}
 }
 

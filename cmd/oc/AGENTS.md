@@ -16,7 +16,7 @@
 - Keep orchestration logic behind `runtimeDeps` when it touches filesystem, process, editor, or network behavior.
 - Preserve the run loop: non-zero child exits become `runner.ExitCodeError`, print once, then reopen the TUI.
 - Session selection is skipped when user args already include `-s`, `--session`, `-c`, or `--continue`.
-- Port resolution is only active when `oh-my-opencode` is selected.
+- Port resolution comes from `~/.oc` `[oc].ports`; when configured and the user did not pass `--port`, launch flow selects a port and appends `--port` regardless of plugin selection.
 
 ## ANTI-PATTERNS
 - Do not move config parsing logic into `cmd/oc`; delegate to `internal/config` and keep orchestration thin.

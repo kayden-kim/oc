@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,6 +46,10 @@ func main() {
 type runnerAPI interface {
 	CheckAvailable() error
 	Run(args []string) error
+}
+
+type onSuccessRunner interface {
+	OnSuccess(func())
 }
 
 type runtimeDeps struct {
@@ -96,12 +104,7 @@ func defaultDeps() runtimeDeps {
 			return selections, finalModel.Cancelled(), finalModel.EditTarget(), nil, finalModel.SelectedSession(), nil
 		}
 
-		effectivePortsRange := ""
-		if isPluginSelected(selections, ohMyOpencodePluginName) {
-			effectivePortsRange = portsRange
-		}
-
-		portArgs, err := runLaunchTUI(selectedPluginNames(selections), finalModel.SelectedSession(), effectivePortsRange, deps)
+		portArgs, err := runLaunchTUI(selectedPluginNames(selections), finalModel.SelectedSession(), portsRange, deps)
 		if err != nil {
 			return nil, false, "", nil, tui.SessionItem{}, err
 		}
@@ -112,7 +115,14 @@ func defaultDeps() runtimeDeps {
 	return deps
 }
 
-const ohMyOpencodePluginName = "oh-my-opencode"
+const (
+	toastHealthTimeout  = 5 * time.Second
+	toastHealthInterval = 1 * time.Second
+	toastClientTimeout  = 1 * time.Second
+	toastRequestTimeout = 5 * time.Second
+	toastRetryInterval  = 1 * time.Second
+	toastMaxAttempts    = 5
+)
 
 func run() error {
 	return runWithDeps(os.Args[1:], defaultDeps())
@@ -166,13 +176,18 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 
 		var whitelist []string
 		var configEditor string
-		var pluginConfigs map[string]config.PluginConfig
+		var portsRange string
 		allowMultiplePlugins := false
 		if ocConfig != nil {
 			whitelist = ocConfig.Plugins
 			configEditor = ocConfig.Editor
-			pluginConfigs = ocConfig.PluginConfigs
+			portsRange = ocConfig.Ports
 			allowMultiplePlugins = ocConfig.AllowMultiplePlugins
+		}
+
+		effectivePortsRange := portsRange
+		if hasPortFlag(args) {
+			effectivePortsRange = ""
 		}
 
 		content, err := deps.readFile(configPath)
@@ -190,11 +205,11 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 
 		visible, _ := deps.filterByWhitelist(plugins, whitelist)
 		if len(visible) == 0 {
-			portArgs, err := runLaunchTUI(nil, selectedSession, "", deps)
+			portArgs, err := runLaunchTUI(nil, selectedSession, effectivePortsRange, deps)
 			if err != nil {
 				return fmt.Errorf("launch TUI error: %w", err)
 			}
-			return runOpencode(r, args, portArgs, selectedSession)
+			return runOpencode(r, args, portArgs, selectedSession, nil)
 		}
 
 		items := make([]tui.PluginItem, len(visible))
@@ -207,13 +222,11 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 			{Label: "3) oh-my-opencode.json file", Path: resolveOhMyOpencodePath(configDir)},
 		}
 
-		omoPortsRange := ohMyOpencodePortsRange(pluginConfigs)
-
 		var selections map[string]bool
 		var cancelled bool
 		var editTarget string
 		var portArgs []string
-		selections, cancelled, editTarget, portArgs, selectedSession, err = deps.runTUI(items, editChoices, sessions, selectedSession, omoPortsRange, allowMultiplePlugins)
+		selections, cancelled, editTarget, portArgs, selectedSession, err = deps.runTUI(items, editChoices, sessions, selectedSession, effectivePortsRange, allowMultiplePlugins)
 		if err != nil {
 			return fmt.Errorf("TUI error: %w", err)
 		}
@@ -229,9 +242,6 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 			}
 			continue
 		}
-		if !isPluginSelected(selections, ohMyOpencodePluginName) {
-			portArgs = nil
-		}
 
 		modified, err := deps.applySelections(content, selections)
 		if err != nil {
@@ -241,7 +251,7 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 			return fmt.Errorf("failed to write config: %w", err)
 		}
 
-		err = runOpencode(r, args, portArgs, selectedSession)
+		err = runOpencode(r, args, portArgs, selectedSession, selections)
 		cwd, cwdErr := deps.getwd()
 		if cwdErr == nil {
 			refreshedSessions, listErr := deps.listSessions(cwd)
@@ -261,10 +271,59 @@ func runWithDeps(args []string, deps runtimeDeps) error {
 	}
 }
 
-func runOpencode(r runnerAPI, args []string, portArgs []string, session tui.SessionItem) error {
+func runOpencode(r runnerAPI, args []string, portArgs []string, session tui.SessionItem, selections map[string]bool) error {
 	args = appendSessionArgs(args, session)
 	args = append(args, portArgs...)
+	plugins := selectedPluginNames(selections)
+
+	if osr, ok := r.(onSuccessRunner); ok {
+		osr.OnSuccess(nil)
+		if port, ok := launchPort(args); ok {
+			osr.OnSuccess(func() {
+				if err := sendLaunchToast(port, plugins); err != nil {
+					logToastFailure(port, err)
+				}
+			})
+		}
+	}
+
 	return r.Run(args)
+}
+
+func launchPort(portArgs []string) (int, bool) {
+	for i := 0; i < len(portArgs); i++ {
+		arg := portArgs[i]
+		switch {
+		case arg == "--port" && i+1 < len(portArgs):
+			port, err := strconv.Atoi(portArgs[i+1])
+			if err != nil {
+				return 0, false
+			}
+			return port, true
+		case strings.HasPrefix(arg, "--port="):
+			port, err := strconv.Atoi(strings.TrimPrefix(arg, "--port="))
+			if err != nil {
+				return 0, false
+			}
+			return port, true
+		}
+	}
+
+	return 0, false
+}
+
+func hasPortFlag(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--port" {
+			return true
+		}
+		if strings.HasPrefix(arg, "--port=") {
+			return true
+		}
+	}
+
+	return false
 }
 
 func selectedPluginNames(selections map[string]bool) []string {
@@ -276,28 +335,6 @@ func selectedPluginNames(selections map[string]bool) []string {
 	}
 	sort.Strings(enabled)
 	return enabled
-}
-
-func pluginNameKey(name string) string {
-	return plugin.ComparisonName(name)
-}
-
-func ohMyOpencodePortsRange(pluginConfigs map[string]config.PluginConfig) string {
-	if pluginConfig, ok := pluginConfigs[ohMyOpencodePluginName]; ok {
-		return pluginConfig.Ports
-	}
-
-	return ""
-}
-
-func isPluginSelected(selections map[string]bool, pluginName string) bool {
-	for name, selected := range selections {
-		if selected && pluginNameKey(name) == pluginName {
-			return true
-		}
-	}
-
-	return false
 }
 
 func runLaunchTUI(plugins []string, session tui.SessionItem, portsRange string, deps runtimeDeps) ([]string, error) {
@@ -378,6 +415,132 @@ func resolveOhMyOpencodePath(configDir string) string {
 	}
 
 	return jsonPath
+}
+
+func sendLaunchToast(port int, plugins []string) error {
+	client := &http.Client{Timeout: toastClientTimeout}
+	healthCtx, cancel := context.WithTimeout(context.Background(), toastHealthTimeout)
+	defer cancel()
+	if err := waitForServerHealthy(healthCtx, client, port); err != nil {
+		return err
+	}
+
+	payload := struct {
+		Title   string `json:"title,omitempty"`
+		Message string `json:"message"`
+		Variant string `json:"variant"`
+	}{
+		Title:   "OC Launcher",
+		Message: buildToastMessage(plugins, strconv.Itoa(port)),
+		Variant: "info",
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < toastMaxAttempts; attempt++ {
+		err = postLaunchToast(client, port, body)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if attempt < toastMaxAttempts-1 {
+			time.Sleep(toastRetryInterval)
+		}
+	}
+
+	return lastErr
+}
+
+func postLaunchToast(client *http.Client, port int, body []byte) error {
+	url := fmt.Sprintf("http://127.0.0.1:%d/tui/show-toast", port)
+	toastCtx, toastCancel := context.WithTimeout(context.Background(), toastRequestTimeout)
+	defer toastCancel()
+
+	req, err := http.NewRequestWithContext(toastCtx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	applyServerAuth(req)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("toast request failed: %s", resp.Status)
+	}
+
+	var accepted bool
+	if err := json.NewDecoder(resp.Body).Decode(&accepted); err != nil && err != io.EOF {
+		return err
+	}
+	if !accepted {
+		return fmt.Errorf("toast request returned false")
+	}
+
+	return nil
+}
+
+func logToastFailure(port int, err error) {
+	fmt.Fprintf(os.Stderr, "oc: toast failed on port %d: %v\n", port, err)
+}
+
+func waitForServerHealthy(ctx context.Context, client *http.Client, port int) error {
+	url := fmt.Sprintf("http://127.0.0.1:%d/global/health", port)
+	ticker := time.NewTicker(toastHealthInterval)
+	defer ticker.Stop()
+
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
+		applyServerAuth(req)
+
+		resp, err := client.Do(req)
+		if err == nil {
+			resp.Body.Close()
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func applyServerAuth(req *http.Request) {
+	password := os.Getenv("OPENCODE_SERVER_PASSWORD")
+	if password == "" {
+		return
+	}
+
+	username := os.Getenv("OPENCODE_SERVER_USERNAME")
+	if username == "" {
+		username = "opencode"
+	}
+	req.SetBasicAuth(username, password)
+}
+
+func buildToastMessage(plugins []string, portArg string) string {
+	var parts []string
+	if len(plugins) > 0 {
+		parts = append(parts, fmt.Sprintf("Plugins: %s", strings.Join(plugins, ", ")))
+	}
+	if portArg != "" {
+		parts = append(parts, fmt.Sprintf("Port: %s", portArg))
+	}
+	if len(parts) == 0 {
+		return "OpenCode launched"
+	}
+	return strings.Join(parts, " | ")
 }
 
 type sessionRow struct {

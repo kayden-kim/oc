@@ -29,5 +29,5 @@
 - Do not treat `plugin` as loosely typed JSON; parser expects a real array and should fail if shape is wrong.
 
 ## NOTES
-- `PluginConfigs` carries per-plugin settings like port ranges; `cmd/oc` currently reads `plugin.oh-my-opencode.ports` from here.
+- `OcConfig.Ports` is populated from `~/.oc` `[oc].ports`; top-level `ports` is ignored, and `PluginConfigs` no longer drives launch port choice.
 - This package has the strongest file-format invariants in the repo; read tests before changing parser or writer behavior.

@@ -5,7 +5,7 @@
 **Branch:** `main`
 
 ## OVERVIEW
-`oc` is a Go CLI/TUI launcher for `opencode`. It reads local launcher config, edits the `plugin` array in `~/.config/opencode/opencode.json`, optionally auto-selects an `oh-my-opencode` port, launches `opencode`, then returns to the TUI.
+`oc` is a Go CLI/TUI launcher for `opencode`. It reads local launcher config, edits the `plugin` array in `~/.config/opencode/opencode.json`, optionally auto-selects a port from `~/.oc` `[oc].ports`, launches `opencode` with `--port`, then returns to the TUI.
 
 ## STRUCTURE
 ```text
