@@ -42,6 +42,23 @@ type RuntimeDeps struct {
 	IsPortAvailable   func(int) bool
 }
 
+type runtimePaths struct {
+	ocConfigPath string
+	configDir    string
+	configPath   string
+}
+
+type iterationState struct {
+	cwd                  string
+	sessions             []tui.SessionItem
+	selectedSession      tui.SessionItem
+	content              []byte
+	visible              []config.Plugin
+	configEditor         string
+	effectivePortsRange  string
+	allowMultiplePlugins bool
+}
+
 func DefaultDeps(version string) RuntimeDeps {
 	deps := RuntimeDeps{
 		Version:           version,
@@ -93,14 +110,7 @@ func Run(args []string, version string) error {
 }
 
 func RunWithDeps(args []string, deps RuntimeDeps) error {
-	if deps.Getwd == nil {
-		deps.Getwd = os.Getwd
-	}
-	if deps.ListSessions == nil {
-		deps.ListSessions = func(string) ([]tui.SessionItem, error) {
-			return nil, nil
-		}
-	}
+	deps = normalizeDeps(deps)
 
 	r := deps.NewRunner()
 	if err := r.CheckAvailable(); err != nil {
@@ -114,79 +124,32 @@ func RunWithDeps(args []string, deps RuntimeDeps) error {
 		return fmt.Errorf("failed to get home directory: %w", err)
 	}
 
-	ocConfigPath := filepath.Join(homeDir, ".oc")
-	configDir := filepath.Join(homeDir, ".config", "opencode")
-	configPath := filepath.Join(configDir, "opencode.json")
+	paths := resolveRuntimePaths(homeDir)
 	selectedSession := tui.SessionItem{}
 
 	for {
-		cwd, err := deps.Getwd()
+		state, err := loadIterationState(args, deps, paths, selectedSession)
 		if err != nil {
-			return fmt.Errorf("failed to get current directory: %w", err)
+			return err
 		}
+		selectedSession = state.selectedSession
 
-		sessions, err := deps.ListSessions(cwd)
-		if err != nil {
-			sessions = nil
-		}
-		if selectedSession.ID == "" {
-			selectedSession = session.Latest(sessions)
-		}
-
-		ocConfig, err := deps.LoadOcConfig(ocConfigPath)
-		if err != nil {
-			return fmt.Errorf("failed to load whitelist: %w", err)
-		}
-
-		var whitelist []string
-		var configEditor string
-		var portsRange string
-		allowMultiplePlugins := false
-		if ocConfig != nil {
-			whitelist = ocConfig.Plugins
-			configEditor = ocConfig.Editor
-			portsRange = ocConfig.Ports
-			allowMultiplePlugins = ocConfig.AllowMultiplePlugins
-		}
-
-		effectivePortsRange := portsRange
-		if launch.HasPortFlag(args) {
-			effectivePortsRange = ""
-		}
-
-		content, err := deps.ReadFile(configPath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return fmt.Errorf("opencode.json not found at %s", configPath)
-			}
-			return fmt.Errorf("failed to read opencode.json: %w", err)
-		}
-
-		plugins, _, err := deps.ParsePlugins(content)
-		if err != nil {
-			return fmt.Errorf("failed to parse plugins: %w", err)
-		}
-
-		visible, _ := deps.FilterByWhitelist(plugins, whitelist)
-		if len(visible) == 0 {
-			portArgs, err := runLaunchTUI(nil, selectedSession, effectivePortsRange, deps, deps.Version)
+		if len(state.visible) == 0 {
+			portArgs, err := runLaunchTUI(nil, state.selectedSession, state.effectivePortsRange, deps, deps.Version)
 			if err != nil {
 				return fmt.Errorf("launch TUI error: %w", err)
 			}
-			return runOpencode(r, args, portArgs, selectedSession, nil)
+			return runOpencode(r, args, portArgs, state.selectedSession, nil)
 		}
 
-		items := make([]tui.PluginItem, len(visible))
-		for i, p := range visible {
-			items[i] = tui.PluginItem{Name: p.Name, InitiallyEnabled: p.Enabled}
-		}
-		editChoices := []tui.EditChoice{
-			{Label: "1) .oc file", Path: ocConfigPath},
-			{Label: "2) opencode.json file", Path: configPath},
-			{Label: "3) oh-my-opencode.json file", Path: ResolveOhMyOpencodePath(configDir)},
-		}
-
-		selections, cancelled, editTarget, portArgs, nextSession, err := deps.RunTUI(items, editChoices, sessions, selectedSession, effectivePortsRange, allowMultiplePlugins)
+		selections, cancelled, editTarget, portArgs, nextSession, err := deps.RunTUI(
+			buildPluginItems(state.visible),
+			buildEditChoices(paths),
+			state.sessions,
+			state.selectedSession,
+			state.effectivePortsRange,
+			state.allowMultiplePlugins,
+		)
 		selectedSession = nextSession
 		if err != nil {
 			return fmt.Errorf("TUI error: %w", err)
@@ -198,28 +161,18 @@ func RunWithDeps(args []string, deps RuntimeDeps) error {
 			return nil
 		}
 		if editTarget != "" {
-			if err := deps.OpenEditor(editTarget, configEditor); err != nil {
+			if err := deps.OpenEditor(editTarget, state.configEditor); err != nil {
 				return fmt.Errorf("failed to open editor for %s: %w", editTarget, err)
 			}
 			continue
 		}
 
-		modified, err := deps.ApplySelections(content, selections)
-		if err != nil {
-			return fmt.Errorf("failed to apply selections: %w", err)
-		}
-		if err := deps.WriteConfigFile(configPath, modified); err != nil {
-			return fmt.Errorf("failed to write config: %w", err)
+		if err := persistSelections(deps, paths.configPath, state.content, selections); err != nil {
+			return err
 		}
 
 		err = runOpencode(r, args, portArgs, selectedSession, selections)
-		cwd, cwdErr := deps.Getwd()
-		if cwdErr == nil {
-			refreshedSessions, listErr := deps.ListSessions(cwd)
-			if listErr == nil {
-				selectedSession = session.Latest(refreshedSessions)
-			}
-		}
+		selectedSession = refreshSelectedSession(deps, state.cwd, selectedSession)
 		if exitErr, ok := runner.IsExitCode(err); ok {
 			lastExitErr = exitErr
 			fmt.Fprintf(os.Stderr, "opencode exited with code %d\n\n", exitErr.Code)
@@ -230,6 +183,145 @@ func RunWithDeps(args []string, deps RuntimeDeps) error {
 		}
 		lastExitErr = nil
 	}
+}
+
+func normalizeDeps(deps RuntimeDeps) RuntimeDeps {
+	if deps.Getwd == nil {
+		deps.Getwd = os.Getwd
+	}
+	if deps.ListSessions == nil {
+		deps.ListSessions = func(string) ([]tui.SessionItem, error) {
+			return nil, nil
+		}
+	}
+	return deps
+}
+
+func resolveRuntimePaths(homeDir string) runtimePaths {
+	return runtimePaths{
+		ocConfigPath: filepath.Join(homeDir, ".oc"),
+		configDir:    filepath.Join(homeDir, ".config", "opencode"),
+		configPath:   filepath.Join(homeDir, ".config", "opencode", "opencode.json"),
+	}
+}
+
+func loadIterationState(args []string, deps RuntimeDeps, paths runtimePaths, selectedSession tui.SessionItem) (iterationState, error) {
+	cwd, err := deps.Getwd()
+	if err != nil {
+		return iterationState{}, fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	sessions, err := deps.ListSessions(cwd)
+	if err != nil {
+		sessions = nil
+	}
+	if selectedSession.ID == "" {
+		selectedSession = session.Latest(sessions)
+	}
+
+	ocConfig, err := deps.LoadOcConfig(paths.ocConfigPath)
+	if err != nil {
+		return iterationState{}, fmt.Errorf("failed to load whitelist: %w", err)
+	}
+
+	whitelist, configEditor, effectivePortsRange, allowMultiplePlugins := extractRuntimeConfig(args, ocConfig)
+	content, err := readConfigContent(deps, paths.configPath)
+	if err != nil {
+		return iterationState{}, err
+	}
+	visible, err := visiblePlugins(deps, content, whitelist)
+	if err != nil {
+		return iterationState{}, err
+	}
+
+	return iterationState{
+		cwd:                  cwd,
+		sessions:             sessions,
+		selectedSession:      selectedSession,
+		content:              content,
+		visible:              visible,
+		configEditor:         configEditor,
+		effectivePortsRange:  effectivePortsRange,
+		allowMultiplePlugins: allowMultiplePlugins,
+	}, nil
+}
+
+func extractRuntimeConfig(args []string, ocConfig *config.OcConfig) ([]string, string, string, bool) {
+	var whitelist []string
+	var configEditor string
+	var portsRange string
+	allowMultiplePlugins := false
+	if ocConfig != nil {
+		whitelist = ocConfig.Plugins
+		configEditor = ocConfig.Editor
+		portsRange = ocConfig.Ports
+		allowMultiplePlugins = ocConfig.AllowMultiplePlugins
+	}
+
+	if launch.HasPortFlag(args) {
+		portsRange = ""
+	}
+
+	return whitelist, configEditor, portsRange, allowMultiplePlugins
+}
+
+func readConfigContent(deps RuntimeDeps, configPath string) ([]byte, error) {
+	content, err := deps.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("opencode.json not found at %s", configPath)
+		}
+		return nil, fmt.Errorf("failed to read opencode.json: %w", err)
+	}
+	return content, nil
+}
+
+func visiblePlugins(deps RuntimeDeps, content []byte, whitelist []string) ([]config.Plugin, error) {
+	plugins, _, err := deps.ParsePlugins(content)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse plugins: %w", err)
+	}
+	visible, _ := deps.FilterByWhitelist(plugins, whitelist)
+	return visible, nil
+}
+
+func buildPluginItems(visible []config.Plugin) []tui.PluginItem {
+	items := make([]tui.PluginItem, len(visible))
+	for i, p := range visible {
+		items[i] = tui.PluginItem{Name: p.Name, InitiallyEnabled: p.Enabled}
+	}
+	return items
+}
+
+func buildEditChoices(paths runtimePaths) []tui.EditChoice {
+	return []tui.EditChoice{
+		{Label: "1) .oc file", Path: paths.ocConfigPath},
+		{Label: "2) opencode.json file", Path: paths.configPath},
+		{Label: "3) oh-my-opencode.json file", Path: ResolveOhMyOpencodePath(paths.configDir)},
+	}
+}
+
+func persistSelections(deps RuntimeDeps, configPath string, content []byte, selections map[string]bool) error {
+	modified, err := deps.ApplySelections(content, selections)
+	if err != nil {
+		return fmt.Errorf("failed to apply selections: %w", err)
+	}
+	if err := deps.WriteConfigFile(configPath, modified); err != nil {
+		return fmt.Errorf("failed to write config: %w", err)
+	}
+	return nil
+}
+
+func refreshSelectedSession(deps RuntimeDeps, cwd string, current tui.SessionItem) tui.SessionItem {
+	refreshedSessions, err := deps.ListSessions(cwd)
+	if err != nil {
+		return current
+	}
+	latest := session.Latest(refreshedSessions)
+	if latest.ID == "" {
+		return current
+	}
+	return latest
 }
 
 func runOpencode(r RunnerAPI, args []string, portArgs []string, selectedSession tui.SessionItem, selections map[string]bool) error {
@@ -283,13 +375,17 @@ func runLaunchTUI(plugins []string, selectedSession tui.SessionItem, portsRange 
 }
 
 func ResolveOhMyOpencodePath(configDir string) string {
+	return resolveOhMyOpencodePath(configDir, os.Stat)
+}
+
+func resolveOhMyOpencodePath(configDir string, statFn func(string) (os.FileInfo, error)) string {
 	jsonPath := filepath.Join(configDir, "oh-my-opencode.json")
-	if _, err := os.Stat(jsonPath); err == nil {
+	if _, err := statFn(jsonPath); err == nil {
 		return jsonPath
 	}
 
 	jsoncPath := filepath.Join(configDir, "oh-my-opencode.jsonc")
-	if _, err := os.Stat(jsoncPath); err == nil {
+	if _, err := statFn(jsoncPath); err == nil {
 		return jsoncPath
 	}
 
@@ -311,17 +407,14 @@ func appendSessionArgs(args []string, selectedSession tui.SessionItem) []string 
 }
 
 func hasSessionArgs(args []string) bool {
-	for i, arg := range args {
+	for _, arg := range args {
 		if arg == "-s" || arg == "--session" || arg == "-c" || arg == "--continue" {
 			return true
 		}
-		if strings.HasPrefix(arg, "--session=") {
+		if strings.HasPrefix(arg, "--session=") || strings.HasPrefix(arg, "-s=") {
 			return true
 		}
-		if arg == "-s=" || arg == "--continue=" {
-			return true
-		}
-		if arg == "-s" && i < len(args)-1 {
+		if strings.HasPrefix(arg, "--continue=") || strings.HasPrefix(arg, "-c=") {
 			return true
 		}
 	}
