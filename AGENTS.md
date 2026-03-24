@@ -10,7 +10,8 @@
 ## STRUCTURE
 ```text
 ./
-|- cmd/oc/           CLI entrypoint and orchestration loop
+|- cmd/oc/           Thin CLI entrypoint and top-level exit handling
+|- internal/app/     Runtime orchestration loop and dependency seams
 |- internal/config/  ~/.oc parsing and opencode.json JSONC editing
 |- internal/tui/     Bubble Tea models for selection and launch progress
 |- internal/plugin/  whitelist matching and @version normalization
@@ -23,8 +24,9 @@
 ## WHERE TO LOOK
 | Task | Location | Notes |
 |------|----------|-------|
-| Understand full runtime flow | `cmd/oc/main.go` | `main -> run -> runWithDeps -> TUI -> write config -> run opencode` |
-| Change launcher behavior | `cmd/oc/main.go` | dependency wiring lives in `runtimeDeps` |
+| Understand full runtime flow | `internal/app/app.go` | `RunWithDeps -> TUI -> write config -> run opencode -> re-entry` |
+| Change launcher behavior | `internal/app/app.go` | `RuntimeDeps` is the orchestration seam |
+| Change CLI entry behavior | `cmd/oc/main.go` | `--version`, top-level error printing, exit-code mapping |
 | Change `~/.oc` semantics | `internal/config/toml_config.go` | `[oc]` table overrides flat keys |
 | Change plugin toggling | `internal/config/jsonc_parser.go` | parser tracks exact plugin line indices |
 | Change write safety | `internal/config/jsonc_writer.go` | temp-file write + rename + JSONC validation |
@@ -39,8 +41,8 @@
 | Symbol | Type | Location | Role |
 |--------|------|----------|------|
 | `main` | function | `cmd/oc/main.go` | handles `--version`, delegates errors |
-| `runtimeDeps` | struct | `cmd/oc/main.go` | test seam and runtime wiring boundary |
-| `runWithDeps` | function | `cmd/oc/main.go` | main loop for config read, TUI, launch, re-entry |
+| `RuntimeDeps` | struct | `internal/app/app.go` | test seam and runtime wiring boundary |
+| `RunWithDeps` | function | `internal/app/app.go` | main loop for config read, TUI, launch, re-entry |
 | `LoadOcConfig` | function | `internal/config/toml_config.go` | parses `~/.oc` and table precedence |
 | `ParsePlugins` | function | `internal/config/jsonc_parser.go` | discovers active/commented plugin entries |
 | `ApplySelections` | function | `internal/config/jsonc_writer.go` | line-aware toggle rewrite |
@@ -58,7 +60,7 @@
 - `opencode.json` edits are surgical: only the `plugin` array is touched and formatting is preserved.
 - Plugin enable/disable is modeled as comment toggling with `// `, not array rewriting.
 - `plugin@version` matches whitelist entries by base name via `ComparisonName`.
-- `cmd/oc/main.go` uses dependency injection through `runtimeDeps`; follow that seam for new behavior and tests.
+- `internal/app/app.go` uses dependency injection through `RuntimeDeps`; follow that seam for new behavior and tests.
 
 ## ANTI-PATTERNS
 - Do not rewrite the full `opencode.json` document when changing plugin state; preserve comments, line endings, and unrelated fields.

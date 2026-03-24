@@ -1,29 +1,26 @@
 # CMD/OC KNOWLEDGE BASE
 
 ## OVERVIEW
-`cmd/oc` owns the launcher's full control loop: load config, list sessions, run the selection TUI, persist plugin changes, launch `opencode`, then reopen the launcher after exit.
+`cmd/oc` is the thin CLI entrypoint: handle `--version`, call `internal/app`, map runner exit codes, and print top-level errors.
 
 ## WHERE TO LOOK
 | Task | Location | Notes |
 |------|----------|-------|
-| Start here | `cmd/oc/main.go` | everything for runtime orchestration is in one file |
-| Understand dependency seams | `cmd/oc/main.go` | `runtimeDeps` fields define testable boundaries |
-| Change launch arguments | `cmd/oc/main.go` | `runOpencode`, `appendSessionArgs`, `resolvePortArgs` |
-| Change session loading | `cmd/oc/main.go` | `listSessions`, `sameDir`, `latestSession` |
-| Verify orchestration changes | `cmd/oc/main_test.go` | highest-value behavior tests |
+| Start here | `cmd/oc/main.go` | thin entrypoint only |
+| Change runtime behavior | `internal/app/app.go` | orchestration, sessions, config IO, launch loop |
+| Verify entrypoint changes | `cmd/oc/main_test.go` | version, exit-code mapping, generic error printing |
 
 ## LOCAL CONVENTIONS
-- Keep orchestration logic behind `runtimeDeps` when it touches filesystem, process, editor, or network behavior.
-- Preserve the run loop: non-zero child exits become `runner.ExitCodeError`, print once, then reopen the TUI.
-- Session selection is skipped when user args already include `-s`, `--session`, `-c`, or `--continue`.
-- Port resolution comes from `~/.oc` `[oc].ports`; when configured and the user did not pass `--port`, launch flow selects a port and appends `--port` regardless of plugin selection.
+- Keep `cmd/oc` small; orchestration belongs in `internal/app`.
+- Preserve `--version` as a direct fast path that exits without calling `internal/app`.
+- Preserve top-level exit-code mapping through `runner.IsExitCode`.
+- Preserve generic error printing as `Error: <message>` to stderr before exit 1.
 
 ## ANTI-PATTERNS
 - Do not move config parsing logic into `cmd/oc`; delegate to `internal/config` and keep orchestration thin.
-- Do not call `opencode` directly outside `runnerAPI`; tests replace the runner.
-- Do not bypass cwd filtering in `listSessions`; the current working directory is part of the product behavior.
-- Do not treat empty visible-plugin state as an error; it is a valid fast path straight to launch.
+- Do not add launcher loop logic back into `cmd/oc`; keep it in `internal/app`.
+- Do not test orchestration scenarios here; keep those in `internal/app/app_test.go`.
 
 ## TEST SHAPE
-- `cmd/oc/main_test.go` uses fakes and scripted TUI helpers instead of real subprocesses.
-- Prefer adding scenario-style tests at the `runWithDeps` level when behavior spans config, TUI, and runner interactions.
+- `cmd/oc/main_test.go` should stay minimal and focused on entrypoint behavior.
+- Prefer orchestration scenario tests in `internal/app/app_test.go`.
