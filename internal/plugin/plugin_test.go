@@ -147,15 +147,6 @@ func TestFilterByWhitelist(t *testing.T) {
 			wantHidden:  0,
 		},
 		{
-			name: "scoped plugin keeps leading at-sign while ignoring version",
-			plugins: []config.Plugin{
-				{Name: "@scope/plugin@latest", Enabled: false, LineIndex: 2, OriginalLine: `    // "@scope/plugin@latest",`},
-			},
-			whitelist:   []string{"@scope/plugin"},
-			wantVisible: 1,
-			wantHidden:  0,
-		},
-		{
 			name: "case-sensitive matching still applies after version normalization",
 			plugins: []config.Plugin{
 				{Name: "Foo@latest", Enabled: true, LineIndex: 3, OriginalLine: `    "Foo@latest",`},

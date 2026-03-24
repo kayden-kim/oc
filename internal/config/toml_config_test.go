@@ -6,210 +6,123 @@ import (
 	"testing"
 )
 
-// TestLoadOcConfigValid tests loading valid TOML with plugins array
-func TestLoadOcConfigValid(t *testing.T) {
-	// Create a temporary TOML file
+func writeOcConfigFixture(t *testing.T, content string) string {
+	t.Helper()
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.toml")
-
-	content := `plugins = ["plugin-a", "plugin-b"]`
-	err := os.WriteFile(configPath, []byte(content), 0644)
-	if err != nil {
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write test TOML file: %v", err)
 	}
+	return configPath
+}
 
-	config, err := LoadOcConfig(configPath)
+func mustLoadOcConfig(t *testing.T, content string) *OcConfig {
+	t.Helper()
+	config, err := LoadOcConfig(writeOcConfigFixture(t, content))
 	if err != nil {
 		t.Fatalf("LoadOcConfig failed: %v", err)
 	}
-
 	if config == nil {
 		t.Fatal("expected config to be non-nil, got nil")
 	}
+	return config
+}
 
-	if len(config.Plugins) != 2 {
-		t.Errorf("expected 2 plugins, got %d", len(config.Plugins))
+func TestLoadOcConfig_FieldParsing(t *testing.T) {
+	tests := []struct {
+		name                 string
+		content              string
+		wantPlugins          []string
+		wantEditor           string
+		wantAllowMultiPlugin bool
+	}{
+		{
+			name:                 "plugins list",
+			content:              `plugins = ["plugin-a", "plugin-b"]`,
+			wantPlugins:          []string{"plugin-a", "plugin-b"},
+			wantEditor:           "",
+			wantAllowMultiPlugin: false,
+		},
+		{
+			name:                 "empty plugins",
+			content:              `plugins = []`,
+			wantPlugins:          []string{},
+			wantEditor:           "",
+			wantAllowMultiPlugin: false,
+		},
+		{
+			name: "editor configured",
+			content: `plugins = ["plugin-a"]
+editor = "code --wait"`,
+			wantPlugins:          []string{"plugin-a"},
+			wantEditor:           "code --wait",
+			wantAllowMultiPlugin: false,
+		},
+		{
+			name: "allow multiple plugins true",
+			content: `plugins = ["plugin-a"]
+allow_multiple_plugins = true`,
+			wantPlugins:          []string{"plugin-a"},
+			wantEditor:           "",
+			wantAllowMultiPlugin: true,
+		},
+		{
+			name:                 "optional fields omitted use defaults",
+			content:              `plugins = ["plugin-a"]`,
+			wantPlugins:          []string{"plugin-a"},
+			wantEditor:           "",
+			wantAllowMultiPlugin: false,
+		},
 	}
 
-	if config.Plugins[0] != "plugin-a" {
-		t.Errorf("expected first plugin to be 'plugin-a', got '%s'", config.Plugins[0])
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := mustLoadOcConfig(t, tt.content)
 
-	if config.Plugins[1] != "plugin-b" {
-		t.Errorf("expected second plugin to be 'plugin-b', got '%s'", config.Plugins[1])
+			if len(config.Plugins) != len(tt.wantPlugins) {
+				t.Fatalf("expected %d plugins, got %d", len(tt.wantPlugins), len(config.Plugins))
+			}
+			for i := range tt.wantPlugins {
+				if config.Plugins[i] != tt.wantPlugins[i] {
+					t.Fatalf("plugin[%d]: expected %q, got %q", i, tt.wantPlugins[i], config.Plugins[i])
+				}
+			}
+
+			if config.Editor != tt.wantEditor {
+				t.Fatalf("expected editor %q, got %q", tt.wantEditor, config.Editor)
+			}
+			if config.AllowMultiplePlugins != tt.wantAllowMultiPlugin {
+				t.Fatalf("expected allow_multiple_plugins=%v, got %v", tt.wantAllowMultiPlugin, config.AllowMultiplePlugins)
+			}
+		})
 	}
 }
 
-// TestLoadOcConfigMissingFile tests that missing file returns nil, nil (not an error)
-func TestLoadOcConfigMissingFile(t *testing.T) {
+func TestLoadOcConfig_MissingFile(t *testing.T) {
 	nonexistentPath := "/nonexistent/path/to/config.toml"
 
 	config, err := LoadOcConfig(nonexistentPath)
-
 	if err != nil {
 		t.Fatalf("LoadOcConfig should not return error for missing file, got: %v", err)
 	}
-
 	if config != nil {
-		t.Errorf("expected nil config for missing file, got %+v", config)
+		t.Fatalf("expected nil config for missing file, got %+v", config)
 	}
 }
 
-// TestLoadOcConfigEmptyPlugins tests empty plugins array
-func TestLoadOcConfigEmptyPlugins(t *testing.T) {
-	// Create a temporary TOML file with empty plugins array
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.toml")
-
-	content := `plugins = []`
-	err := os.WriteFile(configPath, []byte(content), 0644)
-	if err != nil {
-		t.Fatalf("failed to write test TOML file: %v", err)
-	}
+func TestLoadOcConfig_InvalidTOML(t *testing.T) {
+	configPath := writeOcConfigFixture(t, `plugins = ["plugin-a" invalid syntax here`)
 
 	config, err := LoadOcConfig(configPath)
-	if err != nil {
-		t.Fatalf("LoadOcConfig failed: %v", err)
-	}
-
-	if config == nil {
-		t.Fatal("expected config to be non-nil, got nil")
-	}
-
-	if len(config.Plugins) != 0 {
-		t.Errorf("expected 0 plugins, got %d", len(config.Plugins))
-	}
-}
-
-// TestLoadOcConfigInvalidTOML tests invalid TOML syntax returns error
-func TestLoadOcConfigInvalidTOML(t *testing.T) {
-	// Create a temporary file with invalid TOML
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.toml")
-
-	content := `plugins = ["plugin-a" invalid syntax here`
-	err := os.WriteFile(configPath, []byte(content), 0644)
-	if err != nil {
-		t.Fatalf("failed to write test TOML file: %v", err)
-	}
-
-	config, err := LoadOcConfig(configPath)
-
 	if err == nil {
 		t.Fatal("expected LoadOcConfig to return error for invalid TOML, got nil")
 	}
-
 	if config != nil {
-		t.Errorf("expected nil config when error occurs, got %+v", config)
-	}
-}
-
-// TestLoadOcConfigWithEditor tests loading TOML with editor field
-func TestLoadOcConfigWithEditor(t *testing.T) {
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.toml")
-
-	content := `plugins = ["plugin-a"]
-editor = "code --wait"`
-	err := os.WriteFile(configPath, []byte(content), 0644)
-	if err != nil {
-		t.Fatalf("failed to write test TOML file: %v", err)
-	}
-
-	config, err := LoadOcConfig(configPath)
-	if err != nil {
-		t.Fatalf("LoadOcConfig failed: %v", err)
-	}
-
-	if config == nil {
-		t.Fatal("expected config to be non-nil, got nil")
-	}
-
-	if config.Editor != "code --wait" {
-		t.Errorf("expected editor to be 'code --wait', got '%s'", config.Editor)
-	}
-}
-
-// TestLoadOcConfigWithoutEditor tests loading TOML without editor field
-func TestLoadOcConfigWithoutEditor(t *testing.T) {
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.toml")
-
-	content := `plugins = ["plugin-a"]`
-	err := os.WriteFile(configPath, []byte(content), 0644)
-	if err != nil {
-		t.Fatalf("failed to write test TOML file: %v", err)
-	}
-
-	config, err := LoadOcConfig(configPath)
-	if err != nil {
-		t.Fatalf("LoadOcConfig failed: %v", err)
-	}
-
-	if config == nil {
-		t.Fatal("expected config to be non-nil, got nil")
-	}
-
-	if config.Editor != "" {
-		t.Errorf("expected editor to be empty, got '%s'", config.Editor)
-	}
-}
-
-// TestLoadOcConfigWithAllowMultiplePlugins tests loading TOML with allow_multiple_plugins field
-func TestLoadOcConfigWithAllowMultiplePlugins(t *testing.T) {
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.toml")
-
-	content := `plugins = ["plugin-a"]
-allow_multiple_plugins = true`
-	err := os.WriteFile(configPath, []byte(content), 0644)
-	if err != nil {
-		t.Fatalf("failed to write test TOML file: %v", err)
-	}
-
-	config, err := LoadOcConfig(configPath)
-	if err != nil {
-		t.Fatalf("LoadOcConfig failed: %v", err)
-	}
-
-	if config == nil {
-		t.Fatal("expected config to be non-nil, got nil")
-	}
-
-	if !config.AllowMultiplePlugins {
-		t.Error("expected allow_multiple_plugins to be true")
-	}
-}
-
-// TestLoadOcConfigWithoutAllowMultiplePlugins tests default false when the field is omitted
-func TestLoadOcConfigWithoutAllowMultiplePlugins(t *testing.T) {
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.toml")
-
-	content := `plugins = ["plugin-a"]`
-	err := os.WriteFile(configPath, []byte(content), 0644)
-	if err != nil {
-		t.Fatalf("failed to write test TOML file: %v", err)
-	}
-
-	config, err := LoadOcConfig(configPath)
-	if err != nil {
-		t.Fatalf("LoadOcConfig failed: %v", err)
-	}
-
-	if config == nil {
-		t.Fatal("expected config to be non-nil, got nil")
-	}
-
-	if config.AllowMultiplePlugins {
-		t.Error("expected allow_multiple_plugins to default to false")
+		t.Fatalf("expected nil config when error occurs, got %+v", config)
 	}
 }
 
 func TestLoadOcConfigSupportsOcSection(t *testing.T) {
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.toml")
-
 	content := `[oc]
 plugins = ["oh-my-opencode", "superpowers"]
 allow_multiple_plugins = false
@@ -217,19 +130,8 @@ editor = "nvim"
 
 [plugin.oh-my-opencode]
 ports = "55000-55500"`
-	err := os.WriteFile(configPath, []byte(content), 0644)
-	if err != nil {
-		t.Fatalf("failed to write test TOML file: %v", err)
-	}
 
-	config, err := LoadOcConfig(configPath)
-	if err != nil {
-		t.Fatalf("LoadOcConfig failed: %v", err)
-	}
-
-	if config == nil {
-		t.Fatal("expected config to be non-nil, got nil")
-	}
+	config := mustLoadOcConfig(t, content)
 
 	if len(config.Plugins) != 2 {
 		t.Fatalf("expected 2 plugins, got %d", len(config.Plugins))
@@ -253,9 +155,6 @@ ports = "55000-55500"`
 }
 
 func TestLoadOcConfigOcSectionOverridesFlatKeys(t *testing.T) {
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.toml")
-
 	content := `plugins = ["top-level"]
 editor = "vim"
 allow_multiple_plugins = true
@@ -264,15 +163,8 @@ allow_multiple_plugins = true
 plugins = ["section-plugin"]
 editor = "nvim"
 allow_multiple_plugins = false`
-	err := os.WriteFile(configPath, []byte(content), 0644)
-	if err != nil {
-		t.Fatalf("failed to write test TOML file: %v", err)
-	}
 
-	config, err := LoadOcConfig(configPath)
-	if err != nil {
-		t.Fatalf("LoadOcConfig failed: %v", err)
-	}
+	config := mustLoadOcConfig(t, content)
 
 	if len(config.Plugins) != 1 || config.Plugins[0] != "section-plugin" {
 		t.Fatalf("expected [oc] plugins to override flat keys, got %#v", config.Plugins)
