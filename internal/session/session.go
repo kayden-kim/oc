@@ -170,10 +170,6 @@ func opencodeDataDir() (string, error) {
 		return "", err
 	}
 
-	if runtime.GOOS == "darwin" {
-		return filepath.Join(home, "Library", "Application Support", "opencode"), nil
-	}
-
 	return filepath.Join(home, ".local", "share", "opencode"), nil
 }
 

@@ -89,15 +89,25 @@ func TestOpencodeDataDir_DefaultsByPlatform(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if runtime.GOOS == "darwin" {
-		want := filepath.Join(home, "Library", "Application Support", "opencode")
-		if dir != want {
-			t.Fatalf("expected %q, got %q", want, dir)
-		}
-		return
+	want := filepath.Join(home, ".local", "share", "opencode")
+	if dir != want {
+		t.Fatalf("expected %q, got %q", want, dir)
+	}
+}
+
+func TestOpencodeDataDir_UsesXDGDataHomeOverride(t *testing.T) {
+	home := t.TempDir()
+	xdg := filepath.Join(t.TempDir(), "xdg-data")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_DATA_HOME", xdg)
+
+	dir, err := opencodeDataDir()
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	want := filepath.Join(home, ".local", "share", "opencode")
+	want := filepath.Join(xdg, "opencode")
 	if dir != want {
 		t.Fatalf("expected %q, got %q", want, dir)
 	}
