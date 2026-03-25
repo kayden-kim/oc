@@ -1,54 +1,41 @@
-<h1 align="center">oc</h1>
+<div align="center">
 
-<p align="center">
-  <strong>The OpenCode Launcher</strong><br>
-  Plugin control, session management, and smart port allocation -- all from a single TUI.
-</p>
+# oc
 
-<p align="center">
-  <a href="https://github.com/kayden-kim/oc/releases"><img src="https://img.shields.io/github/v/release/kayden-kim/oc?style=flat-square" alt="Release"></a>
-  <a href="https://github.com/kayden-kim/oc/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License"></a>
-  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=flat-square" alt="Platform">
-</p>
+*A terminal launcher for [opencode](https://opencode.ai) — plugin control, session management, and smart port allocation from a single TUI.*
 
----
+[![Release](https://img.shields.io/github/v/release/kayden-kim/oc?style=flat-square)](https://github.com/kayden-kim/oc/releases)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?style=flat-square&logo=go&logoColor=white)](https://go.dev)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=flat-square)](https://github.com/kayden-kim/oc/releases)
 
-**oc** is a terminal launcher for [opencode](https://opencode.ai).
-Instead of hand-editing JSON every time you want to toggle a plugin or resume a session, `oc` gives you a persistent TUI that handles everything in one place:
+[Features](#features) · [Installation](#installation) · [Quick start](#quick-start) · [Configuration](#configuration) · [TUI controls](#tui-controls) · [Building from source](#building-from-source)
 
-1. **Select plugins** to enable or disable
-2. **Pick a previous session** to continue -- or start fresh
-3. **Auto-allocate a port** from your configured launcher range
-4. **Launch `opencode`** -- and come right back to the TUI when it exits
+</div>
+
+`oc` wraps [opencode](https://opencode.ai) with a persistent terminal UI so you can toggle plugins, pick sessions, and auto-allocate ports without hand-editing JSON. When opencode exits, `oc` returns to the TUI so you can adjust and relaunch — all in the same terminal.
 
 ```
-$ oc --model gpt-4
+ OC | v0.2.4 | [10m ago] Update README.md (ses_2dac2bd3bffebJEw4FXgej3q9) 
+
+ 📋 Choose plugins to enable
+   > ✔  oh-my-opencode
+        superpowers
+
+ 💡 ↑/↓: navigate • space: toggle • enter: confirm • s: sessions • e: edit config • q: quit
 ```
 
-```
-⚡ OC vX.Y.Z - OpenCode launcher
-─────────────────────────────────
-  Choose plugins to enable
-  > [x] oh-my-opencode
-    [ ] superpowers
+## Features
 
-  Session: [5m ago] refactor auth module
+- **Plugin management** — Toggle opencode plugins on/off from the TUI. Changes are surgical: only the `plugin` array lines in `opencode.json` are touched, preserving comments, formatting, and unrelated fields. Writes are atomic (temp file + rename) to prevent corruption.
 
-  space toggle · s session · e edit · enter launch · q quit
-```
+- **Session management** — Browse and resume previous sessions filtered to your current working directory. Sessions are sorted by recency with relative timestamps (`[just now]`, `[5m ago]`, `[3h ago]`). The most recent session is auto-selected on first launch.
 
-## Table of Contents
+- **Port auto-selection** — For multi-instance workflows (tmux, multiple terminals), `oc` picks a free port from a configured range before launching. No more manual port juggling.
 
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Plugin Management](#plugin-management)
-- [Session Management](#session-management)
-- [Port Auto-Selection](#port-auto-selection)
-- [Editor Integration](#editor-integration)
-- [Configuration](#configuration)
-- [TUI Controls](#tui-controls)
-- [Building from Source](#building-from-source)
-- [License](#license)
+- **Editor integration** — Press `e` to edit config files (`~/.oc`, `opencode.json`) without leaving the TUI. Supports custom editor commands via `EDITOR` or the config file.
+
+- **Re-entrant loop** — After opencode exits, `oc` returns to the TUI so you can switch plugins, change sessions, and relaunch without restarting the process.
 
 ## Installation
 
@@ -59,7 +46,7 @@ brew tap kayden-kim/tap
 brew install --cask oc
 ```
 
-If you prefer a manual install, download a pre-built archive from [GitHub Releases](https://github.com/kayden-kim/oc/releases), extract it, and move the binary into your `PATH`.
+Or download a pre-built binary from [GitHub Releases](https://github.com/kayden-kim/oc/releases):
 
 <details>
 <summary><strong>macOS (Apple Silicon)</strong></summary>
@@ -84,25 +71,62 @@ install oc /usr/local/bin/oc
 </details>
 
 <details>
+<summary><strong>Linux (x86_64)</strong></summary>
+
+```bash
+curl -L https://github.com/kayden-kim/oc/releases/download/vX.Y.Z/oc_X.Y.Z_Linux_x86_64.tar.gz -o oc.tar.gz
+tar -xzf oc.tar.gz
+sudo install oc /usr/local/bin/oc
+```
+
+</details>
+
+<details>
 <summary><strong>Windows</strong></summary>
 
 Download `oc_X.Y.Z_Windows_x86_64.zip` from the [releases page](https://github.com/kayden-kim/oc/releases), extract `oc.exe`, and add it to your `PATH`.
 
 </details>
 
-## Quick Start
+## Quick start
 
 ```bash
-oc                  # launch the TUI, pick plugins/session, then run opencode
+oc                  # launch TUI, pick plugins/session, run opencode
 oc --model gpt-4    # all flags are forwarded to opencode
 oc --version        # print version and exit
 ```
 
-After `opencode` exits, `oc` reopens the TUI so you can switch plugins, change sessions, and launch again -- all in the same terminal session.
+> [!TIP]
+> After opencode exits, `oc` reopens the TUI so you can switch plugins, change sessions, and launch again — no restart needed.
 
-## Plugin Management
+All unrecognized flags are forwarded directly to opencode. If you pass session flags (`-s`, `--session`, `-c`, `--continue`) or `--port` on the command line, `oc` respects them and skips the corresponding TUI selection.
 
-`oc` reads the `plugin` array in `~/.config/opencode/opencode.json` and presents each plugin as a toggleable item:
+## Configuration
+
+### `~/.oc`
+
+Optional TOML file that controls `oc` behavior.
+
+```toml
+[oc]
+plugins = ["oh-my-opencode", "superpowers"]
+allow_multiple_plugins = false
+editor = "nvim"
+ports = "55000-55500"
+```
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `plugins` | `string[]` | show all | Plugin whitelist — only listed plugins appear in the TUI. Unlisted plugins are preserved in `opencode.json`. |
+| `allow_multiple_plugins` | `bool` | `false` | Allow enabling multiple plugins at once. When `false`, selecting a plugin deselects all others. |
+| `editor` | `string` | platform default | Fallback editor command when `EDITOR` is unset. |
+| `ports` | `string` | `55500-55555` | Port range for auto-selection (e.g. `"55000-55500"`). |
+
+**Editor resolution order:** `EDITOR` env var → `editor` in `~/.oc` → platform default (`notepad` / `open -t` / `xdg-open`).
+
+### `opencode.json`
+
+`oc` reads and writes `~/.config/opencode/opencode.json` but only touches the `plugin` array. All other fields (schema, MCP servers, etc.) are left unchanged. Enabled plugins appear as plain strings; disabled plugins are commented out with `//`.
 
 ```jsonc
 {
@@ -114,165 +138,50 @@ After `opencode` exits, `oc` reopens the TUI so you can switch plugins, change s
 }
 ```
 
-- Enabled plugins have no prefix. Disabled plugins are commented out with `//`.
-- Toggling in the TUI adds or removes the `//` prefix -- everything else in the file is preserved as-is.
-- Version suffixes are handled transparently: `oh-my-opencode@latest` matches the whitelist entry `oh-my-opencode`.
-- File writes are atomic (write-to-temp-then-rename) to prevent corruption.
+## TUI controls
 
-### Single vs. Multi-Select
-
-By default, only one plugin can be active at a time.
-Enabling a new plugin automatically disables the others.
-Set `allow_multiple_plugins = true` in `~/.oc` to allow multiple plugins simultaneously.
-
-## Session Management
-
-Press **`s`** in the TUI to open the session picker.
-
-`oc` discovers existing sessions by querying `opencode session list`, filters them to the **current working directory**, and sorts by most recently updated:
-
-```
-  Pick a session
-  > Start without session
-    [just now]  debug payment flow
-    [12m ago]   refactor auth module
-    [3h ago]    add user settings page
-    [2025-07-14 09:22:01]  initial setup
-```
-
-**How it works:**
-
-- On first launch, the **latest session** is automatically selected.
-- Your selection persists across TUI iterations within the same `oc` process.
-- Choosing "Start without session" launches `opencode` without a session flag.
-- The selected session is passed as `-s <session_id>` to `opencode`.
-- If you already pass `-s`, `--session`, `-c`, or `--continue` on the command line, the TUI selection is skipped -- your explicit flag takes precedence.
-
-**Relative timestamps** make it easy to find recent sessions:
-
-| Age | Display |
-|-----|---------|
-| < 1 min | `[just now]` |
-| < 1 hour | `[Xm ago]` |
-| Same day | `[Xh ago]` |
-| Older | `[YYYY-MM-DD HH:MM:SS]` |
-
-## Port Auto-Selection
-
-When a port range is configured in `~/.oc` and you do not pass `--port` yourself, `oc` automatically finds an available port before launching `opencode`.
-
-**Why this matters:** In tmux or terminal multiplexer setups, multiple `opencode` instances run side by side. Manual port management does not scale -- `oc` handles it automatically and reuses that same chosen port for launch-time toast requests.
-
-**How it works:**
-
-1. Configure a port range in `~/.oc`:
-   ```toml
-   [oc]
-   ports = "55000-55500"
-   ```
-2. When you hit Enter in the TUI, `oc` shows a launch progress screen with a spinner.
-3. It randomly probes ports in the range (up to 15 attempts) until it finds one that's free.
-4. The selected port is passed as `--port <port>` to `opencode`.
-5. The same port is used for the post-launch `show-toast` request.
-6. If no port is available, the range is not configured, or you already passed `--port`, `oc` launches without adding another port flag.
-
-## Editor Integration
-
-Press **`e`** in the TUI to quickly edit a config file without leaving the launcher:
-
-| # | File |
-|---|------|
-| 1 | `~/.oc` |
-| 2 | `~/.config/opencode/opencode.json` |
-| 3 | `~/.config/opencode/oh-my-opencode.json` (or `.jsonc`) |
-
-After saving, `oc` reloads all configuration and returns to the plugin selector with the updated state.
-
-**Editor resolution order:**
-
-| Priority | Source |
-|----------|--------|
-| 1 | `OC_EDITOR` env var |
-| 2 | `EDITOR` env var |
-| 3 | `editor` field in `~/.oc` |
-| 4 | Platform default (`notepad` / `open -t` / `xdg-open`) |
-
-```bash
-export OC_EDITOR="code --goto"   # VS Code
-export EDITOR="nvim"             # Neovim
-```
-
-## Configuration
-
-### `~/.oc`
-
-Optional TOML file that controls `oc` behavior.
-
-```toml
-[oc]
-plugins = [
-  "oh-my-opencode",
-  "superpowers"
-]
-allow_multiple_plugins = false
-editor = "nvim"
-ports = "55000-55500"
-```
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `plugins` | `string[]` | `nil` (show all) | Whitelist of plugins visible in the TUI. Unlisted plugins are hidden but preserved in `opencode.json`. |
-| `allow_multiple_plugins` | `bool` | `false` | Allow enabling more than one plugin at a time. |
-| `editor` | `string` | platform default | Fallback editor command (used when `OC_EDITOR` and `EDITOR` are unset). |
-| `ports` | `string` | -- | Port range for auto-selection (e.g. `"55000-55500"`). |
-
-> `ports` must be configured inside the `[oc]` section. A top-level `ports = ...` entry is ignored.
-
-### `~/.config/opencode/opencode.json`
-
-Standard opencode config. `oc` only touches the `plugin` array -- all other fields (schema, MCP servers, etc.) are left unchanged.
-
-## TUI Controls
-
-### Plugin Selector (default view)
+### Plugin selector (default view)
 
 | Key | Action |
 |-----|--------|
-| `Up` / `Down` or `j` / `k` | Move cursor |
+| `↑` / `↓` or `j` / `k` | Move cursor |
 | `Space` | Toggle plugin on/off |
-| `Enter` | Save selections and launch `opencode` |
+| `Enter` | Save selections and launch opencode |
 | `s` | Open session picker |
 | `e` | Open config editor picker |
 | `q` / `Esc` / `Ctrl+C` | Quit |
 
-### Session Picker
+### Session picker
 
 | Key | Action |
 |-----|--------|
-| `Up` / `Down` or `j` / `k` | Navigate sessions |
-| `Enter` | Select session |
+| `↑` / `↓` or `j` / `k` | Navigate sessions |
+| `Enter` | Select session and return to plugin selector |
+| `Esc` | Back without changing selection |
+
+Sessions are filtered to the current working directory and sorted by recency. Relative timestamps (`[just now]`, `[5m ago]`, `[3h ago]`) are shown for recent sessions; older sessions display a full timestamp.
+
+### Edit picker
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` or `j` / `k` | Navigate config files |
+| `Enter` | Open file in editor |
 | `Esc` | Back to plugin selector |
 
-### Launch Progress
+After saving, `oc` reloads configuration and returns to the plugin selector with updated state.
 
-Key presses are ignored during port selection. The screen clears automatically when ready.
+## Building from source
 
-## Building from Source
-
-**Prerequisites:** Go 1.21+
+**Prerequisites:** Go 1.26+
 
 ```bash
-git clone https://github.com/kayden-kim/oc.git
-cd oc
+git clone https://github.com/kayden-kim/oc.git && cd oc
 
-make build          # build for current platform  -> ./oc
+make build          # build for current platform → ./oc
 make test           # run tests
 make release-check  # validate .goreleaser.yaml
-make snapshot       # build snapshot release assets into ./dist/
+make snapshot       # build snapshot release into ./dist/
 ```
 
-Tagged releases are published by GitHub Actions through GoReleaser. Push a tag like `v0.1.6` to create the GitHub release and update the Homebrew tap.
-
-## License
-
-[MIT](LICENSE)
+Tagged releases are published automatically by GitHub Actions through [GoReleaser](https://goreleaser.com). Push a tag like `v0.2.4` to create the GitHub release and update the Homebrew tap.

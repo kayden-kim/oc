@@ -36,7 +36,7 @@
 | Change launch progress UI | `internal/tui/launch_model.go` | async message channel and spinner |
 | Change whitelist behavior | `internal/plugin/plugin.go` | `nil` whitelist means show all |
 | Change port behavior | `internal/port/port.go` | `min-max`, 15 random attempts |
-| Change editor resolution | `internal/editor/editor.go` | `OC_EDITOR > EDITOR > ~/.oc > platform default` |
+| Change editor resolution | `internal/editor/editor.go` | `EDITOR > ~/.oc > platform default` |
 | Change runner behavior | `internal/runner/runner.go` | wraps external `opencode` command |
 | Change release automation | `.goreleaser.yaml`, `.github/workflows/release.yml` | tag-driven GitHub Release and Homebrew publishing |
 
