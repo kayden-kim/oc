@@ -33,6 +33,17 @@ func mockKeyMsg(key string) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Text: key}
 }
 
+func openSessionPickerWithHeight(t *testing.T, sessions []SessionItem, session SessionItem, height int) Model {
+	t.Helper()
+
+	model := newTestModelWithSession([]PluginItem{{Name: "plugin-a"}}, nil, sessions, session, true)
+	updatedModel, _ := model.Update(mockKeyMsg("s"))
+	model = updatedModel.(Model)
+	updatedModel, _ = model.Update(tea.WindowSizeMsg{Width: 80, Height: height})
+
+	return updatedModel.(Model)
+}
+
 func TestNewModel_InitialState(t *testing.T) {
 	items := []PluginItem{
 		{Name: "plugin-a", InitiallyEnabled: true},
@@ -491,6 +502,116 @@ func TestUpdate_SessionPickerEscReturnsToPluginList(t *testing.T) {
 	}
 	if cmd != nil {
 		t.Fatal("expected no quit command when closing session picker")
+	}
+}
+
+func TestView_SessionModeBoundsRowsToWindowHeight(t *testing.T) {
+	sessions := []SessionItem{
+		{ID: "ses_1", Title: "Session 1"},
+		{ID: "ses_2", Title: "Session 2"},
+		{ID: "ses_3", Title: "Session 3"},
+	}
+	m := openSessionPickerWithHeight(t, sessions, SessionItem{}, 8)
+	view := m.View().Content
+
+	if !strings.Contains(view, "Start without session") {
+		t.Fatal("expected start-without-session row to remain visible at top")
+	}
+	if !strings.Contains(view, "Session 1") {
+		t.Fatal("expected first session row to be visible in bounded view")
+	}
+	if strings.Contains(view, "Session 2") {
+		t.Fatal("expected rows beyond visible window to be hidden")
+	}
+	if strings.Contains(view, "Session 3") {
+		t.Fatal("expected rows beyond visible window to be hidden")
+	}
+}
+
+func TestUpdate_SessionPickerScrollsToKeepFocusedRowVisible(t *testing.T) {
+	sessions := []SessionItem{
+		{ID: "ses_1", Title: "Session 1"},
+		{ID: "ses_2", Title: "Session 2"},
+		{ID: "ses_3", Title: "Session 3"},
+		{ID: "ses_4", Title: "Session 4"},
+		{ID: "ses_5", Title: "Session 5"},
+	}
+	m := openSessionPickerWithHeight(t, sessions, SessionItem{}, 8)
+
+	for i := 0; i < 5; i++ {
+		updatedModel, _ := m.Update(mockKeyMsg("down"))
+		m = updatedModel.(Model)
+	}
+
+	view := m.View().Content
+	if !strings.Contains(view, "Session 4") || !strings.Contains(view, "Session 5") {
+		t.Fatalf("expected bottom window to include focused rows, got %q", view)
+	}
+	if strings.Contains(view, "Start without session") || strings.Contains(view, "Session 1") {
+		t.Fatalf("expected top rows to scroll out of view, got %q", view)
+	}
+	if m.sessionCursor != 5 {
+		t.Fatalf("expected cursor to land on final row, got %d", m.sessionCursor)
+	}
+}
+
+func TestUpdate_SessionPickerWindowedViewStillAllowsClearingSession(t *testing.T) {
+	sessions := []SessionItem{{ID: "ses_latest", Title: "Latest session"}}
+	m := openSessionPickerWithHeight(t, sessions, sessions[0], 8)
+
+	updatedModel, _ := m.Update(mockKeyMsg("up"))
+	m = updatedModel.(Model)
+	updatedModel, cmd := m.Update(mockKeyMsg("enter"))
+	m = updatedModel.(Model)
+
+	if got := m.SelectedSession(); got.ID != "" {
+		t.Fatalf("expected session to be cleared, got %+v", got)
+	}
+	if cmd != nil {
+		t.Fatal("expected no quit command when clearing session in bounded view")
+	}
+}
+
+func TestView_SessionModeTinyWindowHidesSessionRows(t *testing.T) {
+	sessions := []SessionItem{
+		{ID: "ses_1", Title: "Session 1"},
+		{ID: "ses_2", Title: "Session 2"},
+	}
+	m := openSessionPickerWithHeight(t, sessions, SessionItem{}, 6)
+	view := m.View().Content
+
+	if strings.Contains(view, "Start without session") || strings.Contains(view, "Session 1") || strings.Contains(view, "Session 2") {
+		t.Fatalf("expected tiny window to hide session rows, got %q", view)
+	}
+	if !strings.Contains(view, "🕘 Choose session") || !strings.Contains(view, "esc") {
+		t.Fatalf("expected tiny window to keep session chrome, got %q", view)
+	}
+}
+
+func TestUpdate_SessionPickerResizeKeepsFocusedRowVisible(t *testing.T) {
+	sessions := []SessionItem{
+		{ID: "ses_1", Title: "Session 1"},
+		{ID: "ses_2", Title: "Session 2"},
+		{ID: "ses_3", Title: "Session 3"},
+		{ID: "ses_4", Title: "Session 4"},
+		{ID: "ses_5", Title: "Session 5"},
+	}
+	m := openSessionPickerWithHeight(t, sessions, SessionItem{}, 10)
+
+	for i := 0; i < 5; i++ {
+		updatedModel, _ := m.Update(mockKeyMsg("down"))
+		m = updatedModel.(Model)
+	}
+
+	updatedModel, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 8})
+	m = updatedModel.(Model)
+	view := m.View().Content
+
+	if !strings.Contains(view, "Session 5") {
+		t.Fatalf("expected focused session to remain visible after resize, got %q", view)
+	}
+	if strings.Contains(view, "Start without session") || strings.Contains(view, "Session 1") {
+		t.Fatalf("expected top rows to stay out of view after resize near bottom, got %q", view)
 	}
 }
 

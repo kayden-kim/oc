@@ -46,7 +46,11 @@ type Model struct {
 	editMode             bool
 	sessionMode          bool
 	editTarget           string
+	height               int
+	sessionOffset        int
 }
+
+const sessionChromeHeight = 6
 
 var (
 	defaultTextStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#7A7A7A"))
@@ -166,6 +170,86 @@ func (m Model) sessionAt(cursor int) SessionItem {
 	return m.sessions[cursor-1]
 }
 
+func (m Model) availableSessionRows() int {
+	if m.height <= 0 {
+		return len(m.sessions) + 1
+	}
+
+	rows := m.height - sessionChromeHeight
+	if rows < 0 {
+		return 0
+	}
+
+	return rows
+}
+
+func (m *Model) ensureSessionCursorVisible() {
+	totalRows := len(m.sessions) + 1
+	if totalRows <= 0 {
+		m.sessionOffset = 0
+		return
+	}
+
+	visibleRows := m.availableSessionRows()
+	if visibleRows <= 0 || visibleRows >= totalRows {
+		m.sessionOffset = 0
+		return
+	}
+
+	maxOffset := totalRows - visibleRows
+	if m.sessionOffset > maxOffset {
+		m.sessionOffset = maxOffset
+	}
+	if m.sessionOffset < 0 {
+		m.sessionOffset = 0
+	}
+
+	if m.sessionCursor < m.sessionOffset {
+		m.sessionOffset = m.sessionCursor
+	}
+	if m.sessionCursor >= m.sessionOffset+visibleRows {
+		m.sessionOffset = m.sessionCursor - visibleRows + 1
+	}
+
+	if m.sessionOffset > maxOffset {
+		m.sessionOffset = maxOffset
+	}
+	if m.sessionOffset < 0 {
+		m.sessionOffset = 0
+	}
+}
+
+func (m Model) visibleSessionRange() (int, int) {
+	totalRows := len(m.sessions) + 1
+	if totalRows <= 0 {
+		return 0, 0
+	}
+
+	visibleRows := m.availableSessionRows()
+	if visibleRows <= 0 {
+		return 0, 0
+	}
+	if visibleRows >= totalRows {
+		return 0, totalRows
+	}
+
+	start := m.sessionOffset
+	if start < 0 {
+		start = 0
+	}
+	maxOffset := totalRows - visibleRows
+	if start > maxOffset {
+		start = maxOffset
+	}
+
+	end := start + visibleRows
+	if end > totalRows {
+		end = totalRows
+	}
+
+	return start, end
+}
+
 // NewModel creates a new TUI model with the given plugin items
 func NewModel(items []PluginItem, editChoices []EditChoice, sessions []SessionItem, session SessionItem, version string, allowMultiplePlugins bool) Model {
 	selected := make(map[int]struct{})
@@ -212,6 +296,9 @@ func (m Model) Init() tea.Cmd {
 // Update handles state transitions based on messages
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.height = msg.Height
+		m.ensureSessionCursorVisible()
 	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "up", "k":
@@ -219,6 +306,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.sessionCursor > 0 {
 					m.sessionCursor--
 				}
+				m.ensureSessionCursorVisible()
 			} else if m.editMode {
 				if m.editCursor > 0 {
 					m.editCursor--
@@ -231,6 +319,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.sessionCursor < len(m.sessions) {
 					m.sessionCursor++
 				}
+				m.ensureSessionCursorVisible()
 			} else if m.editMode {
 				if m.editCursor < len(m.editChoices)-1 {
 					m.editCursor++
@@ -267,10 +356,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			for i, item := range m.sessions {
 				if item.ID == m.session.ID {
 					m.sessionCursor = i + 1
+					m.ensureSessionCursorVisible()
 					return m, nil
 				}
 			}
 			m.sessionCursor = 0
+			m.ensureSessionCursorVisible()
 		case "e":
 			if !m.sessionMode && len(m.editChoices) > 0 {
 				m.editMode = true
@@ -325,8 +416,9 @@ func (m Model) View() tea.View {
 
 	if m.sessionMode {
 		s := m.renderTopBadge() + "\n\n" + instructionTextStyle.Render("🕘 Choose session") + "\n\n"
+		start, end := m.visibleSessionRange()
 
-		for i := 0; i <= len(m.sessions); i++ {
+		for i := start; i < end; i++ {
 			cursor := "  "
 			focused := m.sessionCursor == i
 			if focused {
