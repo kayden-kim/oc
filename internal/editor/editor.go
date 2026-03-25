@@ -41,14 +41,12 @@ func OpenWithConfig(path string, configEditor string) error {
 
 // CommandForPath resolves the editor command for a config path.
 func CommandForPath(path string, configEditor string) (Command, error) {
-	for _, key := range []string{"OC_EDITOR", "EDITOR"} {
-		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-			parts, err := splitCommand(value)
-			if err != nil {
-				return Command{}, fmt.Errorf("parse %s: %w", key, err)
-			}
-			return Command{Name: parts[0], Args: append(parts[1:], path)}, nil
+	if value := strings.TrimSpace(os.Getenv("EDITOR")); value != "" {
+		parts, err := splitCommand(value)
+		if err != nil {
+			return Command{}, fmt.Errorf("parse EDITOR: %w", err)
 		}
+		return Command{Name: parts[0], Args: append(parts[1:], path)}, nil
 	}
 
 	if configEditor = strings.TrimSpace(configEditor); configEditor != "" {
