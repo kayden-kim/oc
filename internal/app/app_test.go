@@ -501,6 +501,9 @@ func TestRunWithDeps_EmptyPluginArraySkipsTUI(t *testing.T) {
 	if !r.ran {
 		t.Fatal("runner.Run should be called")
 	}
+	if len(r.args) != 2 || r.args[0] != "--port" || r.args[1] == "" {
+		t.Fatalf("expected default port selection to append --port, got %v", r.args)
+	}
 
 	updated, err := os.ReadFile(configPath)
 	if err != nil {
@@ -1103,8 +1106,8 @@ func TestRunWithDeps_NoPortsConfigNoPortFlag(t *testing.T) {
 	r := &fakeRunner{}
 	deps := baseDepsWithPort(tmp, r)
 	deps.RunTUI = wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
-		if portsRange != "" {
-			t.Fatalf("expected empty ports range, got %q", portsRange)
+		if portsRange != DefaultPortsRange {
+			t.Fatalf("expected default ports range %q, got %q", DefaultPortsRange, portsRange)
 		}
 		if r.runCalls > 0 {
 			return nil, true, "", nil, nil
@@ -1119,9 +1122,36 @@ func TestRunWithDeps_NoPortsConfigNoPortFlag(t *testing.T) {
 	if !r.ran {
 		t.Fatal("runner.Run should be called")
 	}
-	// No --port should be added
 	if len(r.args) != 2 {
-		t.Fatalf("expected 2 args (no --port), got %d: %v", len(r.args), r.args)
+		t.Fatalf("expected no --port to be appended by the TUI stub, got %v", r.args)
+	}
+}
+
+func TestRunWithDeps_DefaultPortRangeWhenNoOcConfig(t *testing.T) {
+	tmp := t.TempDir()
+	setupPortTestFiles(t, tmp,
+		"{\n  \"plugin\": [\n    \"oh-my-opencode\"\n  ]\n}\n",
+		"",
+	)
+
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+	deps.RunTUI = wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
+		if portsRange != DefaultPortsRange {
+			t.Fatalf("expected default ports range %q, got %q", DefaultPortsRange, portsRange)
+		}
+		if r.runCalls > 0 {
+			return nil, true, "", nil, nil
+		}
+		return map[string]bool{"oh-my-opencode": true}, false, "", nil, nil
+	})
+
+	err := RunWithDeps([]string{"--model", "gpt-5"}, deps)
+	if err != nil {
+		t.Fatalf("RunWithDeps returned error: %v", err)
+	}
+	if len(r.args) != 2 {
+		t.Fatalf("expected no --port to be appended by the TUI stub, got %v", r.args)
 	}
 }
 
@@ -1222,8 +1252,8 @@ func TestRunWithDeps_IgnoresLegacyPluginSectionPorts(t *testing.T) {
 	r := &fakeRunner{}
 	deps := baseDepsWithPort(tmp, r)
 	deps.RunTUI = wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
-		if portsRange != "" {
-			t.Fatalf("expected legacy plugin-section ports to be ignored, got %q", portsRange)
+		if portsRange != DefaultPortsRange {
+			t.Fatalf("expected legacy plugin-section ports to fall back to %q, got %q", DefaultPortsRange, portsRange)
 		}
 		if r.runCalls > 0 {
 			return nil, true, "", nil, nil
@@ -1236,7 +1266,7 @@ func TestRunWithDeps_IgnoresLegacyPluginSectionPorts(t *testing.T) {
 		t.Fatalf("RunWithDeps returned error: %v", err)
 	}
 	if len(r.args) != 2 {
-		t.Fatalf("expected no auto-selected port when only legacy plugin ports are configured, got %v", r.args)
+		t.Fatalf("expected no --port to be appended by the TUI stub, got %v", r.args)
 	}
 }
 
@@ -1250,8 +1280,8 @@ func TestRunWithDeps_IgnoresTopLevelPortsConfig(t *testing.T) {
 	r := &fakeRunner{}
 	deps := baseDepsWithPort(tmp, r)
 	deps.RunTUI = wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
-		if portsRange != "" {
-			t.Fatalf("expected top-level ports to be ignored, got %q", portsRange)
+		if portsRange != DefaultPortsRange {
+			t.Fatalf("expected top-level ports to fall back to %q, got %q", DefaultPortsRange, portsRange)
 		}
 		if r.runCalls > 0 {
 			return nil, true, "", nil, nil
@@ -1264,7 +1294,7 @@ func TestRunWithDeps_IgnoresTopLevelPortsConfig(t *testing.T) {
 		t.Fatalf("RunWithDeps returned error: %v", err)
 	}
 	if len(r.args) != 2 {
-		t.Fatalf("expected no auto-selected port when only top-level ports are configured, got %v", r.args)
+		t.Fatalf("expected no --port to be appended by the TUI stub, got %v", r.args)
 	}
 }
 

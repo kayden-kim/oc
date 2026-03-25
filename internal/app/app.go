@@ -60,6 +60,8 @@ type iterationState struct {
 	allowMultiplePlugins bool
 }
 
+const DefaultPortsRange = "55500-55555"
+
 func DefaultDeps(version string) RuntimeDeps {
 	deps := RuntimeDeps{
 		Version:           version,
@@ -196,6 +198,15 @@ func normalizeDeps(deps RuntimeDeps) RuntimeDeps {
 	if deps.SendToast == nil {
 		deps.SendToast = launch.SendToast
 	}
+	if deps.ParsePortRange == nil {
+		deps.ParsePortRange = port.ParseRange
+	}
+	if deps.SelectPort == nil {
+		deps.SelectPort = port.Select
+	}
+	if deps.IsPortAvailable == nil {
+		deps.IsPortAvailable = port.IsAvailable
+	}
 	return deps
 }
 
@@ -262,6 +273,8 @@ func extractRuntimeConfig(args []string, ocConfig *config.OcConfig) ([]string, s
 
 	if launch.HasPortFlag(args) {
 		portsRange = ""
+	} else if portsRange == "" {
+		portsRange = DefaultPortsRange
 	}
 
 	return whitelist, configEditor, portsRange, allowMultiplePlugins
