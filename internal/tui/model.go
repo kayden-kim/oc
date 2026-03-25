@@ -55,10 +55,10 @@ var (
 	cursorSelectedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Bold(true)
 	helpKeyStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Bold(true)
 	sessionContainerStyle = lipgloss.NewStyle()
-	sessionLabelStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Background(lipgloss.Color("#393939")).Bold(true).Padding(0, 1)
+	sessionLabelStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#FF9900")).Bold(true).Padding(0, 1)
 	sessionContentStyle   = lipgloss.NewStyle().Background(lipgloss.Color("#292929")).Padding(0, 1)
-	sessionValueStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Background(lipgloss.Color("#292929")).Bold(true)
-	sessionMetaStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Background(lipgloss.Color("#191919")).Bold(false).Padding(0, 1)
+	sessionValueStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#C0C0C0")).Background(lipgloss.Color("#292929")).Bold(false)
+	sessionMetaStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Background(lipgloss.Color("#393939")).Bold(false).Padding(0, 1)
 )
 
 func (m Model) renderTopBadge() string {
