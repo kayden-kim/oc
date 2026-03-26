@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -38,12 +39,12 @@ func (f *fakeRunner) CheckAvailable() error {
 	return f.checkErr
 }
 
-func (f *fakeRunner) Run(args []string, onStart func()) error {
+func (f *fakeRunner) Run(args []string, onStart func(context.Context)) error {
 	f.ran = true
 	f.runCalls++
 	f.args = append([]string(nil), args...)
 	if f.runErr == nil && onStart != nil {
-		go onStart()
+		go onStart(context.Background())
 	}
 	return f.runErr
 }
@@ -1544,7 +1545,7 @@ func TestRunWithDeps_LogsToastFailureWithoutBreakingLaunch(t *testing.T) {
 
 	r := &fakeRunner{}
 	deps := baseDepsWithPort(tmp, r)
-	deps.SendToast = func(port int, plugins []string) error {
+	deps.SendToast = func(_ context.Context, port int, plugins []string) error {
 		if port != 51234 {
 			t.Fatalf("expected SendToast port 51234, got %d", port)
 		}
@@ -1577,7 +1578,7 @@ func TestRunWithDeps_LogsToastFailureWithoutBreakingLaunch(t *testing.T) {
 		t.Fatalf("failed to read captured stderr: %v", readErr)
 	}
 
-	if !strings.Contains(string(output), "oc: toast failed on port") {
-		t.Fatalf("expected toast failure log, got %q", string(output))
+	if !strings.Contains(string(output), "oc: error: show-toast failed on port") {
+		t.Fatalf("expected show-toast error log, got %q", string(output))
 	}
 }

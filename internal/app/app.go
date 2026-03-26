@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,7 +21,7 @@ import (
 
 type RunnerAPI interface {
 	CheckAvailable() error
-	Run(args []string, onStart func()) error
+	Run(args []string, onStart func(context.Context)) error
 }
 
 type RuntimeDeps struct {
@@ -40,7 +41,7 @@ type RuntimeDeps struct {
 	ParsePortRange    func(string) (int, int, error)
 	SelectPort        func(minPort, maxPort int, checkAvailable func(int) bool, logFn func(attempt, port int, available bool)) port.SelectResult
 	IsPortAvailable   func(int) bool
-	SendToast         func(int, []string) error
+	SendToast         func(context.Context, int, []string) error
 }
 
 type runtimePaths struct {
@@ -339,15 +340,15 @@ func refreshSelectedSession(deps RuntimeDeps, cwd string, current tui.SessionIte
 	return latest
 }
 
-func runOpencode(r RunnerAPI, args []string, portArgs []string, selectedSession tui.SessionItem, selections map[string]bool, sendToast func(int, []string) error) error {
+func runOpencode(r RunnerAPI, args []string, portArgs []string, selectedSession tui.SessionItem, selections map[string]bool, sendToast func(context.Context, int, []string) error) error {
 	args = appendSessionArgs(args, selectedSession)
 	args = append(args, portArgs...)
 	plugins := selectedPluginNames(selections)
 
-	var onStart func()
+	var onStart func(context.Context)
 	if port, ok := launch.Port(args); ok && sendToast != nil {
-		onStart = func() {
-			if err := sendToast(port, plugins); err != nil {
+		onStart = func(ctx context.Context) {
+			if err := sendToast(ctx, port, plugins); err != nil {
 				logToastFailure(port, err)
 			}
 		}
@@ -408,7 +409,7 @@ func resolveOhMyOpencodePath(configDir string, statFn func(string) (os.FileInfo,
 }
 
 func logToastFailure(port int, err error) {
-	fmt.Fprintf(os.Stderr, "oc: toast failed on port %d: %v\n", port, err)
+	fmt.Fprintf(os.Stderr, "oc: error: show-toast failed on port %d: %v\n", port, err)
 }
 
 func appendSessionArgs(args []string, selectedSession tui.SessionItem) []string {
