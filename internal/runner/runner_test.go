@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -213,7 +214,7 @@ func TestRunnerOnStartCallback(t *testing.T) {
 
 	called := make(chan bool, 1)
 	go func() {
-		_ = r.Run(args, func() {
+		_ = r.Run(args, func(context.Context) {
 			called <- true
 		})
 	}()
@@ -226,12 +227,39 @@ func TestRunnerOnStartCallback(t *testing.T) {
 	}
 }
 
+func TestRunnerOnStartContextCancelledAfterExit(t *testing.T) {
+	r := &Runner{Command: os.Args[0]}
+	args := []string{"-test.run=TestHelperProcess", "--"}
+
+	t.Setenv("GO_TEST_PROCESS", "1")
+	t.Setenv("TEST_MODE", "echo")
+
+	cancelled := make(chan struct{}, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- r.Run(args, func(ctx context.Context) {
+			<-ctx.Done()
+			cancelled <- struct{}{}
+		})
+	}()
+
+	select {
+	case <-cancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("onStart context was not cancelled after process exit")
+	}
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("expected no runner error, got %v", err)
+	}
+}
+
 // TestRunnerOnStartSkipsWhenProcessFailsToStart tests that callback is not invoked on exec error.
 func TestRunnerOnStartSkipsWhenProcessFailsToStart(t *testing.T) {
 	r := &Runner{Command: "nonexistent-binary-xyz-12345"}
 
 	called := false
-	err := r.Run([]string{}, func() {
+	err := r.Run([]string{}, func(context.Context) {
 		called = true
 	})
 	if err == nil {

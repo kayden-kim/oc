@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -51,7 +52,8 @@ func (r *Runner) CheckAvailable() error {
 // stdin, stdout, and stderr are connected directly to os.Stdin, os.Stdout, os.Stderr.
 // If the command exits with a non-zero code, an ExitCodeError is returned.
 // If an onStart callback was provided, it is invoked after the process starts successfully.
-func (r *Runner) Run(args []string, onStart func()) error {
+// The callback receives a context that is cancelled when the child process exits.
+func (r *Runner) Run(args []string, onStart func(context.Context)) error {
 	cmd := exec.Command(r.Command, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -61,11 +63,13 @@ func (r *Runner) Run(args []string, onStart func()) error {
 		return err
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	if onStart != nil {
-		go onStart()
+		go onStart(ctx)
 	}
 
 	err := cmd.Wait()
+	cancel()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return &ExitCodeError{Code: exitErr.ExitCode()}
