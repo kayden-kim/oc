@@ -1,6 +1,7 @@
 package launch
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -34,6 +35,8 @@ func TestSendToast_PostsOnceWhenEndpointReady(t *testing.T) {
 	var attempts atomic.Int32
 	server := newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/global/health":
+			fmt.Fprint(w, `{"healthy":true,"version":"test"}`)
 		case "/tui/show-toast":
 			attempts.Add(1)
 			fmt.Fprint(w, "true")
@@ -47,11 +50,12 @@ func TestSendToast_PostsOnceWhenEndpointReady(t *testing.T) {
 		t.Fatalf("failed to parse server port: %v", err)
 	}
 
-	err = sendToastWithConfig(port, []string{"oh-my-opencode"}, toastConfig{
-		clientTimeout:  50 * time.Millisecond,
-		requestTimeout: 50 * time.Millisecond,
-		retryInterval:  10 * time.Millisecond,
-		readyTimeout:   200 * time.Millisecond,
+	err = sendToastWithConfig(context.Background(), port, []string{"oh-my-opencode"}, toastConfig{
+		clientTimeout:     50 * time.Millisecond,
+		requestTimeout:    50 * time.Millisecond,
+		initialRetryDelay: 10 * time.Millisecond,
+		maxRetryDelay:     10 * time.Millisecond,
+		readyTimeout:      200 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("SendToast returned error: %v", err)
@@ -62,11 +66,20 @@ func TestSendToast_PostsOnceWhenEndpointReady(t *testing.T) {
 }
 
 func TestDefaultToastConfig(t *testing.T) {
-	if defaultToastConfig.startupDelay != 5*time.Second {
-		t.Fatalf("expected 5s startup delay, got %s", defaultToastConfig.startupDelay)
+	if defaultToastConfig.clientTimeout != 2*time.Second {
+		t.Fatalf("expected 2s client timeout, got %s", defaultToastConfig.clientTimeout)
 	}
-	if defaultToastConfig.readyTimeout != 10*time.Second {
-		t.Fatalf("expected 10s ready timeout, got %s", defaultToastConfig.readyTimeout)
+	if defaultToastConfig.initialRetryDelay != 250*time.Millisecond {
+		t.Fatalf("expected 250ms initial retry delay, got %s", defaultToastConfig.initialRetryDelay)
+	}
+	if defaultToastConfig.maxRetryDelay != 2*time.Second {
+		t.Fatalf("expected 2s max retry delay, got %s", defaultToastConfig.maxRetryDelay)
+	}
+	if defaultToastConfig.postHealthDelay != 3*time.Second {
+		t.Fatalf("expected 3s post-health delay, got %s", defaultToastConfig.postHealthDelay)
+	}
+	if defaultToastConfig.readyTimeout != 60*time.Second {
+		t.Fatalf("expected 60s ready timeout, got %s", defaultToastConfig.readyTimeout)
 	}
 }
 
@@ -74,6 +87,8 @@ func TestSendToast_RetriesUntilSuccess(t *testing.T) {
 	var attempts atomic.Int32
 	server := newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/global/health":
+			fmt.Fprint(w, `{"healthy":true,"version":"test"}`)
 		case "/tui/show-toast":
 			attempt := attempts.Add(1)
 			if attempt < 3 {
@@ -92,11 +107,12 @@ func TestSendToast_RetriesUntilSuccess(t *testing.T) {
 		t.Fatalf("failed to parse server port: %v", err)
 	}
 
-	err = sendToastWithConfig(port, []string{"oh-my-opencode"}, toastConfig{
-		clientTimeout:  50 * time.Millisecond,
-		requestTimeout: 50 * time.Millisecond,
-		retryInterval:  10 * time.Millisecond,
-		readyTimeout:   200 * time.Millisecond,
+	err = sendToastWithConfig(context.Background(), port, []string{"oh-my-opencode"}, toastConfig{
+		clientTimeout:     50 * time.Millisecond,
+		requestTimeout:    50 * time.Millisecond,
+		initialRetryDelay: 10 * time.Millisecond,
+		maxRetryDelay:     10 * time.Millisecond,
+		readyTimeout:      200 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("SendToast returned error: %v", err)
@@ -118,12 +134,12 @@ func TestSendToast_RetriesUntilServerStartsListening(t *testing.T) {
 	var healthCalls atomic.Int32
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/global/health":
+			healthCalls.Add(1)
+			fmt.Fprint(w, `{"healthy":true,"version":"test"}`)
 		case "/tui/show-toast":
 			attempts.Add(1)
 			fmt.Fprint(w, "true")
-		case "/global/health":
-			healthCalls.Add(1)
-			w.WriteHeader(http.StatusInternalServerError)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -141,11 +157,12 @@ func TestSendToast_RetriesUntilServerStartsListening(t *testing.T) {
 		close(started)
 	}()
 
-	err = sendToastWithConfig(port, []string{"oh-my-opencode"}, toastConfig{
-		clientTimeout:  20 * time.Millisecond,
-		requestTimeout: 20 * time.Millisecond,
-		retryInterval:  10 * time.Millisecond,
-		readyTimeout:   300 * time.Millisecond,
+	err = sendToastWithConfig(context.Background(), port, []string{"oh-my-opencode"}, toastConfig{
+		clientTimeout:     20 * time.Millisecond,
+		requestTimeout:    20 * time.Millisecond,
+		initialRetryDelay: 10 * time.Millisecond,
+		maxRetryDelay:     10 * time.Millisecond,
+		readyTimeout:      300 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("SendToast returned error: %v", err)
@@ -154,8 +171,8 @@ func TestSendToast_RetriesUntilServerStartsListening(t *testing.T) {
 	if got := attempts.Load(); got == 0 {
 		t.Fatal("expected toast attempt after server started")
 	}
-	if got := healthCalls.Load(); got != 0 {
-		t.Fatalf("expected no health probe, got %d", got)
+	if got := healthCalls.Load(); got == 0 {
+		t.Fatal("expected health probe before toast")
 	}
 	if got := attempts.Load(); got < 1 {
 		t.Fatalf("expected at least one toast attempt, got %d", got)
@@ -163,8 +180,8 @@ func TestSendToast_RetriesUntilServerStartsListening(t *testing.T) {
 	if got := attempts.Load(); got > 10 {
 		t.Fatalf("expected bounded retries before success, got %d", got)
 	}
-	if got := attempts.Load(); got < 2 {
-		t.Fatalf("expected at least one failed dial before success, got %d attempts", got)
+	if got := attempts.Load(); got < 1 {
+		t.Fatalf("expected at least one toast attempt after health success, got %d attempts", got)
 	}
 }
 
@@ -172,6 +189,8 @@ func TestSendToast_RetriesWhenEndpointReturnsFalse(t *testing.T) {
 	var attempts atomic.Int32
 	server := newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/global/health":
+			fmt.Fprint(w, `{"healthy":true,"version":"test"}`)
 		case "/tui/show-toast":
 			attempt := attempts.Add(1)
 			if attempt < 3 {
@@ -189,11 +208,12 @@ func TestSendToast_RetriesWhenEndpointReturnsFalse(t *testing.T) {
 		t.Fatalf("failed to parse server port: %v", err)
 	}
 
-	err = sendToastWithConfig(port, []string{"oh-my-opencode"}, toastConfig{
-		clientTimeout:  50 * time.Millisecond,
-		requestTimeout: 50 * time.Millisecond,
-		retryInterval:  10 * time.Millisecond,
-		readyTimeout:   200 * time.Millisecond,
+	err = sendToastWithConfig(context.Background(), port, []string{"oh-my-opencode"}, toastConfig{
+		clientTimeout:     50 * time.Millisecond,
+		requestTimeout:    50 * time.Millisecond,
+		initialRetryDelay: 10 * time.Millisecond,
+		maxRetryDelay:     10 * time.Millisecond,
+		readyTimeout:      200 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("SendToast returned error: %v", err)
@@ -203,13 +223,17 @@ func TestSendToast_RetriesWhenEndpointReturnsFalse(t *testing.T) {
 	}
 }
 
-func TestSendToast_WaitsBeforeFirstAttempt(t *testing.T) {
+func TestSendToast_StopsWhenContextCancelled(t *testing.T) {
 	var attempts atomic.Int32
 	server := newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/global/health":
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprint(w, `{"healthy":false,"version":"test"}`)
 		case "/tui/show-toast":
 			attempts.Add(1)
-			fmt.Fprint(w, "true")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprint(w, "false")
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -220,27 +244,27 @@ func TestSendToast_WaitsBeforeFirstAttempt(t *testing.T) {
 		t.Fatalf("failed to parse server port: %v", err)
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- sendToastWithConfig(port, []string{"oh-my-opencode"}, toastConfig{
-			startupDelay:   40 * time.Millisecond,
-			clientTimeout:  20 * time.Millisecond,
-			requestTimeout: 20 * time.Millisecond,
-			retryInterval:  10 * time.Millisecond,
-			readyTimeout:   200 * time.Millisecond,
+		done <- sendToastWithConfig(ctx, port, []string{"oh-my-opencode"}, toastConfig{
+			clientTimeout:     20 * time.Millisecond,
+			requestTimeout:    20 * time.Millisecond,
+			initialRetryDelay: 10 * time.Millisecond,
+			maxRetryDelay:     10 * time.Millisecond,
+			postHealthDelay:   10 * time.Millisecond,
+			readyTimeout:      200 * time.Millisecond,
 		})
 	}()
 
-	time.Sleep(20 * time.Millisecond)
-	if got := attempts.Load(); got != 0 {
-		t.Fatalf("expected no toast attempt before startup delay, got %d", got)
-	}
+	time.Sleep(25 * time.Millisecond)
+	cancel()
 
-	if err := <-done; err != nil {
-		t.Fatalf("SendToast returned error: %v", err)
+	if err := <-done; err == nil {
+		t.Fatal("expected SendToast to stop with an error after context cancellation")
 	}
-	if got := attempts.Load(); got != 1 {
-		t.Fatalf("expected one toast attempt after startup delay, got %d", got)
+	if got := attempts.Load(); got != 0 {
+		t.Fatalf("expected cancellation during health gating before any toast attempt, got %d attempts", got)
 	}
 }
 
@@ -248,6 +272,8 @@ func TestSendToast_RetriesForFullDeadlineAfterStartupDelay(t *testing.T) {
 	var attempts atomic.Int32
 	server := newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/global/health":
+			fmt.Fprint(w, `{"healthy":true,"version":"test"}`)
 		case "/tui/show-toast":
 			attempts.Add(1)
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -263,18 +289,19 @@ func TestSendToast_RetriesForFullDeadlineAfterStartupDelay(t *testing.T) {
 	}
 
 	start := time.Now()
-	err = sendToastWithConfig(port, []string{"oh-my-opencode"}, toastConfig{
-		startupDelay:   40 * time.Millisecond,
-		clientTimeout:  20 * time.Millisecond,
-		requestTimeout: 20 * time.Millisecond,
-		retryInterval:  10 * time.Millisecond,
-		readyTimeout:   80 * time.Millisecond,
+	err = sendToastWithConfig(context.Background(), port, []string{"oh-my-opencode"}, toastConfig{
+		clientTimeout:     20 * time.Millisecond,
+		requestTimeout:    20 * time.Millisecond,
+		initialRetryDelay: 10 * time.Millisecond,
+		maxRetryDelay:     10 * time.Millisecond,
+		postHealthDelay:   10 * time.Millisecond,
+		readyTimeout:      80 * time.Millisecond,
 	})
 	if err == nil {
 		t.Fatal("expected SendToast to fail after exhausting the retry deadline")
 	}
-	if elapsed := time.Since(start); elapsed < 100*time.Millisecond {
-		t.Fatalf("expected startup delay plus full retry deadline, got %v", elapsed)
+	if elapsed := time.Since(start); elapsed < 80*time.Millisecond {
+		t.Fatalf("expected retry deadline to elapse, got %v", elapsed)
 	}
 	if got := attempts.Load(); got < 2 {
 		t.Fatalf("expected multiple attempts during retry deadline, got %d", got)
@@ -285,6 +312,8 @@ func TestSendToast_ReturnsErrorAfterDeadline(t *testing.T) {
 	var attempts atomic.Int32
 	server := newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/global/health":
+			fmt.Fprint(w, `{"healthy":true,"version":"test"}`)
 		case "/tui/show-toast":
 			attempts.Add(1)
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -299,16 +328,150 @@ func TestSendToast_ReturnsErrorAfterDeadline(t *testing.T) {
 		t.Fatalf("failed to parse server port: %v", err)
 	}
 
-	err = sendToastWithConfig(port, []string{"oh-my-opencode"}, toastConfig{
-		clientTimeout:  50 * time.Millisecond,
-		requestTimeout: 50 * time.Millisecond,
-		retryInterval:  10 * time.Millisecond,
-		readyTimeout:   80 * time.Millisecond,
+	err = sendToastWithConfig(context.Background(), port, []string{"oh-my-opencode"}, toastConfig{
+		clientTimeout:     50 * time.Millisecond,
+		requestTimeout:    50 * time.Millisecond,
+		initialRetryDelay: 10 * time.Millisecond,
+		maxRetryDelay:     10 * time.Millisecond,
+		postHealthDelay:   10 * time.Millisecond,
+		readyTimeout:      80 * time.Millisecond,
 	})
 	if err == nil {
 		t.Fatal("expected SendToast to fail after exhausting the ready timeout")
 	}
 	if got := attempts.Load(); got < 2 {
 		t.Fatalf("expected multiple toast attempts before timeout, got %d", got)
+	}
+}
+
+func TestSendToast_AcceptsEmptySuccessBody(t *testing.T) {
+	server := newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/global/health" {
+			fmt.Fprint(w, `{"healthy":true,"version":"test"}`)
+			return
+		}
+		if r.URL.Path != "/tui/show-toast" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	port, err := strconv.Atoi(loopbackServerPort(server))
+	if err != nil {
+		t.Fatalf("failed to parse server port: %v", err)
+	}
+
+	err = sendToastWithConfig(context.Background(), port, []string{"oh-my-opencode"}, toastConfig{
+		clientTimeout:     50 * time.Millisecond,
+		requestTimeout:    50 * time.Millisecond,
+		initialRetryDelay: 10 * time.Millisecond,
+		maxRetryDelay:     10 * time.Millisecond,
+		postHealthDelay:   10 * time.Millisecond,
+		readyTimeout:      200 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("expected empty 200 body to be accepted, got %v", err)
+	}
+}
+
+func TestSendToast_AcceptsObjectSuccessBody(t *testing.T) {
+	server := newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/global/health" {
+			fmt.Fprint(w, `{"healthy":true,"version":"test"}`)
+			return
+		}
+		if r.URL.Path != "/tui/show-toast" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"ok":true}`)
+	}))
+
+	port, err := strconv.Atoi(loopbackServerPort(server))
+	if err != nil {
+		t.Fatalf("failed to parse server port: %v", err)
+	}
+
+	err = sendToastWithConfig(context.Background(), port, []string{"oh-my-opencode"}, toastConfig{
+		clientTimeout:     50 * time.Millisecond,
+		requestTimeout:    50 * time.Millisecond,
+		initialRetryDelay: 10 * time.Millisecond,
+		maxRetryDelay:     10 * time.Millisecond,
+		postHealthDelay:   10 * time.Millisecond,
+		readyTimeout:      200 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("expected object success body to be accepted, got %v", err)
+	}
+}
+
+func TestSendToast_AcceptsQuotedTrueBody(t *testing.T) {
+	server := newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/global/health" {
+			fmt.Fprint(w, `{"healthy":true,"version":"test"}`)
+			return
+		}
+		if r.URL.Path != "/tui/show-toast" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `"true"`)
+	}))
+
+	port, err := strconv.Atoi(loopbackServerPort(server))
+	if err != nil {
+		t.Fatalf("failed to parse server port: %v", err)
+	}
+
+	err = sendToastWithConfig(context.Background(), port, []string{"oh-my-opencode"}, toastConfig{
+		clientTimeout:     50 * time.Millisecond,
+		requestTimeout:    50 * time.Millisecond,
+		initialRetryDelay: 10 * time.Millisecond,
+		maxRetryDelay:     10 * time.Millisecond,
+		postHealthDelay:   10 * time.Millisecond,
+		readyTimeout:      200 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("expected quoted true body to be accepted, got %v", err)
+	}
+}
+
+func TestSendToast_RejectsObjectFalseBody(t *testing.T) {
+	var attempts atomic.Int32
+	server := newLoopbackServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/global/health" {
+			fmt.Fprint(w, `{"healthy":true,"version":"test"}`)
+			return
+		}
+		if r.URL.Path != "/tui/show-toast" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		attempts.Add(1)
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"accepted":false}`)
+	}))
+
+	port, err := strconv.Atoi(loopbackServerPort(server))
+	if err != nil {
+		t.Fatalf("failed to parse server port: %v", err)
+	}
+
+	err = sendToastWithConfig(context.Background(), port, []string{"oh-my-opencode"}, toastConfig{
+		clientTimeout:     50 * time.Millisecond,
+		requestTimeout:    50 * time.Millisecond,
+		initialRetryDelay: 10 * time.Millisecond,
+		maxRetryDelay:     10 * time.Millisecond,
+		postHealthDelay:   10 * time.Millisecond,
+		readyTimeout:      80 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatal("expected false acceptance body to fail")
+	}
+	if got := attempts.Load(); got < 2 {
+		t.Fatalf("expected retries for false acceptance body, got %d", got)
 	}
 }
