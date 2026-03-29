@@ -98,9 +98,6 @@ func TestLoadForDirAt_AggregatesGlobalStatsAndFiltersSynthetic(t *testing.T) {
 	if report.YesterdayTokens != 85 {
 		t.Fatalf("expected yesterday tokens 85, got %d", report.YesterdayTokens)
 	}
-	if report.CoachingNote != "reasoning elevated, but overall cadence is steady" {
-		t.Fatalf("unexpected coaching note: %q", report.CoachingNote)
-	}
 }
 
 func TestLoadForDirAt_Uses30DaySumsForWeeklyTotals(t *testing.T) {

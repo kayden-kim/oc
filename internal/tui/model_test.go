@@ -911,7 +911,7 @@ func TestView_RendersStyledHelpLine(t *testing.T) {
 }
 
 func TestView_RendersRhythmAndMetricsSections(t *testing.T) {
-	report := stats.Report{CurrentStreak: 6, AgentDays: 17, TodayCost: 1.84, YesterdayCost: 1.50, TodayTokens: 148000, YesterdayTokens: 170000, ThirtyDayCost: 7.42, ThirtyDayTokens: 420000, TodaySessionMinutes: 95, YesterdaySessionMinutes: 120, ThirtyDaySessionMinutes: 765, TodayCodeLines: 150, YesterdayCodeLines: 190, ThirtyDayCodeLines: 1820, WeeklyActiveDays: 4, HighestBurnDay: stats.Day{Cost: 12.34}, HighestCodeDay: stats.Day{CodeLines: 190}, CoachingNote: stats.DefaultCoachingNote(), Days: make([]stats.Day, 30)}
+	report := stats.Report{CurrentStreak: 6, AgentDays: 17, TodayCost: 1.84, YesterdayCost: 1.50, TodayTokens: 148000, YesterdayTokens: 170000, ThirtyDayCost: 7.42, ThirtyDayTokens: 420000, TodaySessionMinutes: 95, YesterdaySessionMinutes: 120, ThirtyDaySessionMinutes: 765, TodayCodeLines: 150, YesterdayCodeLines: 190, ThirtyDayCodeLines: 1820, WeeklyActiveDays: 4, HighestBurnDay: stats.Day{Cost: 12.34}, HighestCodeDay: stats.Day{CodeLines: 190}, Days: make([]stats.Day, 30)}
 	for i := range report.Days {
 		report.Days[i] = stats.Day{Date: time.Now().AddDate(0, 0, -(29 - i)), Tokens: 1000, Cost: 0.5, SessionMinutes: 10, CodeLines: 20}
 	}
@@ -1004,7 +1004,6 @@ func TestRenderOverviewLines_GroupsPostMetricsIntoSections(t *testing.T) {
 		UniqueToolCount:         9,
 		HighestBurnDay:          stats.Day{Date: time.Now().AddDate(0, 0, -1), Cost: 12.34},
 		MostEfficientDay:        stats.Day{Date: time.Now().AddDate(0, 0, -3), Cost: 0.42, Tokens: 25000},
-		CoachingNote:            stats.DefaultCoachingNote(),
 		Days:                    make([]stats.Day, 30),
 	}
 	setRankedUsageField(&report, "TopTools", []usageFixture{{"bash", 21}, {"read", 11}, {"edit", 8}, {"grep", 6}, {"write", 4}, {"glob", 2}})

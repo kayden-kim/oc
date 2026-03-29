@@ -82,9 +82,6 @@ type Report struct {
 	YesterdayCodeLines      int
 	TodayReasoningShare     float64
 	RecentReasoningShare    float64
-	RecentAvgCost           float64
-	RecentAvgTokens         float64
-	CoachingNote            string
 	WeekdayActiveCounts     [7]int
 	WeekdayAgentCounts      [7]int
 	TopTools                []UsageCount
@@ -157,12 +154,6 @@ type windowPartRow struct {
 	CacheWriteTokens int64
 	Summary          bool
 	MessageAgent     string
-}
-
-const defaultCoachingNote = "reasoning elevated, but overall cadence is steady"
-
-func DefaultCoachingNote() string {
-	return defaultCoachingNote
 }
 
 type messageEvent struct {
@@ -635,8 +626,7 @@ func buildReport(days []Day, now time.Time, options Options) Report {
 		report.YesterdaySessionMinutes = yesterday.SessionMinutes
 		report.YesterdayCodeLines = yesterday.CodeLines
 	}
-	report.RecentReasoningShare, report.RecentAvgCost, report.RecentAvgTokens = recentBaselines(days)
-	report.CoachingNote = coachingNote(report)
+	report.RecentReasoningShare = recentReasoningShare(days)
 	return report
 }
 
@@ -718,9 +708,9 @@ func bestStreak(days []Day) int {
 	return best
 }
 
-func recentBaselines(days []Day) (reasoningShareBaseline, avgCost float64, avgTokens float64) {
+func recentReasoningShare(days []Day) float64 {
 	if len(days) <= 1 {
-		return 0, 0, 0
+		return 0
 	}
 	start := len(days) - 8
 	if start < 0 {
@@ -730,44 +720,13 @@ func recentBaselines(days []Day) (reasoningShareBaseline, avgCost float64, avgTo
 	var totalReasoning int64
 	var totalTokens int64
 	for _, day := range window {
-		avgCost += day.Cost
-		avgTokens += float64(day.Tokens)
 		totalReasoning += day.ReasoningTokens
 		totalTokens += day.Tokens
 	}
-	if len(window) > 0 {
-		avgCost /= float64(len(window))
-		avgTokens /= float64(len(window))
-	}
 	if totalTokens > 0 {
-		reasoningShareBaseline = float64(totalReasoning) / float64(totalTokens)
+		return float64(totalReasoning) / float64(totalTokens)
 	}
-	return reasoningShareBaseline, avgCost, avgTokens
-}
-
-func coachingNote(report Report) string {
-	today := report.Days[len(report.Days)-1]
-	todayCostDelta := costDeltaRatio(report)
-	if report.TodayTokens > 0 && report.TodayReasoningShare >= report.RecentReasoningShare+0.10 {
-		return defaultCoachingNote
-	}
-	if todayCostDelta >= 0.25 && report.TodayTokens <= report.YesterdayTokens {
-		return "cost is up from yesterday, but token burn is lower"
-	}
-	if isActiveDay(today) && !isAgentDay(today) {
-		return "active today, but agent usage has room to grow"
-	}
-	if !isActiveDay(today) && report.TodayCost < report.RecentAvgCost && float64(report.TodayTokens) < report.RecentAvgTokens {
-		return "quiet so far today; one focused run keeps the streak alive"
-	}
-	return defaultCoachingNote
-}
-
-func costDeltaRatio(report Report) float64 {
-	if report.YesterdayCost <= 0 {
-		return 0
-	}
-	return (report.TodayCost - report.YesterdayCost) / report.YesterdayCost
+	return 0
 }
 
 func reasoningShare(day Day) float64 {
