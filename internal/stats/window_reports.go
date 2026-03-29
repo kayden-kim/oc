@@ -66,7 +66,7 @@ func buildWindowReport(db *sql.DB, dir string, label string, start time.Time, en
 		model.ReasoningTokens += row.ReasoningTokens
 		totalTokens := row.InputTokens + row.OutputTokens + row.CacheReadTokens + row.CacheWriteTokens + row.ReasoningTokens
 		model.TotalTokens += totalTokens
-		report.Tokens += row.InputTokens + row.OutputTokens + row.ReasoningTokens
+		report.Tokens += totalTokens
 		session.Tokens += totalTokens
 
 		if row.MessageCost > 0 {

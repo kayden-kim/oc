@@ -422,8 +422,8 @@ func TestLoadForDirAt_BuildsTopModelUsage(t *testing.T) {
 		t.Fatalf("loadForDirAt returned error: %v", err)
 	}
 
-	if got := intFieldFromReport(t, report, "TotalModelTokens"); got != 730 {
-		t.Fatalf("expected 730 total model tokens, got %d", got)
+	if got := intFieldFromReport(t, report, "TotalModelTokens"); got != 4570 {
+		t.Fatalf("expected 4570 total model tokens, got %d", got)
 	}
 	if got := intFieldFromReport(t, report, "UniqueModelCount"); got != 12 {
 		t.Fatalf("expected 12 unique models, got %d", got)
@@ -434,18 +434,18 @@ func TestLoadForDirAt_BuildsTopModelUsage(t *testing.T) {
 		t.Fatalf("expected all 12 ranked models, got %d (%v)", len(topModels), topModels)
 	}
 	expected := []usageMetric{
-		{Name: "[OpenAI] gpt-5.4", Amount: 120},
-		{Name: "[Anthropic] claude-sonnet-4.5", Amount: 100},
-		{Name: "[Google] gemini-2.5-pro", Amount: 90},
-		{Name: "[OpenRouter] qwen/qwen3-coder", Amount: 75},
-		{Name: "[Azure] gpt-4.1", Amount: 65},
-		{Name: "[Bedrock] claude-3.7-sonnet", Amount: 55},
-		{Name: "[Vertex] gemini-2.0-flash", Amount: 50},
-		{Name: "[Copilot] gpt-4o", Amount: 45},
-		{Name: "[Copilot] mistral-large", Amount: 40},
-		{Name: "[OpenAI] o4-mini", Amount: 35},
-		{Name: "[Anthropic] claude-haiku-4.5", Amount: 30},
-		{Name: "[Google] gemini-2.0-flash-lite", Amount: 25},
+		{Name: "[OpenAI] gpt-5.4", Amount: 1120},
+		{Name: "[Anthropic] claude-sonnet-4.5", Amount: 900},
+		{Name: "[Google] gemini-2.5-pro", Amount: 690},
+		{Name: "[OpenRouter] qwen/qwen3-coder", Amount: 475},
+		{Name: "[Azure] gpt-4.1", Amount: 265},
+		{Name: "[Bedrock] claude-3.7-sonnet", Amount: 235},
+		{Name: "[Vertex] gemini-2.0-flash", Amount: 210},
+		{Name: "[Copilot] gpt-4o", Amount: 185},
+		{Name: "[Copilot] mistral-large", Amount: 160},
+		{Name: "[OpenAI] o4-mini", Amount: 135},
+		{Name: "[Anthropic] claude-haiku-4.5", Amount: 110},
+		{Name: "[Google] gemini-2.0-flash-lite", Amount: 85},
 	}
 	if !reflect.DeepEqual(topModels, expected) {
 		t.Fatalf("expected top models %v, got %v", expected, topModels)
@@ -713,8 +713,8 @@ func TestLoadForDirAt_ComputesLiteLLMCostWhenStoredCostsMissing(t *testing.T) {
 	if report.TodayCost != expected {
 		t.Fatalf("expected LiteLLM fallback cost %.4f, got %.4f", expected, report.TodayCost)
 	}
-	if report.TodayTokens != 1500 {
-		t.Fatalf("expected visible tokens 1500, got %d", report.TodayTokens)
+	if report.TodayTokens != 1800 {
+		t.Fatalf("expected visible tokens 1800, got %d", report.TodayTokens)
 	}
 }
 
