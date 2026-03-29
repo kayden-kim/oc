@@ -16,6 +16,7 @@ import (
 type PluginItem struct {
 	Name             string
 	InitiallyEnabled bool
+	SourceLabel      string
 }
 
 // EditChoice represents a config file that can be opened from the TUI.
@@ -125,6 +126,7 @@ var (
 	statsTabStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("#999999")).Background(lipgloss.Color("#1F1F1F")).Padding(0, 1)
 	statsTabIndicatorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#60C5F1"))
 	statsTabMetaStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#999999"))
+	dimmedLabelStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#999999"))
 )
 
 func (m Model) renderTopBadge() string {
@@ -862,6 +864,9 @@ func (m Model) View() tea.View {
 		}
 
 		line := fmt.Sprintf("%s%s%s", cursor, checked, p.Name)
+		if p.SourceLabel != "" {
+			line = line + " " + dimmedLabelStyle.Render("["+p.SourceLabel+"]")
+		}
 		line = stylePluginRow(line, focused, selected)
 
 		s += line + "\n"

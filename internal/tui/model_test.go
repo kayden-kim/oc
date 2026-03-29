@@ -1820,3 +1820,79 @@ func TestView_ClearsOnEditSelection(t *testing.T) {
 		t.Fatalf("expected empty view after edit selection, got %q", got)
 	}
 }
+
+func TestView_RenderPluginWithoutSourceLabel(t *testing.T) {
+	view := newTestModel([]PluginItem{{Name: "oh-my-opencode", InitiallyEnabled: true, SourceLabel: ""}}, nil, true).View().Content
+
+	expected := stylePluginRow("> ✔  oh-my-opencode", true, true)
+	if !strings.Contains(view, expected) {
+		t.Fatalf("expected plugin row without source label %q in %q", expected, view)
+	}
+	if strings.Contains(view, "[]") {
+		t.Fatalf("expected no empty brackets for missing source label, got %q", view)
+	}
+}
+
+func TestView_RenderPluginWithUserSourceLabel(t *testing.T) {
+	view := newTestModel([]PluginItem{{Name: "oh-my-opencode", InitiallyEnabled: true, SourceLabel: "User"}}, nil, true).View().Content
+
+	labelPart := "[User]"
+	if !strings.Contains(view, "oh-my-opencode") || !strings.Contains(view, labelPart) {
+		t.Fatalf("expected plugin name and source label [User] in %q", view)
+	}
+	if !strings.Contains(view, dimmedLabelStyle.Render(labelPart)) {
+		t.Fatalf("expected source label to be dimmed-styled, got %q", view)
+	}
+}
+
+func TestView_RenderPluginWithUserProjectSourceLabel(t *testing.T) {
+	view := newTestModel([]PluginItem{{Name: "oh-my-opencode", InitiallyEnabled: true, SourceLabel: "User, Project"}}, nil, true).View().Content
+
+	labelPart := "[User, Project]"
+	if !strings.Contains(view, "oh-my-opencode") || !strings.Contains(view, labelPart) {
+		t.Fatalf("expected plugin name and source label [User, Project] in %q", view)
+	}
+	if !strings.Contains(view, dimmedLabelStyle.Render(labelPart)) {
+		t.Fatalf("expected source label to be dimmed-styled, got %q", view)
+	}
+}
+
+func TestView_SourceLabelPlacedAfterPluginName(t *testing.T) {
+	items := []PluginItem{
+		{Name: "plugin-a", InitiallyEnabled: false, SourceLabel: ""},
+		{Name: "plugin-b", InitiallyEnabled: false, SourceLabel: "User"},
+		{Name: "plugin-c", InitiallyEnabled: false, SourceLabel: "User, Project"},
+	}
+	model := newTestModel(items, nil, true)
+	view := model.View().Content
+	lines := strings.Split(view, "\n")
+
+	// Find lines with each plugin
+	pluginALine := ""
+	pluginBLine := ""
+	pluginCLine := ""
+	for _, line := range lines {
+		if strings.Contains(line, "plugin-a") {
+			pluginALine = line
+		} else if strings.Contains(line, "plugin-b") {
+			pluginBLine = line
+		} else if strings.Contains(line, "plugin-c") {
+			pluginCLine = line
+		}
+	}
+
+	// plugin-a should not have brackets
+	if strings.Contains(pluginALine, "[]") {
+		t.Fatalf("expected plugin-a to have no brackets, got %q", pluginALine)
+	}
+
+	// plugin-b should have [User]
+	if !strings.Contains(pluginBLine, "plugin-b") || !strings.Contains(pluginBLine, "[User]") {
+		t.Fatalf("expected plugin-b to show [User] label, got %q", pluginBLine)
+	}
+
+	// plugin-c should have [User, Project]
+	if !strings.Contains(pluginCLine, "plugin-c") || !strings.Contains(pluginCLine, "[User, Project]") {
+		t.Fatalf("expected plugin-c to show [User, Project] label, got %q", pluginCLine)
+	}
+}
