@@ -871,7 +871,7 @@ func TestRunWithDeps_PassesResolvedEditChoicesToTUI(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	jsoncPath := filepath.Join(configDir, "oh-my-opencode.jsonc")
+	jsoncPath := filepath.Join(configDir, "oh-my-openagent.jsonc")
 	if err := os.WriteFile(jsoncPath, []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -912,8 +912,12 @@ func TestRunWithDeps_PassesResolvedEditChoicesToTUI(t *testing.T) {
 	if gotChoices[1].Path != configPath {
 		t.Fatalf("expected second choice to target opencode.json, got %q", gotChoices[1].Path)
 	}
+	wantOhMyPath := ResolveOhMyOpencodePath(configDir)
+	if gotChoices[2].Path != wantOhMyPath {
+		t.Fatalf("expected third choice to target resolved oh-my config %q, got %q", wantOhMyPath, gotChoices[2].Path)
+	}
 	if gotChoices[2].Path != jsoncPath {
-		t.Fatalf("expected third choice to target oh-my jsonc, got %q", gotChoices[2].Path)
+		t.Fatalf("expected resolver to recognize openagent jsonc path %q, got %q", jsoncPath, gotChoices[2].Path)
 	}
 	if r.ran {
 		t.Fatal("runner should not execute when edit is requested")
@@ -937,7 +941,7 @@ func TestResolveOhMyOpencodePath(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back to jsonc", func(t *testing.T) {
+	t.Run("falls back to opencode jsonc", func(t *testing.T) {
 		configDir := t.TempDir()
 		jsoncPath := filepath.Join(configDir, "oh-my-opencode.jsonc")
 		if err := os.WriteFile(jsoncPath, []byte("{}\n"), 0o644); err != nil {
@@ -949,12 +953,55 @@ func TestResolveOhMyOpencodePath(t *testing.T) {
 		}
 	})
 
+	t.Run("recognizes openagent variants after opencode variants", func(t *testing.T) {
+		configDir := t.TempDir()
+		openagentJSONPath := filepath.Join(configDir, "oh-my-openagent.json")
+		if err := os.WriteFile(openagentJSONPath, []byte("{}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		if got := ResolveOhMyOpencodePath(configDir); got != openagentJSONPath {
+			t.Fatalf("expected %q, got %q", openagentJSONPath, got)
+		}
+	})
+
 	t.Run("defaults to json path", func(t *testing.T) {
 		configDir := t.TempDir()
 		want := filepath.Join(configDir, "oh-my-opencode.json")
 
 		if got := ResolveOhMyOpencodePath(configDir); got != want {
 			t.Fatalf("expected %q, got %q", want, got)
+		}
+	})
+}
+
+func TestDiscoverOhMyConfigPaths(t *testing.T) {
+	t.Run("returns all supported filenames in stable order", func(t *testing.T) {
+		configDir := t.TempDir()
+		want := []string{
+			filepath.Join(configDir, "oh-my-opencode.json"),
+			filepath.Join(configDir, "oh-my-opencode.jsonc"),
+			filepath.Join(configDir, "oh-my-openagent.json"),
+			filepath.Join(configDir, "oh-my-openagent.jsonc"),
+		}
+
+		for _, path := range want {
+			if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		got := DiscoverOhMyConfigPaths(configDir)
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("expected %v, got %v", want, got)
+		}
+	})
+
+	t.Run("returns empty when none exist", func(t *testing.T) {
+		configDir := t.TempDir()
+		got := DiscoverOhMyConfigPaths(configDir)
+		if len(got) != 0 {
+			t.Fatalf("expected no discovered configs, got %v", got)
 		}
 	})
 }
@@ -2240,8 +2287,23 @@ func TestRunWithDeps_LogsToastFailureWithoutBreakingLaunch(t *testing.T) {
 func TestBuildEditChoices_ProjectConfigExists(t *testing.T) {
 	tmp := t.TempDir()
 	configDir := filepath.Join(tmp, ".config", "opencode")
+	projectDir := filepath.Join(tmp, ".opencode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	userOhMyPath := filepath.Join(configDir, "oh-my-opencode.jsonc")
+	projectOhMyPath := filepath.Join(projectDir, "oh-my-openagent.json")
+	if err := os.WriteFile(userOhMyPath, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(projectOhMyPath, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	ocConfigPath := filepath.Join(tmp, ".oc")
-	projectConfigPath := filepath.Join(tmp, ".opencode", "opencode.json")
+	projectConfigPath := filepath.Join(projectDir, "opencode.json")
 
 	paths := runtimePaths{
 		ocConfigPath: ocConfigPath,
@@ -2251,8 +2313,8 @@ func TestBuildEditChoices_ProjectConfigExists(t *testing.T) {
 
 	choices := buildEditChoices(paths, projectConfigPath, true)
 
-	if len(choices) != 4 {
-		t.Fatalf("expected 4 edit choices when project config exists, got %d", len(choices))
+	if len(choices) != 5 {
+		t.Fatalf("expected 5 edit choices when project config and oh-my configs exist, got %d", len(choices))
 	}
 
 	// Verify first 3 choices are unchanged
@@ -2267,22 +2329,35 @@ func TestBuildEditChoices_ProjectConfigExists(t *testing.T) {
 		t.Fatalf("expected second choice label '2) opencode.json file', got %q", choices[1].Label)
 	}
 
-	if !strings.Contains(choices[2].Label, "3) oh-my-opencode.json") {
-		t.Fatalf("expected third choice label to contain '3) oh-my-opencode.json', got %q", choices[2].Label)
+	if choices[2].Path != userOhMyPath {
+		t.Fatalf("expected third choice path %q, got %q", userOhMyPath, choices[2].Path)
 	}
 
-	// Verify 4th choice is present and correct
 	if choices[3].Label != "4) project opencode.json file" {
 		t.Fatalf("expected fourth choice label '4) project opencode.json file', got %q", choices[3].Label)
 	}
 	if choices[3].Path != projectConfigPath {
 		t.Fatalf("expected fourth choice path %q, got %q", projectConfigPath, choices[3].Path)
 	}
+
+	if choices[4].Path != projectOhMyPath {
+		t.Fatalf("expected fifth choice path %q, got %q", projectOhMyPath, choices[4].Path)
+	}
+	if choices[4].Label != "5) project oh-my-openagent.json file" {
+		t.Fatalf("expected fifth choice label '5) project oh-my-openagent.json file', got %q", choices[4].Label)
+	}
 }
 
 func TestBuildEditChoices_ProjectConfigAbsent(t *testing.T) {
 	tmp := t.TempDir()
 	configDir := filepath.Join(tmp, ".config", "opencode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	userOhMyPath := filepath.Join(configDir, "oh-my-openagent.json")
+	if err := os.WriteFile(userOhMyPath, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	ocConfigPath := filepath.Join(tmp, ".oc")
 
 	paths := runtimePaths{
@@ -2295,7 +2370,7 @@ func TestBuildEditChoices_ProjectConfigAbsent(t *testing.T) {
 	choices := buildEditChoices(paths, projectPath, false)
 
 	if len(choices) != 3 {
-		t.Fatalf("expected 3 edit choices when project config is absent, got %d", len(choices))
+		t.Fatalf("expected 3 edit choices when project config is absent and one user oh-my config exists, got %d", len(choices))
 	}
 
 	if choices[0].Label != "1) .oc file" {
@@ -2303,6 +2378,12 @@ func TestBuildEditChoices_ProjectConfigAbsent(t *testing.T) {
 	}
 	if choices[0].Path != ocConfigPath {
 		t.Fatalf("expected first choice path %q, got %q", ocConfigPath, choices[0].Path)
+	}
+	if choices[2].Path != userOhMyPath {
+		t.Fatalf("expected third choice path %q, got %q", userOhMyPath, choices[2].Path)
+	}
+	if choices[2].Label != "3) oh-my-openagent.json file" {
+		t.Fatalf("expected third choice label '3) oh-my-openagent.json file', got %q", choices[2].Label)
 	}
 }
 

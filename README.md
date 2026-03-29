@@ -28,13 +28,13 @@
 
 ## Features
 
-- **Plugin management** — Toggle opencode plugins on/off from the TUI. Changes are surgical: only the `plugin` array lines in `opencode.json` are touched, preserving comments, formatting, and unrelated fields. Writes are atomic (temp file + rename) to prevent corruption.
+- **Plugin management** — Toggle opencode plugins on/off from the TUI across both user-level (`~/.config/opencode/opencode.json`) and project-level (`.opencode/opencode.json`) configs. The list is merged into one view with inline source labels (`[User]`, `[Project]`, `[User, Project]`). Changes are surgical: only the `plugin` array lines are touched, preserving comments, formatting, and unrelated fields. Writes are atomic (temp file + rename) to prevent corruption.
 
 - **Session management** — Browse and resume previous sessions filtered to your current working directory. Sessions are sorted by recency with relative timestamps (`[just now]`, `[5m ago]`, `[3h ago]`). The most recent session is auto-selected on first launch.
 
 - **Port auto-selection** — For multi-instance workflows (tmux, multiple terminals), `oc` picks a free port from a configured range before launching. No more manual port juggling.
 
-- **Editor integration** — Press `c` to edit config files (`~/.oc`, `opencode.json`) without leaving the TUI. Supports custom editor commands via `EDITOR` or the config file.
+- **Editor integration** — Press `c` to edit config files (`~/.oc`, user `opencode.json`, discovered `oh-my-*` configs, and project `opencode.json` when present) without leaving the TUI. `oc` recognizes `oh-my-opencode.json`, `oh-my-opencode.jsonc`, `oh-my-openagent.json`, and `oh-my-openagent.jsonc` from both the user config directory and the project `.opencode` directory. Supports custom editor commands via `EDITOR` or the config file.
 
 - **Re-entrant loop** — After opencode exits, `oc` returns to the TUI so you can switch plugins, change sessions, and relaunch without restarting the process.
 
@@ -139,7 +139,11 @@ ports = "55000-55500"
 
 ### `opencode.json`
 
-`oc` reads and writes `~/.config/opencode/opencode.json` but only touches the `plugin` array. All other fields (schema, MCP servers, etc.) are left unchanged. Enabled plugins appear as plain strings; disabled plugins are commented out with `//`.
+`oc` always reads and writes the user-level config at `~/.config/opencode/opencode.json`, and it also reads the project-level config at `.opencode/opencode.json` when that file exists in the current working directory. The TUI merges plugins from both files into one list and shows inline source labels so you can tell where each entry came from.
+
+If the same plugin name exists in both files, `oc` shows a single merged row as `[User, Project]`. Toggling that row updates both files so they stay in sync. If the project config is missing, `oc` silently falls back to the user config only.
+
+In both files, `oc` only touches the `plugin` array. All other fields (schema, MCP servers, etc.) are left unchanged. Enabled plugins appear as plain strings; disabled plugins are commented out with `//`.
 
 ```jsonc
 {
@@ -183,6 +187,10 @@ Sessions are filtered to the current working directory and sorted by recency. Re
 | `Esc` | Back to plugin selector |
 
 After saving, `oc` reloads configuration and returns to the plugin selector with updated state.
+
+When a project-level `.opencode/opencode.json` exists, the edit picker shows an extra entry for that file. If it does not exist, the picker omits that project `opencode.json` entry.
+
+If `oh-my-opencode.json`, `oh-my-opencode.jsonc`, `oh-my-openagent.json`, or `oh-my-openagent.jsonc` exist in either the user config directory or the project `.opencode` directory, the edit picker includes each discovered file as its own entry.
 
 ## Building from source
 
