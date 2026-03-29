@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -51,9 +52,10 @@ type RuntimeDeps struct {
 }
 
 type runtimePaths struct {
-	ocConfigPath string
-	configDir    string
-	configPath   string
+	ocConfigPath      string
+	configDir         string
+	configPath        string
+	projectConfigPath string
 }
 
 type iterationState struct {
@@ -63,9 +65,25 @@ type iterationState struct {
 	statsConfig          config.StatsConfig
 	content              []byte
 	visible              []config.Plugin
+	userSource           *configSource
+	projectSource        *configSource
+	mergedItems          []tui.PluginItem
+	mergedPlugins        []mergedPlugin
 	configEditor         string
 	effectivePortsRange  string
 	allowMultiplePlugins bool
+}
+
+type configSource struct {
+	path    string
+	content []byte
+	plugins []config.Plugin
+}
+
+type mergedPlugin struct {
+	name      string
+	inUser    bool
+	inProject bool
 }
 
 const DefaultPortsRange = "55500-55555"
@@ -178,14 +196,14 @@ func RunWithDeps(args []string, deps RuntimeDeps) error {
 		}
 		selectedSession = state.selectedSession
 
-		if len(state.visible) == 0 {
+		if len(state.mergedItems) == 0 {
 			portArgs := launch.ResolvePortArgs(state.effectivePortsRange, deps.ParsePortRange, deps.SelectPort, deps.IsPortAvailable, nil)
 			return runOpencode(r, args, portArgs, state.selectedSession, nil, deps.SendToast)
 		}
 
 		selections, cancelled, editTarget, portArgs, nextSession, err := deps.RunTUI(
-			buildPluginItems(state.visible),
-			buildEditChoices(paths),
+			state.mergedItems,
+			buildEditChoices(paths, paths.projectConfigPath, state.projectSource != nil),
 			state.sessions,
 			state.selectedSession,
 			stats.Report{},
@@ -211,7 +229,7 @@ func RunWithDeps(args []string, deps RuntimeDeps) error {
 			continue
 		}
 
-		if err := persistSelections(deps, paths.configPath, state.content, selections); err != nil {
+		if err := persistSelections(deps, state, selections); err != nil {
 			return err
 		}
 
@@ -275,10 +293,22 @@ func normalizeDeps(deps RuntimeDeps) RuntimeDeps {
 
 func resolveRuntimePaths(homeDir string) runtimePaths {
 	return runtimePaths{
-		ocConfigPath: filepath.Join(homeDir, ".oc"),
-		configDir:    filepath.Join(homeDir, ".config", "opencode"),
-		configPath:   filepath.Join(homeDir, ".config", "opencode", "opencode.json"),
+		ocConfigPath:      filepath.Join(homeDir, ".oc"),
+		configDir:         filepath.Join(homeDir, ".config", "opencode"),
+		configPath:        filepath.Join(homeDir, ".config", "opencode", "opencode.json"),
+		projectConfigPath: "", // will be set in loadIterationState with cwd
 	}
+}
+
+func readOptionalConfigContent(deps RuntimeDeps, path string) ([]byte, error) {
+	content, err := deps.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return content, nil
 }
 
 func loadIterationState(args []string, deps RuntimeDeps, paths runtimePaths, selectedSession tui.SessionItem) (iterationState, error) {
@@ -286,6 +316,9 @@ func loadIterationState(args []string, deps RuntimeDeps, paths runtimePaths, sel
 	if err != nil {
 		return iterationState{}, fmt.Errorf("failed to get current directory: %w", err)
 	}
+
+	// Set projectConfigPath now that we have cwd
+	paths.projectConfigPath = filepath.Join(cwd, ".opencode", "opencode.json")
 
 	sessions, err := deps.ListSessions(cwd)
 	if err != nil {
@@ -301,22 +334,55 @@ func loadIterationState(args []string, deps RuntimeDeps, paths runtimePaths, sel
 	}
 
 	whitelist, configEditor, effectivePortsRange, allowMultiplePlugins, statsConfig := extractRuntimeConfig(args, ocConfig)
-	content, err := readConfigContent(deps, paths.configPath)
+	userContent, err := readConfigContent(deps, paths.configPath)
 	if err != nil {
 		return iterationState{}, err
 	}
-	visible, err := visiblePlugins(deps, content, whitelist)
+	projectContent, err := readOptionalConfigContent(deps, paths.projectConfigPath)
 	if err != nil {
-		return iterationState{}, err
+		return iterationState{}, fmt.Errorf("failed to read project opencode.json: %w", err)
 	}
+
+	userPlugins, _, err := deps.ParsePlugins(userContent)
+	if err != nil {
+		return iterationState{}, fmt.Errorf("failed to parse plugins: %w", err)
+	}
+	visible, _ := deps.FilterByWhitelist(userPlugins, whitelist)
+
+	userSource := &configSource{
+		path:    paths.configPath,
+		content: userContent,
+		plugins: visible,
+	}
+
+	var projectSource *configSource
+	if projectContent != nil {
+		projectPlugins, _, parseErr := deps.ParsePlugins(projectContent)
+		if parseErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to parse project config %s: %v\n", paths.projectConfigPath, parseErr)
+		} else {
+			projectVisible, _ := deps.FilterByWhitelist(projectPlugins, whitelist)
+			projectSource = &configSource{
+				path:    paths.projectConfigPath,
+				content: projectContent,
+				plugins: projectVisible,
+			}
+		}
+	}
+
+	mergedItems, mergedPlugins := mergePlugins(userSource, projectSource)
 
 	return iterationState{
 		cwd:                  cwd,
 		sessions:             sessions,
 		selectedSession:      selectedSession,
 		statsConfig:          statsConfig,
-		content:              content,
+		content:              userContent,
 		visible:              visible,
+		userSource:           userSource,
+		projectSource:        projectSource,
+		mergedItems:          mergedItems,
+		mergedPlugins:        mergedPlugins,
 		configEditor:         configEditor,
 		effectivePortsRange:  effectivePortsRange,
 		allowMultiplePlugins: allowMultiplePlugins,
@@ -361,39 +427,134 @@ func readConfigContent(deps RuntimeDeps, configPath string) ([]byte, error) {
 	return content, nil
 }
 
-func visiblePlugins(deps RuntimeDeps, content []byte, whitelist []string) ([]config.Plugin, error) {
-	plugins, _, err := deps.ParsePlugins(content)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse plugins: %w", err)
+func mergePlugins(userSource, projectSource *configSource) (items []tui.PluginItem, merged []mergedPlugin) {
+	if userSource == nil {
+		userSource = &configSource{}
 	}
-	visible, _ := deps.FilterByWhitelist(plugins, whitelist)
-	return visible, nil
+
+	if projectSource == nil {
+		items = make([]tui.PluginItem, 0, len(userSource.plugins))
+		merged = make([]mergedPlugin, 0, len(userSource.plugins))
+		seen := make(map[string]int, len(userSource.plugins))
+		for _, p := range userSource.plugins {
+			if idx, ok := seen[p.Name]; ok {
+				if p.Enabled {
+					items[idx].InitiallyEnabled = true
+				}
+				continue
+			}
+
+			seen[p.Name] = len(items)
+			items = append(items, tui.PluginItem{Name: p.Name, InitiallyEnabled: p.Enabled})
+			merged = append(merged, mergedPlugin{name: p.Name, inUser: true})
+		}
+		return items, merged
+	}
+
+	capacity := len(userSource.plugins) + len(projectSource.plugins)
+	items = make([]tui.PluginItem, 0, capacity)
+	merged = make([]mergedPlugin, 0, capacity)
+	seen := make(map[string]int, capacity)
+
+	for _, p := range userSource.plugins {
+		if idx, ok := seen[p.Name]; ok {
+			merged[idx].inUser = true
+			if p.Enabled {
+				items[idx].InitiallyEnabled = true
+			}
+			continue
+		}
+
+		seen[p.Name] = len(items)
+		items = append(items, tui.PluginItem{Name: p.Name, InitiallyEnabled: p.Enabled})
+		merged = append(merged, mergedPlugin{name: p.Name, inUser: true})
+	}
+
+	for _, p := range projectSource.plugins {
+		if idx, ok := seen[p.Name]; ok {
+			merged[idx].inProject = true
+			if p.Enabled {
+				items[idx].InitiallyEnabled = true
+			}
+			continue
+		}
+
+		seen[p.Name] = len(items)
+		items = append(items, tui.PluginItem{Name: p.Name, InitiallyEnabled: p.Enabled})
+		merged = append(merged, mergedPlugin{name: p.Name, inProject: true})
+	}
+
+	for i, p := range merged {
+		switch {
+		case p.inUser && p.inProject:
+			items[i].SourceLabel = "User, Project"
+		case p.inUser:
+			items[i].SourceLabel = "User"
+		case p.inProject:
+			items[i].SourceLabel = "Project"
+		}
+	}
+
+	return items, merged
 }
 
-func buildPluginItems(visible []config.Plugin) []tui.PluginItem {
-	items := make([]tui.PluginItem, len(visible))
-	for i, p := range visible {
-		items[i] = tui.PluginItem{Name: p.Name, InitiallyEnabled: p.Enabled}
-	}
-	return items
-}
-
-func buildEditChoices(paths runtimePaths) []tui.EditChoice {
-	return []tui.EditChoice{
+func buildEditChoices(paths runtimePaths, projectConfigPath string, projectConfigExists bool) []tui.EditChoice {
+	choices := []tui.EditChoice{
 		{Label: "1) .oc file", Path: paths.ocConfigPath},
 		{Label: "2) opencode.json file", Path: paths.configPath},
 		{Label: "3) oh-my-opencode.json file", Path: ResolveOhMyOpencodePath(paths.configDir)},
 	}
+	if projectConfigExists {
+		choices = append(choices, tui.EditChoice{
+			Label: "4) project opencode.json file",
+			Path:  projectConfigPath,
+		})
+	}
+	return choices
 }
 
-func persistSelections(deps RuntimeDeps, configPath string, content []byte, selections map[string]bool) error {
-	modified, err := deps.ApplySelections(content, selections)
-	if err != nil {
-		return fmt.Errorf("failed to apply selections: %w", err)
+func persistSelections(deps RuntimeDeps, state iterationState, selections map[string]bool) error {
+	userSelections := make(map[string]bool)
+	projectSelections := make(map[string]bool)
+
+	for _, plugin := range state.mergedPlugins {
+		selected, ok := selections[plugin.name]
+		if !ok {
+			continue
+		}
+
+		if plugin.inUser {
+			userSelections[plugin.name] = selected
+		}
+		if plugin.inProject {
+			projectSelections[plugin.name] = selected
+		}
 	}
-	if err := deps.WriteConfigFile(configPath, modified); err != nil {
-		return fmt.Errorf("failed to write config: %w", err)
+
+	if state.projectSource == nil && len(state.mergedPlugins) == 0 {
+		maps.Copy(userSelections, selections)
 	}
+
+	if state.userSource != nil && len(userSelections) > 0 {
+		modified, err := deps.ApplySelections(state.userSource.content, userSelections)
+		if err != nil {
+			return fmt.Errorf("failed to apply user selections: %w", err)
+		}
+		if err := deps.WriteConfigFile(state.userSource.path, modified); err != nil {
+			return fmt.Errorf("failed to write user config: %w", err)
+		}
+	}
+
+	if state.projectSource != nil && len(projectSelections) > 0 {
+		modified, err := deps.ApplySelections(state.projectSource.content, projectSelections)
+		if err != nil {
+			return fmt.Errorf("failed to apply project selections: %w", err)
+		}
+		if err := deps.WriteConfigFile(state.projectSource.path, modified); err != nil {
+			return fmt.Errorf("failed to write project config: %w", err)
+		}
+	}
+
 	return nil
 }
 
