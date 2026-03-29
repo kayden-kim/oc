@@ -27,7 +27,8 @@
 | Task | Location | Notes |
 |------|----------|-------|
 | Understand full runtime flow | `internal/app/app.go` | `RunWithDeps -> TUI -> write config -> run opencode -> re-entry` |
-| Change launcher behavior | `internal/app/app.go` | `RuntimeDeps` is the orchestration seam |
+| Change launcher behavior | `internal/app/app.go` | `RuntimeDeps` is the orchestration seam; dual-config support reads from both user and project paths |
+| Read/write project config | `internal/app/app.go` | `projectConfigPath` in `runtimePaths`, dual-config orchestration in `loadIterationState` |
 | Change CLI entry behavior | `cmd/oc/main.go` | `--version`, top-level error printing, exit-code mapping |
 | Change `~/.oc` semantics | `internal/config/toml_config.go` | `[oc]` table overrides flat keys |
 | Change plugin toggling | `internal/config/jsonc_parser.go` | parser tracks exact plugin line indices |
@@ -64,6 +65,7 @@
 - Plugin enable/disable is modeled as comment toggling with `// `, not array rewriting.
 - `plugin@version` matches whitelist entries by base name via `ComparisonName`.
 - `internal/app/app.go` uses dependency injection through `RuntimeDeps`; follow that seam for new behavior and tests.
+- Dual-config support: `oc` reads plugins from both user-level (`~/.config/opencode/opencode.json`) and project-level (`.opencode/opencode.json` in cwd) config files. Plugins are merged with inline source labels (`[User]`, `[Project]`, `[User, Project]`). Toggle operations sync across both files for duplicate plugins.
 
 ## ANTI-PATTERNS
 - Do not rewrite the full `opencode.json` document when changing plugin state; preserve comments, line endings, and unrelated fields.

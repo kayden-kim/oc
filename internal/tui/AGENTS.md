@@ -11,6 +11,9 @@
 | Core behavior tests | `internal/tui/model_test.go` | navigation, selection, rendering, helpers |
 | Launch-specific tests | `internal/tui/launch_model_test.go` | progress and ready-state coverage |
 
+## DATA TYPES
+- `PluginItem`: Represents a selectable plugin with `Name`, `InitiallyEnabled`, and `SourceLabel` fields. `SourceLabel` is optional and shows config source (`[User]`, `[Project]`, `[User, Project]`). Empty when only user config exists (backward compatible).
+
 ## LOCAL CONVENTIONS
 - Bubble Tea v2 APIs are used explicitly: models return `tea.Model`, views return `tea.View`, key input arrives as `tea.KeyPressMsg`.
 - `Model` owns three modes: default plugin list, session picker, and config edit picker.

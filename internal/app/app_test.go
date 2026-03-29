@@ -2290,26 +2290,422 @@ func TestBuildEditChoices_ProjectConfigAbsent(t *testing.T) {
 		configPath:   filepath.Join(configDir, "opencode.json"),
 		configDir:    configDir,
 	}
+	projectPath := "/tmp/project-opencode.json"
 
-	choices := buildEditChoices(paths, "", false)
+	choices := buildEditChoices(paths, projectPath, false)
 
 	if len(choices) != 3 {
-		t.Fatalf("expected 3 edit choices when project config absent, got %d", len(choices))
+		t.Fatalf("expected 3 edit choices when project config is absent, got %d", len(choices))
 	}
 
-	// Verify all 3 choices are present with correct labels
 	if choices[0].Label != "1) .oc file" {
 		t.Fatalf("expected first choice label '1) .oc file', got %q", choices[0].Label)
 	}
 	if choices[0].Path != ocConfigPath {
 		t.Fatalf("expected first choice path %q, got %q", ocConfigPath, choices[0].Path)
 	}
+}
 
-	if choices[1].Label != "2) opencode.json file" {
-		t.Fatalf("expected second choice label '2) opencode.json file', got %q", choices[1].Label)
+// --- Dual-config integration tests ---
+
+func TestIntegration_FullDualConfigCycle(t *testing.T) {
+	home := t.TempDir()
+	cwd := filepath.Join(home, "workspace")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
 	}
 
-	if !strings.Contains(choices[2].Label, "3) oh-my-opencode.json") {
-		t.Fatalf("expected third choice label to contain '3) oh-my-opencode.json', got %q", choices[2].Label)
+	userPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(userPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	projectPath := filepath.Join(cwd, ".opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(projectPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	userInitial := "{\n  \"plugin\": [\n    \"plugin-a\",\n    \"plugin-b\"\n  ]\n}\n"
+	projectInitial := "{\n  \"plugin\": [\n    // \"plugin-b\",\n    \"plugin-c\"\n  ]\n}\n"
+
+	if err := os.WriteFile(userPath, []byte(userInitial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(projectPath, []byte(projectInitial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	type writeCall struct {
+		path    string
+		content []byte
+	}
+	var writes []writeCall
+
+	r := &fakeRunner{}
+	err := RunWithDeps(nil, RuntimeDeps{
+		NewRunner:   func() RunnerAPI { return r },
+		UserHomeDir: func() (string, error) { return home, nil },
+		Getwd:       func() (string, error) { return cwd, nil },
+		ReadFile:    os.ReadFile,
+		LoadOcConfig: func(string) (*config.OcConfig, error) {
+			return nil, nil
+		},
+		ParsePlugins:      config.ParsePlugins,
+		FilterByWhitelist: DefaultDeps("test").FilterByWhitelist,
+		ListSessions:      func(string) ([]tui.SessionItem, error) { return nil, nil },
+		RunTUI: wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string, _ bool) (map[string]bool, bool, string, []string, error) {
+			if len(items) != 3 {
+				t.Fatalf("expected 3 merged items [A:User, B:User+Project, C:Project], got %d: %#v", len(items), items)
+			}
+			if items[0].Name != "plugin-a" || items[0].SourceLabel != "User" || !items[0].InitiallyEnabled {
+				t.Fatalf("expected first item A enabled from user, got %#v", items[0])
+			}
+			if items[1].Name != "plugin-b" || items[1].SourceLabel != "User, Project" || !items[1].InitiallyEnabled {
+				t.Fatalf("expected second item B enabled (merged from user), got %#v", items[1])
+			}
+			if items[2].Name != "plugin-c" || items[2].SourceLabel != "Project" || !items[2].InitiallyEnabled {
+				t.Fatalf("expected third item C enabled from project, got %#v", items[2])
+			}
+			if r.runCalls == 0 {
+				return map[string]bool{"plugin-a": true, "plugin-b": false, "plugin-c": true}, false, "", nil, nil
+			}
+			return nil, true, "", nil, nil
+		}),
+		ApplySelections: config.ApplySelections,
+		WriteConfigFile: func(path string, content []byte) error {
+			writes = append(writes, writeCall{path, append([]byte(nil), content...)})
+			return nil
+		},
+		OpenEditor: func(string, string) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("RunWithDeps returned error: %v", err)
+	}
+
+	if len(writes) != 2 {
+		t.Fatalf("expected 2 writes (user + project), got %d", len(writes))
+	}
+
+	var userWrite, projectWrite *writeCall
+	for i := range writes {
+		if writes[i].path == userPath {
+			userWrite = &writes[i]
+		} else if writes[i].path == projectPath {
+			projectWrite = &writes[i]
+		}
+	}
+
+	if userWrite == nil || projectWrite == nil {
+		t.Fatalf("expected user and project writes, got paths: %v", writes)
+	}
+
+	userOut := string(userWrite.content)
+	if !strings.Contains(userOut, "\"plugin-a\"") || strings.Contains(userOut, "// \"plugin-a\"") {
+		t.Fatalf("expected plugin-a enabled in user file, got:\n%s", userOut)
+	}
+	if !strings.Contains(userOut, "// \"plugin-b\"") {
+		t.Fatalf("expected plugin-b disabled in user file, got:\n%s", userOut)
+	}
+
+	projectOut := string(projectWrite.content)
+	if !strings.Contains(projectOut, "// \"plugin-b\"") {
+		t.Fatalf("expected plugin-b disabled in project file, got:\n%s", projectOut)
+	}
+	if !strings.Contains(projectOut, "\"plugin-c\"") || strings.Contains(projectOut, "// \"plugin-c\"") {
+		t.Fatalf("expected plugin-c enabled in project file, got:\n%s", projectOut)
+	}
+}
+
+func TestIntegration_ReentrantLoopConsistency(t *testing.T) {
+	home := t.TempDir()
+	cwd := filepath.Join(home, "workspace")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	userPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(userPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	projectPath := filepath.Join(cwd, ".opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(projectPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	userConfig := "{\n  \"plugin\": [\n    \"plugin-a\"\n  ]\n}\n"
+	projectConfig := "{\n  \"plugin\": [\n    \"plugin-b\"\n  ]\n}\n"
+
+	if err := os.WriteFile(userPath, []byte(userConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(projectPath, []byte(projectConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tuiCalls := 0
+	r := &fakeRunner{}
+	err := RunWithDeps(nil, RuntimeDeps{
+		NewRunner:   func() RunnerAPI { return r },
+		UserHomeDir: func() (string, error) { return home, nil },
+		Getwd:       func() (string, error) { return cwd, nil },
+		ReadFile:    os.ReadFile,
+		LoadOcConfig: func(string) (*config.OcConfig, error) {
+			return nil, nil
+		},
+		ParsePlugins:      config.ParsePlugins,
+		FilterByWhitelist: DefaultDeps("test").FilterByWhitelist,
+		ListSessions:      func(string) ([]tui.SessionItem, error) { return nil, nil },
+		RunTUI: wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string, _ bool) (map[string]bool, bool, string, []string, error) {
+			tuiCalls++
+			if tuiCalls == 1 {
+				if len(items) != 2 {
+					t.Fatalf("first TUI call: expected 2 merged items, got %d", len(items))
+				}
+				if items[0].Name != "plugin-a" || items[0].SourceLabel != "User" {
+					t.Fatalf("first TUI call: expected plugin-a with User label, got %#v", items[0])
+				}
+				if items[1].Name != "plugin-b" || items[1].SourceLabel != "Project" {
+					t.Fatalf("first TUI call: expected plugin-b with Project label, got %#v", items[1])
+				}
+				return map[string]bool{"plugin-a": true, "plugin-b": true}, false, "", nil, nil
+			} else if tuiCalls == 2 {
+				if len(items) != 2 {
+					t.Fatalf("second TUI call: expected 2 merged items, got %d", len(items))
+				}
+				if items[0].Name != "plugin-a" || items[0].SourceLabel != "User" || !items[0].InitiallyEnabled {
+					t.Fatalf("second TUI call: expected plugin-a consistent, got %#v", items[0])
+				}
+				if items[1].Name != "plugin-b" || items[1].SourceLabel != "Project" || !items[1].InitiallyEnabled {
+					t.Fatalf("second TUI call: expected plugin-b consistent, got %#v", items[1])
+				}
+				return nil, true, "", nil, nil
+			}
+			t.Fatalf("unexpected TUI call %d", tuiCalls)
+			return nil, false, "", nil, nil
+		}),
+		ApplySelections: config.ApplySelections,
+		WriteConfigFile: func(path string, content []byte) error {
+			return os.WriteFile(path, content, 0o644)
+		},
+		OpenEditor: func(string, string) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("RunWithDeps returned error: %v", err)
+	}
+
+	if tuiCalls != 2 {
+		t.Fatalf("expected TUI to be called twice (launch + re-entry), got %d", tuiCalls)
+	}
+}
+
+func TestIntegration_WhitelistFiltersAcrossBothSources(t *testing.T) {
+	home := t.TempDir()
+	cwd := filepath.Join(home, "workspace")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	userPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(userPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	projectPath := filepath.Join(cwd, ".opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(projectPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	userConfig := "{\n  \"plugin\": [\n    \"plugin-a\",\n    \"plugin-b\"\n  ]\n}\n"
+	projectConfig := "{\n  \"plugin\": [\n    \"plugin-a\",\n    \"plugin-c\"\n  ]\n}\n"
+
+	if err := os.WriteFile(userPath, []byte(userConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(projectPath, []byte(projectConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ocPath := filepath.Join(home, ".oc")
+	if err := os.WriteFile(ocPath, []byte("plugins = [\"plugin-a\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &fakeRunner{}
+	err := RunWithDeps(nil, RuntimeDeps{
+		NewRunner:         func() RunnerAPI { return r },
+		UserHomeDir:       func() (string, error) { return home, nil },
+		Getwd:             func() (string, error) { return cwd, nil },
+		ReadFile:          os.ReadFile,
+		LoadOcConfig:      config.LoadOcConfig,
+		ParsePlugins:      config.ParsePlugins,
+		FilterByWhitelist: DefaultDeps("test").FilterByWhitelist,
+		ListSessions:      func(string) ([]tui.SessionItem, error) { return nil, nil },
+		RunTUI: wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string, _ bool) (map[string]bool, bool, string, []string, error) {
+			if len(items) != 1 {
+				t.Fatalf("expected only whitelisted plugin-a, got %d items: %#v", len(items), items)
+			}
+			if items[0].Name != "plugin-a" || items[0].SourceLabel != "User, Project" {
+				t.Fatalf("expected plugin-a with User,Project label, got %#v", items[0])
+			}
+			if r.runCalls == 0 {
+				return map[string]bool{"plugin-a": true}, false, "", nil, nil
+			}
+			return nil, true, "", nil, nil
+		}),
+		ApplySelections: config.ApplySelections,
+		WriteConfigFile: config.WriteConfigFile,
+		OpenEditor:      func(string, string) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("RunWithDeps returned error: %v", err)
+	}
+
+	if !r.ran {
+		t.Fatal("runner.Run should be called")
+	}
+}
+
+func TestIntegration_EmptyProjectPluginArray(t *testing.T) {
+	home := t.TempDir()
+	cwd := filepath.Join(home, "workspace")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	userPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(userPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	projectPath := filepath.Join(cwd, ".opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(projectPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	userConfig := "{\n  \"plugin\": [\n    \"plugin-a\",\n    \"plugin-b\"\n  ]\n}\n"
+	projectConfig := "{\n  \"plugin\": []\n}\n"
+
+	if err := os.WriteFile(userPath, []byte(userConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(projectPath, []byte(projectConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &fakeRunner{}
+	err := RunWithDeps(nil, RuntimeDeps{
+		NewRunner:         func() RunnerAPI { return r },
+		UserHomeDir:       func() (string, error) { return home, nil },
+		Getwd:             func() (string, error) { return cwd, nil },
+		ReadFile:          os.ReadFile,
+		LoadOcConfig:      func(string) (*config.OcConfig, error) { return nil, nil },
+		ParsePlugins:      config.ParsePlugins,
+		FilterByWhitelist: DefaultDeps("test").FilterByWhitelist,
+		ListSessions:      func(string) ([]tui.SessionItem, error) { return nil, nil },
+		RunTUI: wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string, _ bool) (map[string]bool, bool, string, []string, error) {
+			if len(items) != 2 {
+				t.Fatalf("expected 2 user plugins shown, got %d", len(items))
+			}
+			if items[0].SourceLabel != "User" || items[1].SourceLabel != "User" {
+				t.Fatalf("expected User labels for user-only plugins, got %#v", items)
+			}
+			if r.runCalls == 0 {
+				return map[string]bool{"plugin-a": true, "plugin-b": true}, false, "", nil, nil
+			}
+			return nil, true, "", nil, nil
+		}),
+		ApplySelections: config.ApplySelections,
+		WriteConfigFile: config.WriteConfigFile,
+		OpenEditor:      func(string, string) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("RunWithDeps returned error: %v", err)
+	}
+
+	if !r.ran {
+		t.Fatal("runner.Run should be called")
+	}
+}
+
+func TestIntegration_NoPluginKeyInProjectConfig(t *testing.T) {
+	home := t.TempDir()
+	cwd := filepath.Join(home, "workspace")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	userPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(userPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	projectPath := filepath.Join(cwd, ".opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(projectPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	userConfig := "{\n  \"plugin\": [\n    \"plugin-a\",\n    \"plugin-b\"\n  ]\n}\n"
+	projectConfig := "{\n  \"$schema\": \"https://opencode.ai/config.json\"\n}\n"
+
+	if err := os.WriteFile(userPath, []byte(userConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(projectPath, []byte(projectConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	readPipe, writePipe, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create stderr pipe: %v", err)
+	}
+	originalStderr := os.Stderr
+	os.Stderr = writePipe
+	defer func() {
+		os.Stderr = originalStderr
+	}()
+
+	r := &fakeRunner{}
+	err = RunWithDeps(nil, RuntimeDeps{
+		NewRunner:         func() RunnerAPI { return r },
+		UserHomeDir:       func() (string, error) { return home, nil },
+		Getwd:             func() (string, error) { return cwd, nil },
+		ReadFile:          os.ReadFile,
+		LoadOcConfig:      func(string) (*config.OcConfig, error) { return nil, nil },
+		ParsePlugins:      config.ParsePlugins,
+		FilterByWhitelist: DefaultDeps("test").FilterByWhitelist,
+		ListSessions:      func(string) ([]tui.SessionItem, error) { return nil, nil },
+		RunTUI: wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string, _ bool) (map[string]bool, bool, string, []string, error) {
+			if len(items) != 2 {
+				t.Fatalf("expected 2 user plugins shown on project parse fallback, got %d", len(items))
+			}
+			if items[0].SourceLabel != "" || items[1].SourceLabel != "" {
+				t.Fatalf("expected empty labels on project parse fallback, got %#v", items)
+			}
+			if r.runCalls == 0 {
+				return map[string]bool{"plugin-a": true, "plugin-b": true}, false, "", nil, nil
+			}
+			return nil, true, "", nil, nil
+		}),
+		ApplySelections: config.ApplySelections,
+		WriteConfigFile: config.WriteConfigFile,
+		OpenEditor:      func(string, string) error { return nil },
+	})
+
+	writePipe.Close()
+	stderrOutput, readErr := io.ReadAll(readPipe)
+	readPipe.Close()
+	if readErr != nil {
+		t.Fatalf("failed to read stderr output: %v", readErr)
+	}
+
+	if err != nil {
+		t.Fatalf("RunWithDeps returned error: %v", err)
+	}
+
+	if !r.ran {
+		t.Fatal("runner.Run should be called")
+	}
+
+	if !strings.Contains(string(stderrOutput), "Warning: failed to parse project config") {
+		t.Fatalf("expected parse warning in stderr, got %q", string(stderrOutput))
+	}
+	if !strings.Contains(string(stderrOutput), projectPath) {
+		t.Fatalf("expected warning to include project path %q, got %q", projectPath, string(stderrOutput))
 	}
 }
