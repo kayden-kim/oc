@@ -54,45 +54,47 @@ type Options struct {
 }
 
 type Report struct {
-	Days                    []Day
-	ActiveDays              int
-	AgentDays               int
-	CurrentStreak           int
-	BestStreak              int
-	WeeklyActiveDays        int
-	WeeklyAgentDays         int
-	ThirtyDayCost           float64
-	ThirtyDayTokens         int64
-	ThirtyDaySessionMinutes int
-	ThirtyDayCodeLines      int
-	TotalToolCalls          int
-	TotalSkillCalls         int
-	TotalSubtasks           int
-	UniqueToolCount         int
-	UniqueSkillCount        int
-	UniqueAgentCount        int
-	UniqueModelCount        int
-	TodayCost               float64
-	YesterdayCost           float64
-	TodayTokens             int64
-	YesterdayTokens         int64
-	TotalModelTokens        int64
-	TodaySessionMinutes     int
-	YesterdaySessionMinutes int
-	TodayCodeLines          int
-	YesterdayCodeLines      int
-	TodayReasoningShare     float64
-	RecentReasoningShare    float64
-	WeekdayActiveCounts     [7]int
-	WeekdayAgentCounts      [7]int
-	TopTools                []UsageCount
-	TopSkills               []UsageCount
-	TopAgents               []UsageCount
-	TopModels               []UsageCount
-	HighestBurnDay          Day
-	HighestCodeDay          Day
-	LongestSessionDay       Day
-	MostEfficientDay        Day
+	Days                     []Day
+	ActiveDays               int
+	AgentDays                int
+	CurrentStreak            int
+	BestStreak               int
+	WeeklyActiveDays         int
+	WeeklyAgentDays          int
+	ThirtyDayCost            float64
+	ThirtyDayTokens          int64
+	ThirtyDaySessionMinutes  int
+	ThirtyDayCodeLines       int
+	TotalToolCalls           int
+	TotalSkillCalls          int
+	TotalSubtasks            int
+	UniqueToolCount          int
+	UniqueSkillCount         int
+	UniqueAgentCount         int
+	UniqueModelCount         int
+	TodayCost                float64
+	YesterdayCost            float64
+	TodayTokens              int64
+	YesterdayTokens          int64
+	TotalModelTokens         int64
+	TodaySessionMinutes      int
+	YesterdaySessionMinutes  int
+	TodayCodeLines           int
+	YesterdayCodeLines       int
+	TodayReasoningShare      float64
+	RecentReasoningShare     float64
+	WeekdayActiveCounts      [7]int
+	WeekdayAgentCounts       [7]int
+	TopTools                 []UsageCount
+	TopSkills                []UsageCount
+	TopAgents                []UsageCount
+	TopModels                []UsageCount
+	HighestBurnDay           Day
+	HighestCodeDay           Day
+	LongestSessionDay        Day
+	MostEfficientDay         Day
+	Rolling24hSlots          [48]int64
+	Rolling24hSessionMinutes int
 }
 
 type WindowReport struct {
@@ -629,6 +631,32 @@ func buildReport(days []Day, now time.Time, options Options) Report {
 		report.YesterdayTokens = yesterday.Tokens
 		report.YesterdaySessionMinutes = yesterday.SessionMinutes
 		report.YesterdayCodeLines = yesterday.CodeLines
+	}
+	if len(days) > 1 {
+		nowSlot := now.Hour()*2 + now.Minute()/30
+		today := days[len(days)-1]
+		yesterday := days[len(days)-2]
+		for i := 0; i < 48; i++ {
+			srcSlot := (nowSlot + 1 + i) % 48
+			if srcSlot > nowSlot {
+				report.Rolling24hSlots[i] = yesterday.SlotTokens[srcSlot]
+			} else {
+				report.Rolling24hSlots[i] = today.SlotTokens[srcSlot]
+			}
+		}
+		var rollingEvents []int64
+		cutoff := now.Add(-24 * time.Hour).UnixMilli()
+		for _, evt := range today.eventTimes {
+			if evt >= cutoff {
+				rollingEvents = append(rollingEvents, evt)
+			}
+		}
+		for _, evt := range yesterday.eventTimes {
+			if evt >= cutoff {
+				rollingEvents = append(rollingEvents, evt)
+			}
+		}
+		report.Rolling24hSessionMinutes = computeSessionMinutes(rollingEvents, options.SessionGapMinutes)
 	}
 	report.RecentReasoningShare = recentReasoningShare(days)
 	return report

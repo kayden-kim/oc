@@ -1002,3 +1002,73 @@ func TestSlotTokensBucketing(t *testing.T) {
 		t.Errorf("slot 0: got %d, want 0", today.SlotTokens[0])
 	}
 }
+
+func TestRolling24hSlotAssembly(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	_, err = db.Exec(`
+		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENCODE_DB", dbPath)
+
+	dir := filepath.Join(tmp, "work")
+	insertSession(t, db, "ses_work", dir)
+
+	// Yesterday at 22:00 -> slot 44 (22*2+0)
+	insertMessage(t, db, "msg_y1", "ses_work", time.Date(2026, time.March, 28, 22, 0, 0, 0, time.Local),
+		`{"role":"assistant"}`)
+	insertPart(t, db, "step_y1", "msg_y1", "ses_work",
+		time.Date(2026, time.March, 28, 22, 0, 0, 0, time.Local),
+		`{"type":"step-finish","tokens":{"input":500,"output":500,"reasoning":0}}`)
+
+	// Yesterday at 23:30 -> slot 47 (23*2+1)
+	insertMessage(t, db, "msg_y2", "ses_work", time.Date(2026, time.March, 28, 23, 30, 0, 0, time.Local),
+		`{"role":"assistant"}`)
+	insertPart(t, db, "step_y2", "msg_y2", "ses_work",
+		time.Date(2026, time.March, 28, 23, 30, 0, 0, time.Local),
+		`{"type":"step-finish","tokens":{"input":200,"output":200,"reasoning":0}}`)
+
+	// Today at 10:00 -> slot 20 (10*2+0)
+	insertMessage(t, db, "msg_t1", "ses_work", time.Date(2026, time.March, 29, 10, 0, 0, 0, time.Local),
+		`{"role":"assistant"}`)
+	insertPart(t, db, "step_t1", "msg_t1", "ses_work",
+		time.Date(2026, time.March, 29, 10, 0, 0, 0, time.Local),
+		`{"type":"step-finish","tokens":{"input":300,"output":300,"reasoning":0}}`)
+
+	// "now" is 10:15 on March 29 -> nowSlot = 10*2+0 = 20
+	// Rolling window: slot 21 yesterday through slot 20 today
+	now := time.Date(2026, time.March, 29, 10, 15, 0, 0, time.Local)
+	report, err := loadForDirAtWithOptions(dir, now, Options{SessionGapMinutes: 15})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Output index mapping (nowSlot=20):
+	// output[23] = srcSlot (20+1+23)%48 = 44 -> yesterday (44 > 20) -> 1000
+	// output[26] = srcSlot (20+1+26)%48 = 47 -> yesterday (47 > 20) -> 400
+	// output[47] = srcSlot (20+1+47)%48 = 20 -> today (20 <= 20) -> 600
+
+	if report.Rolling24hSlots[23] != 1000 {
+		t.Errorf("rolling slot 23 (yesterday 22:00): got %d, want 1000", report.Rolling24hSlots[23])
+	}
+	if report.Rolling24hSlots[26] != 400 {
+		t.Errorf("rolling slot 26 (yesterday 23:30): got %d, want 400", report.Rolling24hSlots[26])
+	}
+	if report.Rolling24hSlots[47] != 600 {
+		t.Errorf("rolling slot 47 (today 10:00): got %d, want 600", report.Rolling24hSlots[47])
+	}
+	// Inactive slot should be 0
+	if report.Rolling24hSlots[0] != 0 {
+		t.Errorf("rolling slot 0 (inactive): got %d, want 0", report.Rolling24hSlots[0])
+	}
+}
