@@ -40,6 +40,7 @@ type Day struct {
 	UniqueTools       map[string]struct{}
 	UniqueSkills      map[string]struct{}
 	UniqueAgents      map[string]struct{}
+	SlotTokens        [48]int64
 }
 
 type UsageCount struct {
