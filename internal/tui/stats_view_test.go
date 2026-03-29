@@ -1,11 +1,61 @@
 package tui
 
 import (
+	"regexp"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
+	"charm.land/lipgloss/v2"
 	"github.com/kayden-kim/oc/internal/stats"
 )
+
+var ansiRegexp = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func stripANSI(value string) string {
+	return ansiRegexp.ReplaceAllString(value, "")
+}
+
+func TestRenderStatsTable_RespectsMaxWidth(t *testing.T) {
+	lines := renderStatsTable(
+		[]statsTableColumn{{Header: "name", MinWidth: 4, Style: defaultTextStyle}, {Header: "value", MinWidth: 4, AlignRight: true, Style: statsValueTextStyle}, {Header: "share", MinWidth: 4, AlignRight: true, Style: statsValueTextStyle}},
+		[]statsTableRow{{Cells: []string{"very-long-entry-name", "123456", "99%"}}, {Divider: true}, {Cells: []string{"Total", "123456", "100%"}}},
+	)
+
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 table lines, got %d", len(lines))
+	}
+	for i, line := range lines {
+		plain := stripANSI(line)
+		if width := utf8.RuneCountInString(strings.TrimPrefix(plain, "    ")); width > statsTableMaxWidth {
+			t.Fatalf("expected line %d width <= %d, got %d in %q", i, statsTableMaxWidth, width, plain)
+		}
+	}
+	if !strings.Contains(stripANSI(lines[0]), "name") || !strings.Contains(stripANSI(lines[0]), "value") || !strings.Contains(stripANSI(lines[0]), "share") {
+		t.Fatalf("expected header row, got %q", stripANSI(lines[0]))
+	}
+	if !strings.Contains(stripANSI(lines[1]), strings.Repeat("┈", 10)) {
+		t.Fatalf("expected header divider, got %q", stripANSI(lines[1]))
+	}
+}
+
+func TestRenderStatsTable_UsesDisplayWidthForWideGlyphs(t *testing.T) {
+	lines := renderStatsTable(
+		[]statsTableColumn{{Header: "name", MinWidth: 4, Style: defaultTextStyle}, {Header: "value", MinWidth: 4, AlignRight: true, Style: statsValueTextStyle}},
+		[]statsTableRow{{Cells: []string{"모델이름이아주길어요테스트모델이름이아주길어요테스트모델이름이아주길어요테스트", "123456"}}, {Cells: []string{"🙂emoji-wide-name-with-extra-extra-extra-width", "42"}}},
+	)
+
+	for i, line := range lines {
+		plain := stripANSI(line)
+		if width := lipgloss.Width(strings.TrimPrefix(plain, "    ")); width > statsTableMaxWidth {
+			t.Fatalf("expected display width <= %d, got %d for line %d: %q", statsTableMaxWidth, width, i, plain)
+		}
+	}
+	if !strings.Contains(stripANSI(lines[2]), "…") && !strings.Contains(stripANSI(lines[3]), "…") {
+		t.Fatalf("expected truncation ellipsis for wide content, got %q", strings.Join([]string{stripANSI(lines[2]), stripANSI(lines[3])}, " | "))
+	}
+}
 
 func TestFormatSummaryTokensPerHour(t *testing.T) {
 	tests := []struct {

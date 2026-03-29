@@ -954,11 +954,11 @@ func TestView_RendersRhythmAndMetricsSections(t *testing.T) {
 	if !strings.Contains(view, "\n\n") || !strings.Contains(view, "Metrics") {
 		t.Fatalf("expected Metrics section, got %q", view)
 	}
-	if !strings.Contains(view, defaultTextStyle.Render("  tokens")) || !strings.Contains(view, defaultTextStyle.Render("today")) || !strings.Contains(view, defaultTextStyle.Render("peak day")) || !strings.Contains(view, defaultTextStyle.Render("30d total")) {
+	if strings.Contains(view, defaultTextStyle.Render("metric")) || !strings.Contains(view, defaultTextStyle.Render("today")) || !strings.Contains(view, defaultTextStyle.Render("peak day")) || !strings.Contains(view, defaultTextStyle.Render("30d total")) {
 		t.Fatalf("expected metrics table header, got %q", view)
 	}
-	if !strings.Contains(view, metricsDividerLine()) {
-		t.Fatalf("expected metrics divider line, got %q", view)
+	if strings.Count(view, metricsDividerLine()) < 2 {
+		t.Fatalf("expected header and section divider lines, got %q", view)
 	}
 	todayAccent := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF9900"))
 	for _, row := range []struct{ label, today, peak, total string }{
@@ -969,16 +969,19 @@ func TestView_RendersRhythmAndMetricsSections(t *testing.T) {
 		{"lines", "150 (79%)", "190 (" + report.HighestCodeDay.Date.Format("01-02") + ")", "1.8k"},
 		{"line/h", "95 (79%)", "120 (" + report.Days[0].Date.Format("01-02") + ")", "143"},
 	} {
-		if !strings.Contains(view, defaultTextStyle.Render("  "+row.label)) || !strings.Contains(view, todayAccent.Render(row.today)) || !strings.Contains(view, statsValueTextStyle.Render(row.peak)) || !strings.Contains(view, statsValueTextStyle.Render(row.total)) {
+		if !strings.Contains(view, defaultTextStyle.Render(row.label)) || !strings.Contains(view, todayAccent.Render(row.today)) || !strings.Contains(view, statsValueTextStyle.Render(row.peak)) || !strings.Contains(view, statsValueTextStyle.Render(row.total)) {
 			t.Fatalf("expected metrics row for %s, got %q", row.label, view)
 		}
 	}
 	if !strings.Contains(view, "(15%)") || !strings.Contains(view, "(92%)") {
 		t.Fatalf("expected top-based ratios, got %q", view)
 	}
-	if !(strings.Index(view, defaultTextStyle.Render("  lines")) < strings.Index(view, metricsDividerLine()) &&
-		strings.Index(view, metricsDividerLine()) < strings.Index(view, defaultTextStyle.Render("  tok/h")) &&
-		strings.Index(view, defaultTextStyle.Render("  tok/h")) < strings.Index(view, defaultTextStyle.Render("  line/h"))) {
+	firstDivider := strings.Index(view, metricsDividerLine())
+	secondDivider := strings.LastIndex(view, metricsDividerLine())
+	if !(strings.Index(view, defaultTextStyle.Render("lines")) < secondDivider &&
+		firstDivider < secondDivider &&
+		secondDivider < strings.Index(view, defaultTextStyle.Render("tok/h")) &&
+		strings.Index(view, defaultTextStyle.Render("tok/h")) < strings.Index(view, defaultTextStyle.Render("line/h"))) {
 		t.Fatalf("expected divider between summary and rate metrics, got %q", view)
 	}
 	if strings.Contains(view, "This Week") {
@@ -1041,10 +1044,11 @@ func TestRenderOverviewLines_GroupsPostMetricsIntoSections(t *testing.T) {
 
 	model := NewModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{}, testVersion, true)
 	content := strings.Join(model.renderOverviewLines(), "\n")
+	plainContent := stripANSI(content)
 
 	for _, section := range []string{"Trends", "Activity - Models (0)", "Activity - Agents (3)", "Activity - Skills (2)", "Activity - Tools (9)"} {
-		if !strings.Contains(content, section) {
-			t.Fatalf("expected %s section in overview, got %q", section, content)
+		if !strings.Contains(plainContent, section) {
+			t.Fatalf("expected %s section in overview, got %q", section, plainContent)
 		}
 	}
 	if strings.Contains(content, "Extremes") {
@@ -1065,9 +1069,9 @@ func TestRenderOverviewLines_GroupsPostMetricsIntoSections(t *testing.T) {
 			t.Fatalf("expected activity summary snippet %q to be removed, got %q", snippet, content)
 		}
 	}
-	for _, snippet := range []string{"bash", "read", "write", "explore", "oracle", "debug", "writing-plans", "test-driven-development", "Total", "100%", "(50%)", "(64%)"} {
-		if !strings.Contains(content, snippet) {
-			t.Fatalf("expected ranked activity snippet %q, got %q", snippet, content)
+	for _, snippet := range []string{"bash", "read", "write", "explore", "oracle", "debug", "writing-plans", "test-driven-development", "Total", "100%", "50%", "64%"} {
+		if !strings.Contains(plainContent, snippet) {
+			t.Fatalf("expected ranked activity snippet %q, got %q", snippet, plainContent)
 		}
 	}
 	for _, snippet := range []string{"• 1 bash ", "• 2 read ", "• 1 explore ", "• 1 writing-plans "} {
@@ -1080,8 +1084,8 @@ func TestRenderOverviewLines_GroupsPostMetricsIntoSections(t *testing.T) {
 			t.Fatalf("expected hours snippet %q, got %q", snippet, content)
 		}
 	}
-	if !strings.Contains(content, metricsDividerLine()) {
-		t.Fatalf("expected metrics divider line in overview, got %q", content)
+	if strings.Count(content, metricsDividerLine()) < 2 {
+		t.Fatalf("expected header and section divider lines in overview, got %q", content)
 	}
 	if !strings.Contains(content, renderSubSectionHeader("Metrics", todaySectionTitleStyle)) {
 		t.Fatalf("expected Metrics section in overview, got %q", content)
@@ -1089,16 +1093,18 @@ func TestRenderOverviewLines_GroupsPostMetricsIntoSections(t *testing.T) {
 	if strings.Contains(content, renderSubSectionHeader("Today", todaySectionTitleStyle)) {
 		t.Fatalf("did not expect Today section in overview, got %q", content)
 	}
-	if !strings.Contains(content, defaultTextStyle.Render("  tokens")) || !strings.Contains(content, defaultTextStyle.Render("  tok/h")) || !strings.Contains(content, defaultTextStyle.Render("  cost")) || !strings.Contains(content, defaultTextStyle.Render("  hours")) || !strings.Contains(content, defaultTextStyle.Render("  lines")) || !strings.Contains(content, defaultTextStyle.Render("  line/h")) {
+	if !strings.Contains(content, defaultTextStyle.Render("tokens")) || !strings.Contains(content, defaultTextStyle.Render("tok/h")) || !strings.Contains(content, defaultTextStyle.Render("cost")) || !strings.Contains(content, defaultTextStyle.Render("hours")) || !strings.Contains(content, defaultTextStyle.Render("lines")) || !strings.Contains(content, defaultTextStyle.Render("line/h")) {
 		t.Fatalf("expected metrics table rows, got %q", content)
 	}
 	if !strings.Contains(content, defaultTextStyle.Render("• lines ")) {
 		t.Fatalf("expected lines trend row, got %q", content)
 	}
-	if !(strings.Index(content, defaultTextStyle.Render("  lines")) < strings.Index(content, metricsDividerLine()) &&
-		strings.Index(content, metricsDividerLine()) < strings.Index(content, defaultTextStyle.Render("  tok/h")) &&
-		strings.Index(content, defaultTextStyle.Render("  tok/h")) < strings.Index(content, defaultTextStyle.Render("  line/h"))) {
-		t.Fatalf("expected divider between summary and rate metrics in overview, got %q", content)
+	metricsSection := strings.SplitN(strings.SplitN(plainContent, "Metrics", 2)[1], "Trends", 2)[0]
+	if !(strings.Count(metricsSection, strings.Repeat("┈", 10)) >= 2 &&
+		strings.Index(metricsSection, "lines") < strings.LastIndex(metricsSection, strings.Repeat("┈", 10)) &&
+		strings.LastIndex(metricsSection, strings.Repeat("┈", 10)) < strings.Index(metricsSection, "tok/h") &&
+		strings.Index(metricsSection, "tok/h") < strings.Index(metricsSection, "line/h")) {
+		t.Fatalf("expected divider between summary and rate metrics in overview, got %q", metricsSection)
 	}
 	for _, snippet := range []string{"• high burn ", "• longest day ", "• code peak ", "• efficient day "} {
 		if strings.Contains(content, snippet) {
@@ -1223,11 +1229,21 @@ func TestRenderOverviewLines_IncludesModelActivitySection(t *testing.T) {
 	model := NewModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{}, testVersion, true)
 	content := strings.Join(model.renderOverviewLines(), "\n")
 	modelSection := strings.SplitN(strings.SplitN(content, renderSubSectionHeader("Activity - Models (12)", habitSectionTitleStyle), 2)[1], renderSubSectionHeader("Activity - Agents (3)", habitSectionTitleStyle), 2)[0]
+	plainContent := stripANSI(content)
+	plainModelSection := stripANSI(modelSection)
 
-	for _, snippet := range []string{"Activity - Models (12)", "730", "[OpenAI] gpt-5.4", "[Anthropic] claude-haiku-4.5", "Total", "100%", "(16%)"} {
-		if !strings.Contains(content, snippet) {
-			t.Fatalf("expected model activity snippet %q, got %q", snippet, content)
+	for _, snippet := range []string{"Activity - Models (12)", "730", "[OpenAI] gpt-5.4", "[Anthropic] claude-haiku-4.5", "Total", "100%", "16%"} {
+		if !strings.Contains(plainContent, snippet) {
+			t.Fatalf("expected model activity snippet %q, got %q", snippet, plainContent)
 		}
+	}
+	for _, snippet := range []string{"tokens", "share"} {
+		if !strings.Contains(plainModelSection, snippet) {
+			t.Fatalf("expected model activity table header %q, got %q", snippet, plainModelSection)
+		}
+	}
+	if strings.Contains(plainModelSection, "model") || strings.Contains(plainModelSection, "bar") {
+		t.Fatalf("expected first header removed and bar merged into share, got %q", plainModelSection)
 	}
 	for _, snippet := range []string{"• tokens ", "• unique ", "• 1 [OpenAI] gpt-5.4", "• 10 [OpenAI] o4-mini"} {
 		if strings.Contains(modelSection, snippet) {
@@ -1279,32 +1295,30 @@ func TestRenderOverviewLines_OrdersActivitySectionsAsRequested(t *testing.T) {
 }
 
 func TestRenderUsageLines_AlignsBarsToLongestLabel(t *testing.T) {
-	lines := renderUsageLines([]stats.UsageCount{
+	lines := renderUsageLines("count", []stats.UsageCount{
 		{Name: "bash", Count: 21},
 		{Name: "very-long-tool-name", Count: 11},
 		{Name: "go", Count: 8},
 	}, 42)
 
-	if len(lines) != 4 {
-		t.Fatalf("expected 4 usage lines, got %d", len(lines))
+	if len(lines) != 7 {
+		t.Fatalf("expected 7 usage lines, got %d", len(lines))
 	}
-
-	shortNeedle := defaultTextStyle.Render("• bash ") + defaultTextStyle.Render(strings.Repeat(" ", len("• very-long-tool-name ")-len("• bash "))) + statsValueTextStyle.Render("████████ 21 (50%)")
-	longNeedle := defaultTextStyle.Render("• very-long-tool-name ") + statsValueTextStyle.Render("████···· 11 (26%)")
-	thirdNeedle := defaultTextStyle.Render("• go ") + defaultTextStyle.Render(strings.Repeat(" ", len("• very-long-tool-name ")-len("• go "))) + statsValueTextStyle.Render("███····· 8 (19%)")
-	totalNeedle := defaultTextStyle.Render("• Total ") + defaultTextStyle.Render(strings.Repeat(" ", len("• very-long-tool-name ")-len("• Total "))) + statsValueTextStyle.Render("········ 42 (100%)")
-
-	if lines[0] != bulletLine(shortNeedle) {
-		t.Fatalf("expected aligned first usage line %q, got %q", bulletLine(shortNeedle), lines[0])
+	plain := make([]string, len(lines))
+	for i, line := range lines {
+		plain[i] = stripANSI(line)
 	}
-	if lines[1] != bulletLine(longNeedle) {
-		t.Fatalf("expected aligned second usage line %q, got %q", bulletLine(longNeedle), lines[1])
+	if strings.Contains(plain[0], "tool") || strings.Contains(plain[0], "bar") || !strings.Contains(plain[0], "count") || !strings.Contains(plain[0], "share") {
+		t.Fatalf("expected usage table header, got %q", plain[0])
 	}
-	if lines[2] != bulletLine(thirdNeedle) {
-		t.Fatalf("expected aligned third usage line %q, got %q", bulletLine(thirdNeedle), lines[2])
+	if !strings.Contains(plain[2], "bash") || !strings.Contains(plain[2], "████████ 50%") || !strings.Contains(plain[2], "21") {
+		t.Fatalf("expected first usage row, got %q", plain[2])
 	}
-	if lines[3] != bulletLine(totalNeedle) {
-		t.Fatalf("expected aligned total usage line %q, got %q", bulletLine(totalNeedle), lines[3])
+	if !strings.Contains(plain[3], "very-long-tool-name") || !strings.Contains(plain[3], "████···· 26%") {
+		t.Fatalf("expected second usage row, got %q", plain[3])
+	}
+	if !strings.Contains(plain[6], "Total") || !strings.Contains(plain[6], "········ 100%") || !strings.Contains(plain[6], "42") {
+		t.Fatalf("expected total usage row, got %q", plain[6])
 	}
 }
 
@@ -1317,19 +1331,23 @@ func TestRenderUsageLines_GroupsRemainderIntoOthersAfterTop15(t *testing.T) {
 		total += int64(count)
 	}
 
-	lines := renderUsageLines(items, total)
+	lines := renderUsageLines("count", items, total)
 
-	if len(lines) != 17 {
-		t.Fatalf("expected 17 usage lines including others and total, got %d", len(lines))
+	if len(lines) != 20 {
+		t.Fatalf("expected 20 usage lines including header/dividers/others/total, got %d", len(lines))
 	}
-	if !strings.Contains(lines[15], "others") {
-		t.Fatalf("expected others row at index 15, got %q", lines[15])
+	plain := make([]string, len(lines))
+	for i, line := range lines {
+		plain[i] = stripANSI(line)
 	}
-	if !strings.Contains(lines[15], "9") || !strings.Contains(lines[15], "(4%)") {
-		t.Fatalf("expected others row to aggregate hidden items, got %q", lines[15])
+	if !strings.Contains(plain[17], "others") {
+		t.Fatalf("expected others row at index 17, got %q", plain[17])
 	}
-	if !strings.Contains(lines[16], "204") || !strings.Contains(lines[16], "100%") {
-		t.Fatalf("expected total row to remain at the end, got %q", lines[16])
+	if !strings.Contains(plain[17], "9") || !strings.Contains(plain[17], "4%") {
+		t.Fatalf("expected others row to aggregate hidden items, got %q", plain[17])
+	}
+	if !strings.Contains(plain[19], "204") || !strings.Contains(plain[19], "100%") {
+		t.Fatalf("expected total row to remain at the end, got %q", plain[19])
 	}
 }
 
@@ -1339,70 +1357,92 @@ func TestRenderUsageLines_AlignsOthersAndTotalToLongestLabel(t *testing.T) {
 		items = append(items, stats.UsageCount{Name: fmt.Sprintf("t%d", i+1), Count: 20 - i})
 	}
 
-	lines := renderUsageLines(items, 200)
+	lines := renderUsageLines("count", items, 200)
 	if len(lines) < 3 {
 		t.Fatalf("expected usage lines, got %v", lines)
 	}
-	othersLine := lines[len(lines)-2]
-	totalLine := lines[len(lines)-1]
-	othersNeedle := defaultTextStyle.Render("• others ")
-	totalNeedle := defaultTextStyle.Render("• Total ") + defaultTextStyle.Render(" ")
-	if !strings.Contains(othersLine, othersNeedle) {
+	othersLine := stripANSI(lines[len(lines)-3])
+	totalLine := stripANSI(lines[len(lines)-1])
+	if !strings.Contains(othersLine, "others") {
 		t.Fatalf("expected others line, got %q", othersLine)
 	}
-	if !strings.Contains(totalLine, totalNeedle) {
-		t.Fatalf("expected padded total line aligned to others label, got %q", totalLine)
+	if !strings.Contains(totalLine, "Total") {
+		t.Fatalf("expected total line, got %q", totalLine)
+	}
+	othersColumn := strings.Index(othersLine, "others")
+	totalColumn := strings.Index(totalLine, "Total")
+	if othersColumn != totalColumn {
+		t.Fatalf("expected aligned first column, got others=%d total=%d", othersColumn, totalColumn)
 	}
 }
 
 func TestRenderUsageLines_GroupsLargeCounts(t *testing.T) {
-	lines := renderUsageLines([]stats.UsageCount{{Name: "bash", Count: 12345}}, 23456)
+	lines := renderUsageLines("count", []stats.UsageCount{{Name: "bash", Count: 12345}}, 23456)
 
-	if len(lines) != 2 {
-		t.Fatalf("expected 2 usage lines, got %d", len(lines))
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 usage lines, got %d", len(lines))
 	}
-	if !strings.Contains(lines[0], "12,345") {
-		t.Fatalf("expected grouped usage count, got %q", lines[0])
+	plain := make([]string, len(lines))
+	for i, line := range lines {
+		plain[i] = stripANSI(line)
 	}
-	if !strings.Contains(lines[1], "23,456") || !strings.Contains(lines[1], "100%") {
-		t.Fatalf("expected grouped total usage count, got %q", lines[1])
+	if !strings.Contains(plain[2], "12,345") {
+		t.Fatalf("expected grouped usage count, got %q", plain[2])
 	}
-	if strings.Contains(lines[0], "• 1 bash ") {
-		t.Fatalf("expected no ordinal prefix in usage row, got %q", lines[0])
+	if !strings.Contains(plain[4], "23,456") || !strings.Contains(plain[4], "100%") {
+		t.Fatalf("expected grouped total usage count, got %q", plain[4])
 	}
-	if !strings.Contains(lines[1], "········") {
-		t.Fatalf("expected neutral placeholder bar in total row, got %q", lines[1])
+	if strings.Contains(plain[2], "• 1 bash ") {
+		t.Fatalf("expected no ordinal prefix in usage row, got %q", plain[2])
 	}
-	if strings.Contains(lines[1], "████") {
-		t.Fatalf("expected total row to avoid filled bars, got %q", lines[1])
+	if !strings.Contains(plain[4], "········") {
+		t.Fatalf("expected neutral placeholder bar in total row, got %q", plain[4])
+	}
+	if strings.Contains(plain[4], "████") {
+		t.Fatalf("expected total row to avoid filled bars, got %q", plain[4])
 	}
 }
 
 func TestRenderUsageLines_ShowsPlaceholderOnlyWhenTotalIsZero(t *testing.T) {
-	lines := renderUsageLines(nil, 0)
+	lines := renderUsageLines("count", nil, 0)
 
-	if len(lines) != 1 {
-		t.Fatalf("expected 1 usage line, got %d", len(lines))
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 usage lines, got %d", len(lines))
 	}
-	if !strings.Contains(lines[0], "top 15") {
-		t.Fatalf("expected placeholder row, got %q", lines[0])
+	if !strings.Contains(stripANSI(lines[2]), "top 15") {
+		t.Fatalf("expected placeholder row, got %q", stripANSI(lines[2]))
 	}
-	if strings.Contains(lines[0], "Total") {
-		t.Fatalf("expected no total row for zero totals, got %q", lines[0])
+	if strings.Contains(stripANSI(strings.Join(lines, "\n")), "Total") {
+		t.Fatalf("expected no total row for zero totals, got %q", stripANSI(strings.Join(lines, "\n")))
+	}
+}
+
+func TestRenderUsageLines_ShowsTotalWhenItemsMissingButTotalExists(t *testing.T) {
+	lines := renderUsageLines("count", nil, 42)
+	plain := stripANSI(strings.Join(lines, "\n"))
+
+	if !strings.Contains(plain, "top 15") {
+		t.Fatalf("expected placeholder row, got %q", plain)
+	}
+	if !strings.Contains(plain, "Total") || !strings.Contains(plain, "42") || !strings.Contains(plain, "········ 100%") {
+		t.Fatalf("expected total row when aggregate total exists, got %q", plain)
+	}
+	if strings.Count(plain, strings.Repeat("┈", 10)) < 2 {
+		t.Fatalf("expected header and total dividers, got %q", plain)
 	}
 }
 
 func TestRenderUsageLines_FormatsModelAmountsCompactly(t *testing.T) {
-	lines := renderUsageLines([]stats.UsageCount{{Name: "[OpenAI] gpt-5.4", Amount: 1_250_000}}, 1_500_000)
+	lines := renderUsageLines("tokens", []stats.UsageCount{{Name: "[OpenAI] gpt-5.4", Amount: 1_250_000}}, 1_500_000)
 
-	if len(lines) != 2 {
-		t.Fatalf("expected 2 usage lines, got %d", len(lines))
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 usage lines, got %d", len(lines))
 	}
-	if !strings.Contains(lines[0], "1.2M") {
-		t.Fatalf("expected compact model amount in usage row, got %q", lines[0])
+	if !strings.Contains(stripANSI(lines[2]), "1.2M") {
+		t.Fatalf("expected compact model amount in usage row, got %q", stripANSI(lines[2]))
 	}
-	if !strings.Contains(lines[1], "1.5M") || !strings.Contains(lines[1], "100%") {
-		t.Fatalf("expected compact model amount in total row, got %q", lines[1])
+	if !strings.Contains(stripANSI(lines[4]), "1.5M") || !strings.Contains(stripANSI(lines[4]), "100%") {
+		t.Fatalf("expected compact model amount in total row, got %q", stripANSI(lines[4]))
 	}
 }
 

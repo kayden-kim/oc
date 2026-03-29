@@ -17,12 +17,25 @@ const (
 	metricColumnWidth       = 24
 	overviewPairColumnWidth = 28
 	trendLabelColumnWidth   = 10
-	metricsLabelColumnWidth = 14
-	metricsValueColumnWidth = 18
 	maxActivityItems        = 15
 	statsTabRowWidth        = 80
 	statsTabWidth           = 14
+	statsTableMaxWidth      = 76
+	statsTableColumnGap     = 2
+	usageBarWidth           = 8
 )
+
+type statsTableColumn struct {
+	Header     string
+	MinWidth   int
+	AlignRight bool
+	Style      lipgloss.Style
+}
+
+type statsTableRow struct {
+	Cells   []string
+	Divider bool
+}
 
 func statsTabTitles() []string {
 	return []string{"Overview", "Daily", "Monthly"}
@@ -53,16 +66,7 @@ func (m Model) renderLauncherAnalytics() string {
 	sections = append(sections, bulletLine(habitLine))
 	sections = append(sections, bulletLine(styledMetricLine("• streak ", formatRhythmStreak(report))))
 	sections = append(sections, "", renderSubSectionHeader(headerPrefix+"Metrics", todaySectionTitleStyle))
-	sections = append(sections,
-		metricsHeaderLine(),
-		metricsValueLine("tokens", formatTokensWithTop(report.TodayTokens, report.Days), formatPeakValue(formatSummaryTokens(maxTokens(report.Days)), maxTokenDay(report.Days).Date), formatSummaryTokens(report.ThirtyDayTokens)),
-		metricsValueLine("cost", formatCurrencyWithTop(report.TodayCost, report.Days), formatPeakValue(formatSummaryCurrency(report.HighestBurnDay.Cost), report.HighestBurnDay.Date), formatSummaryCurrency(report.ThirtyDayCost)),
-		metricsValueLine("hours", formatHoursWithTop(report.TodaySessionMinutes, report.Days), formatPeakValue(formatSummaryHours(maxSessionMinutes(report.Days)), maxSessionDay(report.Days).Date), formatSummaryHours(report.ThirtyDaySessionMinutes)),
-		metricsValueLine("lines", formatCodeLinesWithTop(report.TodayCodeLines, report.Days), formatPeakValue(formatSummaryCodeLines(report.HighestCodeDay.CodeLines), report.HighestCodeDay.Date), formatSummaryCodeLines(report.ThirtyDayCodeLines)),
-		metricsDividerLine(),
-		metricsValueLine("tok/h", formatTokensPerHourWithTop(report.TodayTokens, report.TodaySessionMinutes, report.Days), formatPeakValue(formatSummaryTokensPerHour(maxTokensPerHourDay(report.Days).Tokens, maxTokensPerHourDay(report.Days).SessionMinutes), maxTokensPerHourDay(report.Days).Date), formatSummaryTokensPerHour(report.ThirtyDayTokens, report.ThirtyDaySessionMinutes)),
-		metricsValueLine("line/h", formatCodeLinesPerHourWithTop(report.TodayCodeLines, report.TodaySessionMinutes, report.Days), formatPeakValue(formatSummaryCodeLinesPerHour(maxCodeLinesPerHourDay(report.Days).CodeLines, maxCodeLinesPerHourDay(report.Days).SessionMinutes), maxCodeLinesPerHourDay(report.Days).Date), formatSummaryCodeLinesPerHour(report.ThirtyDayCodeLines, report.ThirtyDaySessionMinutes)),
-	)
+	sections = append(sections, renderMetricsTable(report)...)
 	return strings.Join(sections, "\n")
 }
 
@@ -237,27 +241,205 @@ func styledOverviewPair(labelA string, valueA string, labelB string, valueB stri
 	return renderTwoColumns(labelA, valueA, overviewPairColumnWidth, labelB, valueB, overviewPairColumnWidth)
 }
 
-func metricsHeaderLine() string {
-	return defaultTextStyle.Render("    ") +
-		padStyledText(defaultTextStyle.Render(""), 0, metricsLabelColumnWidth) +
-		padStyledText(defaultTextStyle.Render("today"), len("today"), metricsValueColumnWidth) +
-		padStyledText(defaultTextStyle.Render("peak day"), len("peak day"), metricsValueColumnWidth) +
-		defaultTextStyle.Render("30d total")
+func renderMetricsTable(report stats.Report) []string {
+	todayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF9900"))
+	columns := []statsTableColumn{
+		{Header: "", MinWidth: 8, Style: defaultTextStyle},
+		{Header: "today", MinWidth: 10, Style: todayStyle},
+		{Header: "peak day", MinWidth: 12, Style: statsValueTextStyle},
+		{Header: "30d total", MinWidth: 10, Style: statsValueTextStyle},
+	}
+	rows := []statsTableRow{
+		{Cells: []string{"tokens", formatTokensWithTop(report.TodayTokens, report.Days), formatPeakValue(formatSummaryTokens(maxTokens(report.Days)), maxTokenDay(report.Days).Date), formatSummaryTokens(report.ThirtyDayTokens)}},
+		{Cells: []string{"cost", formatCurrencyWithTop(report.TodayCost, report.Days), formatPeakValue(formatSummaryCurrency(report.HighestBurnDay.Cost), report.HighestBurnDay.Date), formatSummaryCurrency(report.ThirtyDayCost)}},
+		{Cells: []string{"hours", formatHoursWithTop(report.TodaySessionMinutes, report.Days), formatPeakValue(formatSummaryHours(maxSessionMinutes(report.Days)), maxSessionDay(report.Days).Date), formatSummaryHours(report.ThirtyDaySessionMinutes)}},
+		{Cells: []string{"lines", formatCodeLinesWithTop(report.TodayCodeLines, report.Days), formatPeakValue(formatSummaryCodeLines(report.HighestCodeDay.CodeLines), report.HighestCodeDay.Date), formatSummaryCodeLines(report.ThirtyDayCodeLines)}},
+		{Divider: true},
+		{Cells: []string{"tok/h", formatTokensPerHourWithTop(report.TodayTokens, report.TodaySessionMinutes, report.Days), formatPeakValue(formatSummaryTokensPerHour(maxTokensPerHourDay(report.Days).Tokens, maxTokensPerHourDay(report.Days).SessionMinutes), maxTokensPerHourDay(report.Days).Date), formatSummaryTokensPerHour(report.ThirtyDayTokens, report.ThirtyDaySessionMinutes)}},
+		{Cells: []string{"line/h", formatCodeLinesPerHourWithTop(report.TodayCodeLines, report.TodaySessionMinutes, report.Days), formatPeakValue(formatSummaryCodeLinesPerHour(maxCodeLinesPerHourDay(report.Days).CodeLines, maxCodeLinesPerHourDay(report.Days).SessionMinutes), maxCodeLinesPerHourDay(report.Days).Date), formatSummaryCodeLinesPerHour(report.ThirtyDayCodeLines, report.ThirtyDaySessionMinutes)}},
+	}
+	return renderStatsTable(columns, rows)
 }
 
-func metricsValueLine(label string, today string, peak string, total string) string {
-	todayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF9900"))
-	return defaultTextStyle.Render("    ") +
-		padStyledText(defaultTextStyle.Render("  "+label), len("  "+label), metricsLabelColumnWidth) +
-		padStyledText(todayStyle.Render(today), len(today), metricsValueColumnWidth) +
-		padStyledText(statsValueTextStyle.Render(peak), len(peak), metricsValueColumnWidth) +
-		statsValueTextStyle.Render(total)
+func renderStatsTable(columns []statsTableColumn, rows []statsTableRow) []string {
+	if len(columns) == 0 {
+		return nil
+	}
+	widths := statsTableColumnWidths(columns, rows, statsTableMaxWidth)
+	contentWidth := statsTableContentWidth(widths)
+	lines := make([]string, 0, len(rows)+2)
+	lines = append(lines, renderStatsTableHeader(columns, widths))
+	lines = append(lines, statsTableDividerLine(contentWidth))
+	for _, row := range rows {
+		if row.Divider {
+			lines = append(lines, statsTableDividerLine(contentWidth))
+			continue
+		}
+		lines = append(lines, renderStatsTableLine(columns, widths, row.Cells))
+	}
+	return lines
+}
+
+func headerCells(columns []statsTableColumn) []string {
+	cells := make([]string, len(columns))
+	for i, column := range columns {
+		cells[i] = column.Header
+	}
+	return cells
+}
+
+func renderStatsTableHeader(columns []statsTableColumn, widths []int) string {
+	parts := make([]string, len(columns))
+	for i, column := range columns {
+		parts[i] = renderStatsTableCell(column.Header, widths[i], column.AlignRight, defaultTextStyle)
+	}
+	return defaultTextStyle.Render("    ") + strings.Join(parts, defaultTextStyle.Render(strings.Repeat(" ", statsTableColumnGap)))
+}
+
+func statsTableColumnWidths(columns []statsTableColumn, rows []statsTableRow, maxWidth int) []int {
+	widths := make([]int, len(columns))
+	minWidths := make([]int, len(columns))
+	for i, column := range columns {
+		minWidth := column.MinWidth
+		if minWidth <= 0 {
+			minWidth = 3
+		}
+		minWidths[i] = minWidth
+		widths[i] = maxInt(minWidth, lipgloss.Width(column.Header))
+	}
+	for _, row := range rows {
+		if row.Divider {
+			continue
+		}
+		for i := range columns {
+			cell := ""
+			if i < len(row.Cells) {
+				cell = row.Cells[i]
+			}
+			widths[i] = maxInt(widths[i], lipgloss.Width(cell))
+		}
+	}
+	available := maxWidth - statsTableColumnGap*(len(columns)-1)
+	if available <= 0 {
+		return widths
+	}
+	for sumInts(widths) > available {
+		index := widestShrinkableColumn(widths, minWidths)
+		if index < 0 {
+			break
+		}
+		widths[index]--
+	}
+	for sumInts(widths) < available {
+		for i := range widths {
+			if sumInts(widths) >= available {
+				break
+			}
+			widths[i]++
+		}
+	}
+	return widths
+}
+
+func widestShrinkableColumn(widths []int, minWidths []int) int {
+	index := -1
+	maxWidth := 0
+	for i, width := range widths {
+		if width <= minWidths[i] {
+			continue
+		}
+		if width > maxWidth {
+			maxWidth = width
+			index = i
+		}
+	}
+	return index
+}
+
+func statsTableContentWidth(widths []int) int {
+	if len(widths) == 0 {
+		return 0
+	}
+	return sumInts(widths) + statsTableColumnGap*(len(widths)-1)
+}
+
+func renderStatsTableLine(columns []statsTableColumn, widths []int, cells []string) string {
+	parts := make([]string, len(columns))
+	for i, column := range columns {
+		cell := ""
+		if i < len(cells) {
+			cell = cells[i]
+		}
+		parts[i] = renderStatsTableCell(cell, widths[i], column.AlignRight, column.Style)
+	}
+	return defaultTextStyle.Render("    ") + strings.Join(parts, defaultTextStyle.Render(strings.Repeat(" ", statsTableColumnGap)))
+}
+
+func renderStatsTableCell(value string, width int, alignRight bool, style lipgloss.Style) string {
+	truncated := truncateDisplayWidth(value, width)
+	visible := lipgloss.Width(truncated)
+	padding := width - visible
+	if padding < 0 {
+		padding = 0
+	}
+	pad := defaultTextStyle.Render(strings.Repeat(" ", padding))
+	if alignRight {
+		return pad + style.Render(truncated)
+	}
+	return style.Render(truncated) + pad
+}
+
+func statsTableDividerLine(width int) string {
+	dividerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#191919"))
+	return defaultTextStyle.Render("    ") + dividerStyle.Render(strings.Repeat("┈", width))
 }
 
 func metricsDividerLine() string {
-	width := metricsLabelColumnWidth + (metricsValueColumnWidth * 2) + len("30d total")
-	dividerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#191919"))
-	return dividerStyle.Render("    " + strings.Repeat("┈", width))
+	return statsTableDividerLine(statsTableMaxWidth)
+}
+
+func truncateDisplayWidth(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(value) <= width {
+		return value
+	}
+	if width == 1 {
+		for _, r := range value {
+			return string(r)
+		}
+		return ""
+	}
+	var b strings.Builder
+	currentWidth := 0
+	for _, r := range value {
+		runeWidth := lipgloss.Width(string(r))
+		if currentWidth+runeWidth > width-1 {
+			break
+		}
+		b.WriteRune(r)
+		currentWidth += runeWidth
+	}
+	if b.Len() == 0 {
+		return "…"
+	}
+	return b.String() + "…"
+}
+
+func sumInts(values []int) int {
+	total := 0
+	for _, value := range values {
+		total += value
+	}
+	return total
+}
+
+func maxInt(a int, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func styledMetricTriple(labelA string, valueA string, labelB string, valueB string, labelC string, valueC string) string {
@@ -490,75 +672,62 @@ func (m Model) renderOverviewLines() []string {
 		"",
 		activitySectionHeader("Activity - Models", report.UniqueModelCount),
 	)
-	lines = append(lines, renderUsageLines(report.TopModels, report.TotalModelTokens)...)
+	lines = append(lines, renderUsageLines("tokens", report.TopModels, report.TotalModelTokens)...)
 	lines = append(lines,
 		"",
 		activitySectionHeader("Activity - Agents", report.UniqueAgentCount),
 	)
-	lines = append(lines, renderUsageLines(report.TopAgents, int64(report.TotalSubtasks))...)
+	lines = append(lines, renderUsageLines("count", report.TopAgents, int64(report.TotalSubtasks))...)
 	lines = append(lines,
 		"",
 		activitySectionHeader("Activity - Skills", report.UniqueSkillCount),
 	)
-	lines = append(lines, renderUsageLines(report.TopSkills, int64(report.TotalSkillCalls))...)
+	lines = append(lines, renderUsageLines("count", report.TopSkills, int64(report.TotalSkillCalls))...)
 	lines = append(lines,
 		"",
 		activitySectionHeader("Activity - Tools", report.UniqueToolCount),
 	)
-	lines = append(lines, renderUsageLines(report.TopTools, int64(report.TotalToolCalls))...)
+	lines = append(lines, renderUsageLines("count", report.TopTools, int64(report.TotalToolCalls))...)
 	return lines
 }
 
-func renderUsageLines(items []stats.UsageCount, total int64) []string {
+func renderUsageLines(metricHeader string, items []stats.UsageCount, total int64) []string {
 	metricFormatter := formatUsageMetric
 	if usageItemsUseAmounts(items) {
 		metricFormatter = formatSummaryTokens
 	}
+	columns := []statsTableColumn{
+		{Header: "", MinWidth: 12, Style: defaultTextStyle},
+		{Header: metricHeader, MinWidth: 7, AlignRight: true, Style: statsValueTextStyle},
+		{Header: "share", MinWidth: usageBarWidth + 5 + 1, Style: statsValueTextStyle},
+	}
 	if len(items) == 0 {
-		return []string{bulletLine(styledMetricLine(fmt.Sprintf("• top %d ", maxActivityItems), "--"))}
+		rows := []statsTableRow{{Cells: []string{"top 15", "--", strings.Repeat("·", usageBarWidth) + " --"}}}
+		if total > 0 {
+			rows = append(rows, statsTableRow{Divider: true}, statsTableRow{Cells: []string{"Total", metricFormatter(total), strings.Repeat("·", usageBarWidth) + " 100%"}})
+		}
+		return renderStatsTable(columns, rows)
 	}
 	visibleItems := items
 	if len(visibleItems) > maxActivityItems {
 		visibleItems = visibleItems[:maxActivityItems]
 	}
 	top := usageMetric(visibleItems[0])
-	labels := make([]string, len(visibleItems))
-	maxLabelWidth := 0
-	for i, item := range visibleItems {
-		labels[i] = fmt.Sprintf("• %s ", item.Name)
-		if width := utf8.RuneCountInString(labels[i]); width > maxLabelWidth {
-			maxLabelWidth = width
-		}
-	}
-	totalLabel := "• Total "
-	if width := utf8.RuneCountInString(totalLabel); width > maxLabelWidth {
-		maxLabelWidth = width
-	}
 	showOthers := len(items) > maxActivityItems && total > 0
-	othersLabel := "• others "
-	if showOthers {
-		if width := utf8.RuneCountInString(othersLabel); width > maxLabelWidth {
-			maxLabelWidth = width
-		}
-	}
 	othersMetric := total
-	lines := make([]string, 0, len(visibleItems)+2)
-	for i, item := range visibleItems {
-		label := labels[i]
+	rows := make([]statsTableRow, 0, len(visibleItems)+2)
+	for _, item := range visibleItems {
 		itemMetric := usageMetric(item)
 		othersMetric -= itemMetric
-		value := fmt.Sprintf("%s %s (%s)", renderUsageBar(itemMetric, top, 8), metricFormatter(itemMetric), formatUsageShare(itemMetric, total))
-		lines = append(lines, bulletLine(padStyledText(defaultTextStyle.Render(label), utf8.RuneCountInString(label), maxLabelWidth)+valueText(value)))
+		rows = append(rows, statsTableRow{Cells: []string{item.Name, metricFormatter(itemMetric), renderUsageBar(itemMetric, top, usageBarWidth) + " " + formatUsageShare(itemMetric, total)}})
 	}
 	if showOthers && othersMetric > 0 {
-		value := fmt.Sprintf("%s %s (%s)", renderUsageBar(othersMetric, top, 8), metricFormatter(othersMetric), formatUsageShare(othersMetric, total))
-		lines = append(lines, bulletLine(padStyledText(defaultTextStyle.Render(othersLabel), utf8.RuneCountInString(othersLabel), maxLabelWidth)+valueText(value)))
+		rows = append(rows, statsTableRow{Cells: []string{"others", metricFormatter(othersMetric), renderUsageBar(othersMetric, top, usageBarWidth) + " " + formatUsageShare(othersMetric, total)}})
 	}
 	if total > 0 {
-		value := fmt.Sprintf("%s %s (%s)", strings.Repeat("·", 8), metricFormatter(total), "100%")
-		lines = append(lines, bulletLine(padStyledText(defaultTextStyle.Render(totalLabel), utf8.RuneCountInString(totalLabel), maxLabelWidth)+valueText(value)))
+		rows = append(rows, statsTableRow{Divider: true}, statsTableRow{Cells: []string{"Total", metricFormatter(total), strings.Repeat("·", usageBarWidth) + " 100%"}})
 	}
-	return lines
+	return renderStatsTable(columns, rows)
 }
 
 func usageItemsUseAmounts(items []stats.UsageCount) bool {
