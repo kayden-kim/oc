@@ -936,11 +936,11 @@ func TestView_RendersRhythmAndMetricsSections(t *testing.T) {
 	if !strings.Contains(view, "Metrics") {
 		t.Fatalf("expected Metrics section, got %q", view)
 	}
-	if !strings.Contains(view, defaultTextStyle.Render("• active ")+statsValueTextStyle.Render("0/30d")) {
-		t.Fatalf("expected active 30d summary, got %q", view)
+	if !strings.Contains(view, defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("0/30d")) {
+		t.Fatalf("expected daily 30d summary, got %q", view)
 	}
-	if !strings.Contains(view, defaultTextStyle.Render("    ")+defaultTextStyle.Render("• active ")+statsValueTextStyle.Render("0/30d")) {
-		t.Fatalf("expected bulleted active summary, got %q", view)
+	if !strings.Contains(view, defaultTextStyle.Render("    ")+defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("0/30d")) {
+		t.Fatalf("expected bulleted daily summary, got %q", view)
 	}
 	if !strings.Contains(view, defaultTextStyle.Render("• streak ")+statsValueTextStyle.Render("6d (best)")) {
 		t.Fatalf("expected streak line with parenthetical best streak, got %q", view)
@@ -993,8 +993,8 @@ func TestView_RendersRhythmPlaceholdersBeforeStatsLoad(t *testing.T) {
 	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true)
 	view := model.View().Content
 
-	if !strings.Contains(view, defaultTextStyle.Render("• active ")+statsValueTextStyle.Render("--")) {
-		t.Fatalf("expected active placeholder before stats load, got %q", view)
+	if !strings.Contains(view, defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("--")) {
+		t.Fatalf("expected daily placeholder before stats load, got %q", view)
 	}
 	if !strings.Contains(view, defaultTextStyle.Render("• streak ")+statsValueTextStyle.Render("--")) {
 		t.Fatalf("expected streak placeholder before stats load, got %q", view)
@@ -1788,17 +1788,17 @@ func TestView_AnalyticsMinimapAdaptsToNarrowWidths(t *testing.T) {
 	updated, _ = model.Update(tea.WindowSizeMsg{Width: 35, Height: 30})
 	tinyView := updated.(Model).View().Content
 
-	if !strings.Contains(wideView, defaultTextStyle.Render("• active ")+statsValueTextStyle.Render("0/30d")) {
-		t.Fatalf("expected active label in wide view, got %q", wideView)
+	if !strings.Contains(wideView, defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("0/30d")) {
+		t.Fatalf("expected daily label in wide view, got %q", wideView)
 	}
 	if strings.Count(wideView, "█")+strings.Count(wideView, "▓")+strings.Count(wideView, "░")+strings.Count(wideView, "·") < 28 {
 		t.Fatalf("expected 4-week minimap density in wide view, got %q", wideView)
 	}
-	if !strings.Contains(narrowView, defaultTextStyle.Render("• active ")+statsValueTextStyle.Render("0/30d")) {
-		t.Fatalf("expected active label in narrow view, got %q", narrowView)
+	if !strings.Contains(narrowView, defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("0/30d")) {
+		t.Fatalf("expected daily label in narrow view, got %q", narrowView)
 	}
-	if !strings.Contains(tinyView, defaultTextStyle.Render("    ")+defaultTextStyle.Render("• active ")+statsValueTextStyle.Render("0/30d")) {
-		t.Fatalf("expected active label to remain in tiny view, got %q", tinyView)
+	if !strings.Contains(tinyView, defaultTextStyle.Render("    ")+defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("0/30d")) {
+		t.Fatalf("expected daily label to remain in tiny view, got %q", tinyView)
 	}
 	if strings.Contains(tinyView, "·") || strings.Contains(tinyView, "░") || strings.Contains(tinyView, "▓") || strings.Contains(tinyView, "█") {
 		t.Fatalf("expected minimap cells hidden in tiny view, got %q", tinyView)
@@ -2001,7 +2001,7 @@ func TestSparklineLevel(t *testing.T) {
 func TestSparklineCell_Characters(t *testing.T) {
 	chars := []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
 	for level := 0; level < 8; level++ {
-		cell := sparklineCell(level, false)
+		cell := sparklineCell(level, false, true)
 		if !strings.ContainsRune(cell, chars[level]) {
 			t.Errorf("level %d: expected char %c in output %q", level, chars[level], cell)
 		}
@@ -2009,8 +2009,8 @@ func TestSparklineCell_Characters(t *testing.T) {
 }
 
 func TestSparklineCell_CurrentSlotHighlight(t *testing.T) {
-	normal := sparklineCell(3, false)
-	highlighted := sparklineCell(3, true)
+	normal := sparklineCell(3, false, true)
+	highlighted := sparklineCell(3, true, true)
 	if normal == highlighted {
 		t.Error("current slot should produce different styled output than normal slot")
 	}
@@ -2044,6 +2044,51 @@ func TestRender24hSparkline_BasicRendering(t *testing.T) {
 	}
 	if !hasSparkChar {
 		t.Error("sparkline should contain sparkline characters (▁▂▃▄▅▆▇█)")
+	}
+}
+
+func TestRender24hSparkline_UsesWorkdayAdjustedThreshold(t *testing.T) {
+	var slots [48]int64
+	slots[47] = 100000
+	report := stats.Report{Rolling24hSlots: slots}
+	cfg := config.StatsConfig{HighTokens: 4_800_000}
+	m := NewModel(nil, nil, nil, SessionItem{}, report, stats.Report{}, cfg, "test", false)
+	m.width = 80
+
+	result := m.render24hSparkline(report)
+	if !strings.ContainsRune(result, '▄') {
+		t.Fatalf("expected workday-adjusted threshold to render current slot as a mid-level bar, got %q", result)
+	}
+	if strings.ContainsRune(result, '█') {
+		t.Fatalf("expected workday-adjusted threshold to avoid max-level bar for 100000 tokens, got %q", result)
+	}
+}
+
+func TestSparklineCell_UsesGrayPaletteForYesterdaySlots(t *testing.T) {
+	cell := sparklineCell(3, false, false)
+	if !strings.Contains(cell, "38;2;96;96;96") {
+		t.Fatalf("expected yesterday sparkline cell to use gray palette, got %q", cell)
+	}
+}
+
+func TestRender24hSparklineAt_SplitsYesterdayAndTodayColors(t *testing.T) {
+	var slots [48]int64
+	now := time.Date(2026, time.March, 30, 10, 15, 0, 0, time.Local)
+	yesterdayIndex := 0
+	todayIndex := 47 - (now.Hour()*2 + now.Minute()/30)
+	slots[yesterdayIndex] = 300000
+	slots[todayIndex] = 300000
+	report := stats.Report{Rolling24hSlots: slots}
+	cfg := config.StatsConfig{HighTokens: 4_800_000}
+	m := NewModel(nil, nil, nil, SessionItem{}, report, stats.Report{}, cfg, "test", false)
+	m.width = 80
+
+	result := m.render24hSparklineAt(report, now)
+	if !strings.Contains(result, "38;2;184;184;184") {
+		t.Fatalf("expected yesterday segment to use gray palette, got %q", result)
+	}
+	if !strings.Contains(result, "38;2;255;153;0") {
+		t.Fatalf("expected today segment to use orange palette, got %q", result)
 	}
 }
 

@@ -59,7 +59,7 @@ func (m Model) renderLauncherAnalytics() string {
 	}
 	sections := []string{renderSubSectionHeader(headerPrefix+"Rhythm", habitSectionTitleStyle)}
 	minimap := m.renderLauncherMinimap(report)
-	habitLine := styledMetricLead("• active ", formatActiveDaysSummary(report))
+	habitLine := styledMetricLead("• daily  ", formatActiveDaysSummary(report))
 	if minimap != "" {
 		habitLine += minimap
 	}
@@ -542,8 +542,8 @@ func sparklineLevel(tokens int64, step int64) int {
 
 var sparklineChars = [8]rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
 
-var sparklineColors = [8]string{
-	"#303030", // level 0: inactive
+var sparklineTodayColors = [8]string{
+	"#5A3A00", // level 0: inactive baseline for today
 	"#5A3A00", // level 1
 	"#6E4800", // level 2
 	"#825600", // level 3
@@ -553,26 +553,56 @@ var sparklineColors = [8]string{
 	"#FF9900", // level 7
 }
 
+var sparklineYesterdayColors = [8]string{
+	"#303030", // level 0: inactive
+	"#404040", // level 1
+	"#505050", // level 2
+	"#606060", // level 3
+	"#707070", // level 4
+	"#808080", // level 5
+	"#989898", // level 6
+	"#B8B8B8", // level 7
+}
+
 const sparklineHighlightColor = "#FFAA33"
 
-func sparklineCell(level int, isCurrentSlot bool) string {
+func sparklineCell(level int, isCurrentSlot bool, isToday bool) string {
 	char := sparklineChars[level]
-	color := sparklineColors[level]
-	if isCurrentSlot && level > 0 {
+	colors := sparklineYesterdayColors
+	if isToday {
+		colors = sparklineTodayColors
+	}
+	color := colors[level]
+	if isToday && isCurrentSlot && level > 0 {
 		color = sparklineHighlightColor
 	}
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(string(char))
 }
 
 func (m Model) render24hSparkline(report stats.Report) string {
+	return m.render24hSparklineAt(report, time.Now())
+}
+
+func rolling24hTodayStartIndex(now time.Time) int {
+	return 47 - (now.Hour()*2 + now.Minute()/30)
+}
+
+func rolling24hCompressedTodayStartIndex(now time.Time) int {
+	return 23 - now.Hour()
+}
+
+func (m Model) render24hSparklineAt(report stats.Report, now time.Time) string {
 	if m.width > 0 && m.width < 40 {
 		return ""
 	}
 
 	slots := report.Rolling24hSlots
-	slotHigh := m.statsConfig.HighTokens / 48
+	todayStart := rolling24hTodayStartIndex(now)
+	// Daily high tokens are better modeled as roughly one 8-hour workday of activity,
+	// so use 16 half-hour slots instead of spreading the threshold across all 48 slots.
+	slotHigh := m.statsConfig.HighTokens / 16
 	if slotHigh <= 0 {
-		slotHigh = DefaultActivityHighTokens / 48
+		slotHigh = DefaultActivityHighTokens / 16
 	}
 	step := slotHigh / 7
 	if step <= 0 {
@@ -582,6 +612,7 @@ func (m Model) render24hSparkline(report stats.Report) string {
 	// Compressed mode: merge pairs into 24 hourly slots
 	if m.width > 0 && m.width < 72 {
 		var b strings.Builder
+		compressedTodayStart := rolling24hCompressedTodayStartIndex(now)
 		for i := 0; i < 24; i++ {
 			if i > 0 && i%6 == 0 {
 				b.WriteByte(' ')
@@ -590,7 +621,7 @@ func (m Model) render24hSparkline(report stats.Report) string {
 			level := sparklineLevel(merged, step*2)
 			// Rolling window is pre-assembled: index 47 = current slot,
 			// so in compressed mode the last pair (index 23) = current hour.
-			b.WriteString(sparklineCell(level, i == 23))
+			b.WriteString(sparklineCell(level, i == 23, i >= compressedTodayStart))
 		}
 		return b.String()
 	}
@@ -603,7 +634,7 @@ func (m Model) render24hSparkline(report stats.Report) string {
 		}
 		level := sparklineLevel(slots[i], step)
 		// Rolling window is pre-assembled: index 47 = current slot.
-		b.WriteString(sparklineCell(level, i == 47))
+		b.WriteString(sparklineCell(level, i == 47, i >= todayStart))
 	}
 	return b.String()
 }
