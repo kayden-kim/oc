@@ -438,11 +438,14 @@ func mergePartStats(db *sql.DB, dir string, since int64, loc *time.Location, day
 				}
 				day.Cost += estimatedCost
 			}
-			day.Tokens += event.InputTokens + event.OutputTokens + event.ReasoningTokens + event.CacheReadTokens + event.CacheWriteTokens
+			stepTokens := event.InputTokens + event.OutputTokens + event.ReasoningTokens + event.CacheReadTokens + event.CacheWriteTokens
+			day.Tokens += stepTokens
 			day.ReasoningTokens += event.ReasoningTokens
+			st := unixTimestampToTime(event.CreatedAt).In(loc)
+			day.SlotTokens[st.Hour()*2+st.Minute()/30] += stepTokens
 			name := modelLabel(event.ProviderID, event.ModelID)
 			if name != "" {
-				day.ModelCounts[name] += event.InputTokens + event.OutputTokens + event.ReasoningTokens + event.CacheReadTokens + event.CacheWriteTokens
+				day.ModelCounts[name] += stepTokens
 			}
 		}
 	}

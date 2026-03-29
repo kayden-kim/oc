@@ -938,3 +938,67 @@ func insertPart(t *testing.T, db *sql.DB, id string, messageID string, sessionID
 		t.Fatal(err)
 	}
 }
+
+func TestSlotTokensBucketing(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	_, err = db.Exec(`
+		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENCODE_DB", dbPath)
+
+	dir := filepath.Join(tmp, "work")
+	insertSession(t, db, "ses_work", dir)
+
+	// Message at 09:15 -> slot 18 (9*2 + 0 = 18, 09:00-09:29 half)
+	insertMessage(t, db, "msg_a", "ses_work", time.Date(2026, time.March, 29, 9, 15, 0, 0, time.Local),
+		`{"role":"assistant"}`)
+	insertPart(t, db, "step_a", "msg_a", "ses_work",
+		time.Date(2026, time.March, 29, 9, 15, 0, 0, time.Local),
+		`{"type":"step-finish","tokens":{"input":100,"output":200,"reasoning":50}}`)
+
+	// Message at 09:45 -> slot 19 (9*2 + 1 = 19, 09:30-09:59 half)
+	insertMessage(t, db, "msg_b", "ses_work", time.Date(2026, time.March, 29, 9, 45, 0, 0, time.Local),
+		`{"role":"assistant"}`)
+	insertPart(t, db, "step_b", "msg_b", "ses_work",
+		time.Date(2026, time.March, 29, 9, 45, 0, 0, time.Local),
+		`{"type":"step-finish","tokens":{"input":300,"output":400,"reasoning":100}}`)
+
+	// Another message at 09:20 -> also slot 18 (should accumulate)
+	insertMessage(t, db, "msg_c", "ses_work", time.Date(2026, time.March, 29, 9, 20, 0, 0, time.Local),
+		`{"role":"assistant"}`)
+	insertPart(t, db, "step_c", "msg_c", "ses_work",
+		time.Date(2026, time.March, 29, 9, 20, 0, 0, time.Local),
+		`{"type":"step-finish","tokens":{"input":50,"output":50,"reasoning":0}}`)
+
+	now := time.Date(2026, time.March, 29, 12, 0, 0, 0, time.Local)
+	report, err := loadForDirAtWithOptions(dir, now, Options{SessionGapMinutes: 15})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	today := report.Days[len(report.Days)-1]
+
+	// Slot 18 (09:00-09:29): 100+200+50 + 50+50+0 = 450
+	if today.SlotTokens[18] != 450 {
+		t.Errorf("slot 18: got %d, want 450", today.SlotTokens[18])
+	}
+	// Slot 19 (09:30-09:59): 300+400+100 = 800
+	if today.SlotTokens[19] != 800 {
+		t.Errorf("slot 19: got %d, want 800", today.SlotTokens[19])
+	}
+	// Slot 0 (00:00-00:29): should be 0
+	if today.SlotTokens[0] != 0 {
+		t.Errorf("slot 0: got %d, want 0", today.SlotTokens[0])
+	}
+}
