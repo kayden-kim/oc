@@ -558,6 +558,50 @@ func sparklineCell(level int, isCurrentSlot bool) string {
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(string(char))
 }
 
+func (m Model) render24hSparkline(report stats.Report) string {
+	if m.width > 0 && m.width < 40 {
+		return ""
+	}
+
+	slots := report.Rolling24hSlots
+	slotHigh := m.statsConfig.HighTokens / 48
+	if slotHigh <= 0 {
+		slotHigh = DefaultActivityHighTokens / 48
+	}
+	step := slotHigh / 7
+	if step <= 0 {
+		step = 1
+	}
+
+	// Compressed mode: merge pairs into 24 hourly slots
+	if m.width > 0 && m.width < 72 {
+		var b strings.Builder
+		for i := 0; i < 24; i++ {
+			if i > 0 && i%6 == 0 {
+				b.WriteByte(' ')
+			}
+			merged := slots[i*2] + slots[i*2+1]
+			level := sparklineLevel(merged, step*2)
+			// Rolling window is pre-assembled: index 47 = current slot,
+			// so in compressed mode the last pair (index 23) = current hour.
+			b.WriteString(sparklineCell(level, i == 23))
+		}
+		return b.String()
+	}
+
+	// Full mode: 48 half-hour slots
+	var b strings.Builder
+	for i := 0; i < 48; i++ {
+		if i > 0 && i%6 == 0 {
+			b.WriteByte(' ')
+		}
+		level := sparklineLevel(slots[i], step)
+		// Rolling window is pre-assembled: index 47 = current slot.
+		b.WriteString(sparklineCell(level, i == 47))
+	}
+	return b.String()
+}
+
 func isActive(day stats.Day) bool {
 	return day.AssistantMessages > 0 || day.ToolCalls > 0 || day.StepFinishes > 0
 }

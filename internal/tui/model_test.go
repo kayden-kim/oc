@@ -2015,3 +2015,77 @@ func TestSparklineCell_CurrentSlotHighlight(t *testing.T) {
 		t.Error("current slot should produce different styled output than normal slot")
 	}
 }
+
+func TestRender24hSparkline_BasicRendering(t *testing.T) {
+	var slots [48]int64
+	slots[20] = 50000  // medium activity
+	slots[21] = 200000 // peak activity
+	report := stats.Report{
+		Days:            make([]stats.Day, 30),
+		Rolling24hSlots: slots,
+	}
+	cfg := config.StatsConfig{HighTokens: 5000000, MediumTokens: 1000000}
+	m := NewModel(nil, nil, nil, SessionItem{}, report, stats.Report{}, cfg, "test", false)
+	m.width = 80
+
+	result := m.render24hSparkline(report)
+	if result == "" {
+		t.Fatal("expected non-empty sparkline")
+	}
+	// Should contain sparkline characters
+	hasSparkChar := false
+	for _, r := range result {
+		for _, sc := range sparklineChars {
+			if r == sc {
+				hasSparkChar = true
+				break
+			}
+		}
+	}
+	if !hasSparkChar {
+		t.Error("sparkline should contain sparkline characters (▁▂▃▄▅▆▇█)")
+	}
+}
+
+func TestRender24hSparkline_WidthAdaptation(t *testing.T) {
+	report := stats.Report{
+		Days:            make([]stats.Day, 30),
+		Rolling24hSlots: [48]int64{},
+	}
+	cfg := config.StatsConfig{HighTokens: 5000000}
+	tests := []struct {
+		width   int
+		wantLen int // 0 means hidden
+		desc    string
+	}{
+		{80, 48, "wide: full 48 slots"},
+		{50, 24, "medium: compressed 24 slots"},
+		{30, 0, "narrow: hidden"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			m := NewModel(nil, nil, nil, SessionItem{}, report, stats.Report{}, cfg, "test", false)
+			m.width = tt.width
+			result := m.render24hSparkline(report)
+			if tt.wantLen == 0 {
+				if result != "" {
+					t.Errorf("expected empty sparkline at width %d", tt.width)
+				}
+				return
+			}
+			// Count sparkline characters (excluding spaces)
+			count := 0
+			for _, r := range result {
+				for _, sc := range sparklineChars {
+					if r == sc {
+						count++
+						break
+					}
+				}
+			}
+			if count != tt.wantLen {
+				t.Errorf("width %d: got %d sparkline chars, want %d", tt.width, count, tt.wantLen)
+			}
+		})
+	}
+}
