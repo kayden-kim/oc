@@ -59,6 +59,9 @@ func (m Model) renderLauncherAnalytics() string {
 		metricsValueLine("cost", formatCurrencyWithTop(report.TodayCost, report.Days), formatPeakValue(formatSummaryCurrency(report.HighestBurnDay.Cost), report.HighestBurnDay.Date), formatSummaryCurrency(report.ThirtyDayCost)),
 		metricsValueLine("hours", formatHoursWithTop(report.TodaySessionMinutes, report.Days), formatPeakValue(formatSummaryHours(maxSessionMinutes(report.Days)), maxSessionDay(report.Days).Date), formatSummaryHours(report.ThirtyDaySessionMinutes)),
 		metricsValueLine("lines", formatCodeLinesWithTop(report.TodayCodeLines, report.Days), formatPeakValue(formatSummaryCodeLines(report.HighestCodeDay.CodeLines), report.HighestCodeDay.Date), formatSummaryCodeLines(report.ThirtyDayCodeLines)),
+		metricsDividerLine(),
+		metricsValueLine("tok/h", formatTokensPerHourWithTop(report.TodayTokens, report.TodaySessionMinutes, report.Days), formatPeakValue(formatSummaryTokensPerHour(maxTokensPerHourDay(report.Days).Tokens, maxTokensPerHourDay(report.Days).SessionMinutes), maxTokensPerHourDay(report.Days).Date), formatSummaryTokensPerHour(report.ThirtyDayTokens, report.ThirtyDaySessionMinutes)),
+		metricsValueLine("line/h", formatCodeLinesPerHourWithTop(report.TodayCodeLines, report.TodaySessionMinutes, report.Days), formatPeakValue(formatSummaryCodeLinesPerHour(maxCodeLinesPerHourDay(report.Days).CodeLines, maxCodeLinesPerHourDay(report.Days).SessionMinutes), maxCodeLinesPerHourDay(report.Days).Date), formatSummaryCodeLinesPerHour(report.ThirtyDayCodeLines, report.ThirtyDaySessionMinutes)),
 	)
 	return strings.Join(sections, "\n")
 }
@@ -235,6 +238,12 @@ func metricsValueLine(label string, today string, peak string, total string) str
 		padStyledText(todayStyle.Render(today), len(today), metricsValueColumnWidth) +
 		padStyledText(statsValueTextStyle.Render(peak), len(peak), metricsValueColumnWidth) +
 		statsValueTextStyle.Render(total)
+}
+
+func metricsDividerLine() string {
+	width := metricsLabelColumnWidth + (metricsValueColumnWidth * 2) + len("30d total")
+	dividerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#191919"))
+	return dividerStyle.Render("    " + strings.Repeat("┈", width))
 }
 
 func styledMetricTriple(labelA string, valueA string, labelB string, valueB string, labelC string, valueC string) string {
@@ -667,6 +676,69 @@ func formatCodeLinesWithTop(today int, days []stats.Day) string {
 	return fmt.Sprintf("%s (%s)", formatSummaryCodeLines(today), formatRatioToTop(float64(today), float64(maxCodeLines(days))))
 }
 
+func perHourRate(value float64, sessionMinutes int) float64 {
+	if value <= 0 || sessionMinutes <= 0 {
+		return 0
+	}
+	return value / (float64(sessionMinutes) / 60)
+}
+
+func maxTokensPerHour(days []stats.Day) float64 {
+	maxRate := 0.0
+	for _, day := range days {
+		rate := perHourRate(float64(day.Tokens), day.SessionMinutes)
+		if rate > maxRate {
+			maxRate = rate
+		}
+	}
+	return maxRate
+}
+
+func maxTokensPerHourDay(days []stats.Day) stats.Day {
+	var maxDay stats.Day
+	maxRate := 0.0
+	for _, day := range days {
+		rate := perHourRate(float64(day.Tokens), day.SessionMinutes)
+		if rate > maxRate {
+			maxRate = rate
+			maxDay = day
+		}
+	}
+	return maxDay
+}
+
+func maxCodeLinesPerHour(days []stats.Day) float64 {
+	maxRate := 0.0
+	for _, day := range days {
+		rate := perHourRate(float64(day.CodeLines), day.SessionMinutes)
+		if rate > maxRate {
+			maxRate = rate
+		}
+	}
+	return maxRate
+}
+
+func maxCodeLinesPerHourDay(days []stats.Day) stats.Day {
+	var maxDay stats.Day
+	maxRate := 0.0
+	for _, day := range days {
+		rate := perHourRate(float64(day.CodeLines), day.SessionMinutes)
+		if rate > maxRate {
+			maxRate = rate
+			maxDay = day
+		}
+	}
+	return maxDay
+}
+
+func formatTokensPerHourWithTop(todayTokens int64, todayMinutes int, days []stats.Day) string {
+	return fmt.Sprintf("%s (%s)", formatSummaryTokensPerHour(todayTokens, todayMinutes), formatRatioToTop(perHourRate(float64(todayTokens), todayMinutes), maxTokensPerHour(days)))
+}
+
+func formatCodeLinesPerHourWithTop(today int, todayMinutes int, days []stats.Day) string {
+	return fmt.Sprintf("%s (%s)", formatSummaryCodeLinesPerHour(today, todayMinutes), formatRatioToTop(perHourRate(float64(today), todayMinutes), maxCodeLinesPerHour(days)))
+}
+
 func formatSummaryCurrency(value float64) string {
 	if value <= 0 {
 		return "--"
@@ -683,7 +755,7 @@ func formatSummaryTokens(value int64) string {
 
 func formatSummaryHours(minutes int) string {
 	if minutes <= 0 {
-		return "0.0h"
+		return "--"
 	}
 	return formatGroupedFloat(float64(minutes)/60, 1) + "h"
 }
@@ -696,6 +768,22 @@ func formatSummaryCodeLines(value int) string {
 		return fmt.Sprintf("%.1fk", float64(value)/1000)
 	}
 	return formatGroupedInt(value)
+}
+
+func formatSummaryTokensPerHour(value int64, sessionMinutes int) string {
+	rate := perHourRate(float64(value), sessionMinutes)
+	if rate <= 0 {
+		return "--"
+	}
+	return formatCompactTokens(int64(math.Round(rate)))
+}
+
+func formatSummaryCodeLinesPerHour(value int, sessionMinutes int) string {
+	rate := perHourRate(float64(value), sessionMinutes)
+	if rate <= 0 {
+		return "--"
+	}
+	return formatSummaryCodeLines(int(math.Round(rate)))
 }
 
 func formatCurrency(value float64) string {

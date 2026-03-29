@@ -957,12 +957,17 @@ func TestView_RendersRhythmAndMetricsSections(t *testing.T) {
 	if !strings.Contains(view, defaultTextStyle.Render("  tokens")) || !strings.Contains(view, defaultTextStyle.Render("today")) || !strings.Contains(view, defaultTextStyle.Render("peak day")) || !strings.Contains(view, defaultTextStyle.Render("30d total")) {
 		t.Fatalf("expected metrics table header, got %q", view)
 	}
+	if !strings.Contains(view, metricsDividerLine()) {
+		t.Fatalf("expected metrics divider line, got %q", view)
+	}
 	todayAccent := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF9900"))
 	for _, row := range []struct{ label, today, peak, total string }{
 		{"tokens", "148k (92%)", "160k (" + report.Days[len(report.Days)-1].Date.Format("01-02") + ")", "420k"},
+		{"tok/h", "93k (92%)", "101k (" + report.Days[len(report.Days)-1].Date.Format("01-02") + ")", "33k"},
 		{"cost", "$1.84 (15%)", "$12.34 (" + report.HighestBurnDay.Date.Format("01-02") + ")", "$7.42"},
 		{"hours", "1.6h (79%)", "2.0h (" + report.Days[len(report.Days)-2].Date.Format("01-02") + ")", "12.8h"},
 		{"lines", "150 (79%)", "190 (" + report.HighestCodeDay.Date.Format("01-02") + ")", "1.8k"},
+		{"line/h", "95 (79%)", "120 (" + report.Days[0].Date.Format("01-02") + ")", "143"},
 	} {
 		if !strings.Contains(view, defaultTextStyle.Render("  "+row.label)) || !strings.Contains(view, todayAccent.Render(row.today)) || !strings.Contains(view, statsValueTextStyle.Render(row.peak)) || !strings.Contains(view, statsValueTextStyle.Render(row.total)) {
 			t.Fatalf("expected metrics row for %s, got %q", row.label, view)
@@ -970,6 +975,11 @@ func TestView_RendersRhythmAndMetricsSections(t *testing.T) {
 	}
 	if !strings.Contains(view, "(15%)") || !strings.Contains(view, "(92%)") {
 		t.Fatalf("expected top-based ratios, got %q", view)
+	}
+	if !(strings.Index(view, defaultTextStyle.Render("  lines")) < strings.Index(view, metricsDividerLine()) &&
+		strings.Index(view, metricsDividerLine()) < strings.Index(view, defaultTextStyle.Render("  tok/h")) &&
+		strings.Index(view, defaultTextStyle.Render("  tok/h")) < strings.Index(view, defaultTextStyle.Render("  line/h"))) {
+		t.Fatalf("expected divider between summary and rate metrics, got %q", view)
 	}
 	if strings.Contains(view, "This Week") {
 		t.Fatalf("did not expect This Week section, got %q", view)
@@ -1048,10 +1058,13 @@ func TestRenderOverviewLines_GroupsPostMetricsIntoSections(t *testing.T) {
 			t.Fatalf("expected ordinal prefixes to be removed, got %q", content)
 		}
 	}
-	for _, snippet := range []string{"• hours ", "1.6h", "150 (79%)", "today", "peak day", "30d total", "tokens", "lines", "(03-28)", "420k", "1.8k"} {
+	for _, snippet := range []string{"• hours ", "1.6h", "150 (79%)", "93k (max)", "95 (24%)", "today", "peak day", "30d total", "tokens", "tok/h", "lines", "line/h", "(03-28)", "420k", "1.8k"} {
 		if !strings.Contains(content, snippet) {
 			t.Fatalf("expected hours snippet %q, got %q", snippet, content)
 		}
+	}
+	if !strings.Contains(content, metricsDividerLine()) {
+		t.Fatalf("expected metrics divider line in overview, got %q", content)
 	}
 	if !strings.Contains(content, renderSubSectionHeader("Metrics", todaySectionTitleStyle)) {
 		t.Fatalf("expected Metrics section in overview, got %q", content)
@@ -1059,11 +1072,16 @@ func TestRenderOverviewLines_GroupsPostMetricsIntoSections(t *testing.T) {
 	if strings.Contains(content, renderSubSectionHeader("Today", todaySectionTitleStyle)) {
 		t.Fatalf("did not expect Today section in overview, got %q", content)
 	}
-	if !strings.Contains(content, defaultTextStyle.Render("  tokens")) || !strings.Contains(content, defaultTextStyle.Render("  cost")) || !strings.Contains(content, defaultTextStyle.Render("  hours")) || !strings.Contains(content, defaultTextStyle.Render("  lines")) {
+	if !strings.Contains(content, defaultTextStyle.Render("  tokens")) || !strings.Contains(content, defaultTextStyle.Render("  tok/h")) || !strings.Contains(content, defaultTextStyle.Render("  cost")) || !strings.Contains(content, defaultTextStyle.Render("  hours")) || !strings.Contains(content, defaultTextStyle.Render("  lines")) || !strings.Contains(content, defaultTextStyle.Render("  line/h")) {
 		t.Fatalf("expected metrics table rows, got %q", content)
 	}
 	if !strings.Contains(content, defaultTextStyle.Render("• lines ")) {
 		t.Fatalf("expected lines trend row, got %q", content)
+	}
+	if !(strings.Index(content, defaultTextStyle.Render("  lines")) < strings.Index(content, metricsDividerLine()) &&
+		strings.Index(content, metricsDividerLine()) < strings.Index(content, defaultTextStyle.Render("  tok/h")) &&
+		strings.Index(content, defaultTextStyle.Render("  tok/h")) < strings.Index(content, defaultTextStyle.Render("  line/h"))) {
+		t.Fatalf("expected divider between summary and rate metrics in overview, got %q", content)
 	}
 	for _, snippet := range []string{"• high burn ", "• longest day ", "• code peak ", "• efficient day "} {
 		if strings.Contains(content, snippet) {
