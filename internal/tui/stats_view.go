@@ -520,6 +520,44 @@ func (m Model) activityLevel(day stats.Day) int {
 	return 0
 }
 
+func sparklineLevel(tokens int64, step int64) int {
+	if tokens <= 0 {
+		return 0
+	}
+	if step <= 0 {
+		return 7
+	}
+	level := int((tokens-1)/step) + 1
+	if level > 7 {
+		return 7
+	}
+	return level
+}
+
+var sparklineChars = [8]rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
+
+var sparklineColors = [8]string{
+	"#303030", // level 0: inactive
+	"#5A3A00", // level 1
+	"#6E4800", // level 2
+	"#825600", // level 3
+	"#966400", // level 4
+	"#AA7200", // level 5
+	"#D48600", // level 6
+	"#FF9900", // level 7
+}
+
+const sparklineHighlightColor = "#FFAA33"
+
+func sparklineCell(level int, isCurrentSlot bool) string {
+	char := sparklineChars[level]
+	color := sparklineColors[level]
+	if isCurrentSlot && level > 0 {
+		color = sparklineHighlightColor
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(string(char))
+}
+
 func isActive(day stats.Day) bool {
 	return day.AssistantMessages > 0 || day.ToolCalls > 0 || day.StepFinishes > 0
 }

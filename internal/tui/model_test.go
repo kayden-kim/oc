@@ -1971,3 +1971,47 @@ func TestView_SourceLabelPlacedAfterPluginName(t *testing.T) {
 		t.Fatalf("expected plugin-c to show [User, Project] label, got %q", pluginCLine)
 	}
 }
+
+func TestSparklineLevel(t *testing.T) {
+	// step = 100000 / 7 ≈ 14285
+	step := int64(100000) / 7
+
+	tests := []struct {
+		tokens int64
+		want   int
+	}{
+		{0, 0},
+		{1, 1},
+		{step, 1},
+		{step + 1, 2},
+		{step * 2, 2},
+		{step*2 + 1, 3},
+		{step * 6, 6},
+		{step*6 + 1, 7},
+		{999999, 7},
+	}
+	for _, tt := range tests {
+		got := sparklineLevel(tt.tokens, step)
+		if got != tt.want {
+			t.Errorf("sparklineLevel(%d, %d) = %d, want %d", tt.tokens, step, got, tt.want)
+		}
+	}
+}
+
+func TestSparklineCell_Characters(t *testing.T) {
+	chars := []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
+	for level := 0; level < 8; level++ {
+		cell := sparklineCell(level, false)
+		if !strings.ContainsRune(cell, chars[level]) {
+			t.Errorf("level %d: expected char %c in output %q", level, chars[level], cell)
+		}
+	}
+}
+
+func TestSparklineCell_CurrentSlotHighlight(t *testing.T) {
+	normal := sparklineCell(3, false)
+	highlighted := sparklineCell(3, true)
+	if normal == highlighted {
+		t.Error("current slot should produce different styled output than normal slot")
+	}
+}
