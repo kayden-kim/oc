@@ -46,12 +46,12 @@ func (m Model) renderLauncherAnalytics() string {
 	}
 	sections := []string{renderSubSectionHeader(headerPrefix+"Rhythm", habitSectionTitleStyle)}
 	minimap := m.renderLauncherMinimap(report)
-	habitLine := styledMetricLead("• active ", fmt.Sprintf("%d/30d", report.ActiveDays))
+	habitLine := styledMetricLead("• active ", formatActiveDaysSummary(report))
 	if minimap != "" {
 		habitLine += minimap
 	}
 	sections = append(sections, bulletLine(habitLine))
-	sections = append(sections, bulletLine(styledMetricLine("• streak ", formatStreakWithBest(report.CurrentStreak, displayBestStreak(report)))))
+	sections = append(sections, bulletLine(styledMetricLine("• streak ", formatRhythmStreak(report))))
 	sections = append(sections, "", renderSubSectionHeader(headerPrefix+"Metrics", todaySectionTitleStyle))
 	sections = append(sections,
 		metricsHeaderLine(),
@@ -118,6 +118,20 @@ func displayBestStreak(report stats.Report) int {
 		return report.BestStreak
 	}
 	return report.CurrentStreak
+}
+
+func formatActiveDaysSummary(report stats.Report) string {
+	if len(report.Days) == 0 {
+		return "--"
+	}
+	return fmt.Sprintf("%d/30d", report.ActiveDays)
+}
+
+func formatRhythmStreak(report stats.Report) string {
+	if len(report.Days) == 0 {
+		return "--"
+	}
+	return formatStreakWithBest(report.CurrentStreak, displayBestStreak(report))
 }
 
 func formatStreakWithBest(current int, best int) string {

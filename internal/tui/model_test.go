@@ -986,6 +986,24 @@ func TestView_RendersRhythmAndMetricsSections(t *testing.T) {
 	}
 }
 
+func TestView_RendersRhythmPlaceholdersBeforeStatsLoad(t *testing.T) {
+	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true)
+	view := model.View().Content
+
+	if !strings.Contains(view, defaultTextStyle.Render("• active ")+statsValueTextStyle.Render("--")) {
+		t.Fatalf("expected active placeholder before stats load, got %q", view)
+	}
+	if !strings.Contains(view, defaultTextStyle.Render("• streak ")+statsValueTextStyle.Render("--")) {
+		t.Fatalf("expected streak placeholder before stats load, got %q", view)
+	}
+	if strings.Contains(view, statsValueTextStyle.Render("0/30d")) {
+		t.Fatalf("did not expect loaded active summary before stats load, got %q", view)
+	}
+	if strings.Contains(view, statsValueTextStyle.Render("0d (best)")) {
+		t.Fatalf("did not expect loaded streak summary before stats load, got %q", view)
+	}
+}
+
 func TestRenderOverviewLines_GroupsPostMetricsIntoSections(t *testing.T) {
 	report := stats.Report{
 		TodayCost:               1.84,
