@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/kayden-kim/oc/internal/config"
@@ -16,6 +17,7 @@ import (
 	"github.com/kayden-kim/oc/internal/port"
 	"github.com/kayden-kim/oc/internal/runner"
 	"github.com/kayden-kim/oc/internal/session"
+	"github.com/kayden-kim/oc/internal/stats"
 	"github.com/kayden-kim/oc/internal/tui"
 )
 
@@ -34,7 +36,11 @@ type RuntimeDeps struct {
 	FilterByWhitelist func([]config.Plugin, []string) ([]config.Plugin, []config.Plugin)
 	Getwd             func() (string, error)
 	ListSessions      func(string) ([]tui.SessionItem, error)
-	RunTUI            func([]tui.PluginItem, []tui.EditChoice, []tui.SessionItem, tui.SessionItem, string, bool) (map[string]bool, bool, string, []string, tui.SessionItem, error)
+	LoadGlobalStats   func(config.StatsConfig) (stats.Report, error)
+	LoadProjectStats  func(string, config.StatsConfig) (stats.Report, error)
+	LoadGlobalWindow  func(string, time.Time, time.Time) (stats.WindowReport, error)
+	LoadProjectWindow func(string, string, time.Time, time.Time) (stats.WindowReport, error)
+	RunTUI            func([]tui.PluginItem, []tui.EditChoice, []tui.SessionItem, tui.SessionItem, stats.Report, stats.Report, config.StatsConfig, string, bool) (map[string]bool, bool, string, []string, tui.SessionItem, error)
 	ApplySelections   func([]byte, map[string]bool) ([]byte, error)
 	WriteConfigFile   func(string, []byte) error
 	OpenEditor        func(string, string) error
@@ -54,6 +60,7 @@ type iterationState struct {
 	cwd                  string
 	sessions             []tui.SessionItem
 	selectedSession      tui.SessionItem
+	statsConfig          config.StatsConfig
 	content              []byte
 	visible              []config.Plugin
 	configEditor         string
@@ -74,17 +81,49 @@ func DefaultDeps(version string) RuntimeDeps {
 		FilterByWhitelist: plugin.FilterByWhitelist,
 		Getwd:             os.Getwd,
 		ListSessions:      session.List,
-		ApplySelections:   config.ApplySelections,
-		WriteConfigFile:   config.WriteConfigFile,
-		OpenEditor:        editor.OpenWithConfig,
-		ParsePortRange:    port.ParseRange,
-		SelectPort:        port.Select,
-		IsPortAvailable:   port.IsAvailable,
-		SendToast:         launch.SendToast,
+		LoadGlobalStats: func(statsConfig config.StatsConfig) (stats.Report, error) {
+			return stats.LoadGlobalWithOptions(statsOptions(statsConfig))
+		},
+		LoadProjectStats: func(dir string, statsConfig config.StatsConfig) (stats.Report, error) {
+			return stats.LoadForDirWithOptions(dir, statsOptions(statsConfig))
+		},
+		LoadGlobalWindow: func(label string, start, end time.Time) (stats.WindowReport, error) {
+			return stats.LoadWindowReport("", label, start, end)
+		},
+		LoadProjectWindow: func(dir string, label string, start, end time.Time) (stats.WindowReport, error) {
+			return stats.LoadWindowReport(dir, label, start, end)
+		},
+		ApplySelections: config.ApplySelections,
+		WriteConfigFile: config.WriteConfigFile,
+		OpenEditor:      editor.OpenWithConfig,
+		ParsePortRange:  port.ParseRange,
+		SelectPort:      port.Select,
+		IsPortAvailable: port.IsAvailable,
+		SendToast:       launch.SendToast,
 	}
 
-	deps.RunTUI = func(items []tui.PluginItem, editChoices []tui.EditChoice, sessions []tui.SessionItem, selectedSession tui.SessionItem, portsRange string, allowMultiplePlugins bool) (map[string]bool, bool, string, []string, tui.SessionItem, error) {
-		model := tui.NewModel(items, editChoices, sessions, selectedSession, version, allowMultiplePlugins)
+	deps.RunTUI = func(items []tui.PluginItem, editChoices []tui.EditChoice, sessions []tui.SessionItem, selectedSession tui.SessionItem, globalStats stats.Report, projectStats stats.Report, statsConfig config.StatsConfig, portsRange string, allowMultiplePlugins bool) (map[string]bool, bool, string, []string, tui.SessionItem, error) {
+		model := tui.NewModel(items, editChoices, sessions, selectedSession, globalStats, projectStats, statsConfig, version, allowMultiplePlugins).
+			WithStatsLoaders(
+				func() (stats.Report, error) {
+					return deps.LoadGlobalStats(statsConfig)
+				},
+				func() (stats.Report, error) {
+					cwd, err := deps.Getwd()
+					if err != nil {
+						return stats.Report{}, err
+					}
+					return deps.LoadProjectStats(cwd, statsConfig)
+				},
+				deps.LoadGlobalWindow,
+				func(label string, start, end time.Time) (stats.WindowReport, error) {
+					cwd, err := deps.Getwd()
+					if err != nil {
+						return stats.WindowReport{}, err
+					}
+					return deps.LoadProjectWindow(cwd, label, start, end)
+				},
+			)
 		result, err := tea.NewProgram(model).Run()
 		if err != nil {
 			return nil, false, "", nil, tui.SessionItem{}, err
@@ -149,6 +188,9 @@ func RunWithDeps(args []string, deps RuntimeDeps) error {
 			buildEditChoices(paths),
 			state.sessions,
 			state.selectedSession,
+			stats.Report{},
+			stats.Report{},
+			state.statsConfig,
 			state.effectivePortsRange,
 			state.allowMultiplePlugins,
 		)
@@ -196,6 +238,26 @@ func normalizeDeps(deps RuntimeDeps) RuntimeDeps {
 			return nil, nil
 		}
 	}
+	if deps.LoadGlobalStats == nil {
+		deps.LoadGlobalStats = func(config.StatsConfig) (stats.Report, error) {
+			return stats.Report{}, nil
+		}
+	}
+	if deps.LoadProjectStats == nil {
+		deps.LoadProjectStats = func(string, config.StatsConfig) (stats.Report, error) {
+			return stats.Report{}, nil
+		}
+	}
+	if deps.LoadGlobalWindow == nil {
+		deps.LoadGlobalWindow = func(string, time.Time, time.Time) (stats.WindowReport, error) {
+			return stats.WindowReport{}, nil
+		}
+	}
+	if deps.LoadProjectWindow == nil {
+		deps.LoadProjectWindow = func(string, string, time.Time, time.Time) (stats.WindowReport, error) {
+			return stats.WindowReport{}, nil
+		}
+	}
 	if deps.SendToast == nil {
 		deps.SendToast = launch.SendToast
 	}
@@ -238,7 +300,7 @@ func loadIterationState(args []string, deps RuntimeDeps, paths runtimePaths, sel
 		return iterationState{}, fmt.Errorf("failed to load whitelist: %w", err)
 	}
 
-	whitelist, configEditor, effectivePortsRange, allowMultiplePlugins := extractRuntimeConfig(args, ocConfig)
+	whitelist, configEditor, effectivePortsRange, allowMultiplePlugins, statsConfig := extractRuntimeConfig(args, ocConfig)
 	content, err := readConfigContent(deps, paths.configPath)
 	if err != nil {
 		return iterationState{}, err
@@ -252,6 +314,7 @@ func loadIterationState(args []string, deps RuntimeDeps, paths runtimePaths, sel
 		cwd:                  cwd,
 		sessions:             sessions,
 		selectedSession:      selectedSession,
+		statsConfig:          statsConfig,
 		content:              content,
 		visible:              visible,
 		configEditor:         configEditor,
@@ -260,16 +323,18 @@ func loadIterationState(args []string, deps RuntimeDeps, paths runtimePaths, sel
 	}, nil
 }
 
-func extractRuntimeConfig(args []string, ocConfig *config.OcConfig) ([]string, string, string, bool) {
+func extractRuntimeConfig(args []string, ocConfig *config.OcConfig) ([]string, string, string, bool, config.StatsConfig) {
 	var whitelist []string
 	var configEditor string
 	var portsRange string
+	var statsConfig config.StatsConfig
 	allowMultiplePlugins := false
 	if ocConfig != nil {
 		whitelist = ocConfig.Plugins
 		configEditor = ocConfig.Editor
 		portsRange = ocConfig.Ports
 		allowMultiplePlugins = ocConfig.AllowMultiplePlugins
+		statsConfig = ocConfig.Stats
 	}
 
 	if launch.HasPortFlag(args) {
@@ -278,7 +343,11 @@ func extractRuntimeConfig(args []string, ocConfig *config.OcConfig) ([]string, s
 		portsRange = DefaultPortsRange
 	}
 
-	return whitelist, configEditor, portsRange, allowMultiplePlugins
+	return whitelist, configEditor, portsRange, allowMultiplePlugins, statsConfig
+}
+
+func statsOptions(cfg config.StatsConfig) stats.Options {
+	return stats.Options{SessionGapMinutes: cfg.SessionGapMinutes}
 }
 
 func readConfigContent(deps RuntimeDeps, configPath string) ([]byte, error) {

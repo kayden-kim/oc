@@ -10,32 +10,42 @@ type PluginConfig struct {
 	Ports string `toml:"ports"`
 }
 
+type StatsConfig struct {
+	MediumTokens      int64  `toml:"medium_tokens"`
+	HighTokens        int64  `toml:"high_tokens"`
+	DefaultScope      string `toml:"scope"`
+	SessionGapMinutes int    `toml:"session_gap_minutes"`
+}
+
 // OcConfig represents the TOML configuration structure from ~/.oc
 type OcConfig struct {
 	Plugins              []string `toml:"plugins"`
 	Editor               string   `toml:"editor"`
 	AllowMultiplePlugins bool     `toml:"allow_multiple_plugins"`
 	Ports                string   `toml:"ports"`
+	Stats                StatsConfig
 	PluginConfigs        map[string]PluginConfig
 }
 
 type ocTable struct {
-	Plugins              []string `toml:"plugins"`
-	Editor               string   `toml:"editor"`
-	AllowMultiplePlugins bool     `toml:"allow_multiple_plugins"`
-	Ports                string   `toml:"ports"`
+	Plugins              []string    `toml:"plugins"`
+	Editor               string      `toml:"editor"`
+	AllowMultiplePlugins bool        `toml:"allow_multiple_plugins"`
+	Ports                string      `toml:"ports"`
+	Stats                StatsConfig `toml:"stats"`
 }
 
 type rawOcConfig struct {
 	Plugins              []string                `toml:"plugins"`
 	Editor               string                  `toml:"editor"`
 	AllowMultiplePlugins bool                    `toml:"allow_multiple_plugins"`
+	Stats                StatsConfig             `toml:"stats"`
 	Oc                   ocTable                 `toml:"oc"`
 	Plugin               map[string]PluginConfig `toml:"plugin"`
 }
 
 func hasOcTable(config rawOcConfig) bool {
-	return config.Oc.Plugins != nil || config.Oc.Editor != "" || config.Oc.AllowMultiplePlugins || config.Oc.Ports != ""
+	return config.Oc.Plugins != nil || config.Oc.Editor != "" || config.Oc.AllowMultiplePlugins || config.Oc.Ports != "" || config.Oc.Stats != (StatsConfig{})
 }
 
 // LoadOcConfig loads the TOML configuration from the specified path.
@@ -61,6 +71,7 @@ func LoadOcConfig(path string) (*OcConfig, error) {
 		Plugins:              rawConfig.Plugins,
 		Editor:               rawConfig.Editor,
 		AllowMultiplePlugins: rawConfig.AllowMultiplePlugins,
+		Stats:                rawConfig.Stats,
 		PluginConfigs:        rawConfig.Plugin,
 	}
 
@@ -69,6 +80,9 @@ func LoadOcConfig(path string) (*OcConfig, error) {
 		config.Editor = rawConfig.Oc.Editor
 		config.AllowMultiplePlugins = rawConfig.Oc.AllowMultiplePlugins
 		config.Ports = rawConfig.Oc.Ports
+		if rawConfig.Oc.Stats != (StatsConfig{}) {
+			config.Stats = rawConfig.Oc.Stats
+		}
 	}
 
 	// Return the parsed config

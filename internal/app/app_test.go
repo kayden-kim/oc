@@ -17,6 +17,7 @@ import (
 	"github.com/kayden-kim/oc/internal/config"
 	"github.com/kayden-kim/oc/internal/port"
 	"github.com/kayden-kim/oc/internal/runner"
+	"github.com/kayden-kim/oc/internal/stats"
 	"github.com/kayden-kim/oc/internal/tui"
 )
 
@@ -60,17 +61,17 @@ type tuiResponse struct {
 
 type tuiFunc func([]tui.PluginItem, []tui.EditChoice, string, bool) (map[string]bool, bool, string, []string, error)
 
-func wrapTUI(fn tuiFunc) func([]tui.PluginItem, []tui.EditChoice, []tui.SessionItem, tui.SessionItem, string, bool) (map[string]bool, bool, string, []string, tui.SessionItem, error) {
-	return func(items []tui.PluginItem, editChoices []tui.EditChoice, _ []tui.SessionItem, session tui.SessionItem, portsRange string, allowMultiplePlugins bool) (map[string]bool, bool, string, []string, tui.SessionItem, error) {
+func wrapTUI(fn tuiFunc) func([]tui.PluginItem, []tui.EditChoice, []tui.SessionItem, tui.SessionItem, stats.Report, stats.Report, config.StatsConfig, string, bool) (map[string]bool, bool, string, []string, tui.SessionItem, error) {
+	return func(items []tui.PluginItem, editChoices []tui.EditChoice, _ []tui.SessionItem, session tui.SessionItem, _ stats.Report, _ stats.Report, _ config.StatsConfig, portsRange string, allowMultiplePlugins bool) (map[string]bool, bool, string, []string, tui.SessionItem, error) {
 		selections, cancelled, editTarget, portArgs, err := fn(items, editChoices, portsRange, allowMultiplePlugins)
 		return selections, cancelled, editTarget, portArgs, session, err
 	}
 }
 
-func scriptedTUI(t *testing.T, responses ...tuiResponse) func([]tui.PluginItem, []tui.EditChoice, []tui.SessionItem, tui.SessionItem, string, bool) (map[string]bool, bool, string, []string, tui.SessionItem, error) {
+func scriptedTUI(t *testing.T, responses ...tuiResponse) func([]tui.PluginItem, []tui.EditChoice, []tui.SessionItem, tui.SessionItem, stats.Report, stats.Report, config.StatsConfig, string, bool) (map[string]bool, bool, string, []string, tui.SessionItem, error) {
 	t.Helper()
 	call := 0
-	return func(items []tui.PluginItem, editChoices []tui.EditChoice, _ []tui.SessionItem, session tui.SessionItem, _ string, _ bool) (map[string]bool, bool, string, []string, tui.SessionItem, error) {
+	return func(items []tui.PluginItem, editChoices []tui.EditChoice, _ []tui.SessionItem, session tui.SessionItem, _ stats.Report, _ stats.Report, _ config.StatsConfig, _ string, _ bool) (map[string]bool, bool, string, []string, tui.SessionItem, error) {
 		if call >= len(responses) {
 			t.Fatalf("unexpected TUI call %d", call+1)
 		}
@@ -196,7 +197,7 @@ func TestRunWithDeps_RefreshesFromManualSelectionToLatestSessionAcrossLoop(t *te
 			}
 			return []tui.SessionItem{{ID: "ses_after", Title: "After session"}, {ID: "ses_manual", Title: "Manual session"}}, nil
 		},
-		RunTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice, sessions []tui.SessionItem, session tui.SessionItem, _ string, _ bool) (map[string]bool, bool, string, []string, tui.SessionItem, error) {
+		RunTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice, sessions []tui.SessionItem, session tui.SessionItem, _ stats.Report, _ stats.Report, _ config.StatsConfig, _ string, _ bool) (map[string]bool, bool, string, []string, tui.SessionItem, error) {
 			call++
 			switch call {
 			case 1:
@@ -1153,6 +1154,57 @@ func TestRunWithDeps_DefaultPortRangeWhenNoOcConfig(t *testing.T) {
 	}
 	if len(r.args) != 2 {
 		t.Fatalf("expected no --port to be appended by the TUI stub, got %v", r.args)
+	}
+}
+
+func TestRunWithDeps_PassesStatsConfigToTUI(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, ".config", "opencode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "opencode.json")
+	if err := os.WriteFile(configPath, []byte("{\n  \"plugin\": [\n    \"plugin-a\"\n  ]\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ocConfigPath := filepath.Join(tmp, ".oc")
+	if err := os.WriteFile(ocConfigPath, []byte("[oc.stats]\nmedium_tokens = 2000\nhigh_tokens = 5000\nscope = \"project\"\nsession_gap_minutes = 15\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &fakeRunner{}
+	called := false
+	err := RunWithDeps(nil, RuntimeDeps{
+		NewRunner:    func() RunnerAPI { return r },
+		UserHomeDir:  func() (string, error) { return tmp, nil },
+		ReadFile:     os.ReadFile,
+		LoadOcConfig: config.LoadOcConfig,
+		ParsePlugins: config.ParsePlugins,
+		FilterByWhitelist: func(p []config.Plugin, w []string) ([]config.Plugin, []config.Plugin) {
+			return DefaultDeps("test").FilterByWhitelist(p, w)
+		},
+		RunTUI: func(items []tui.PluginItem, editChoices []tui.EditChoice, _ []tui.SessionItem, _ tui.SessionItem, _ stats.Report, _ stats.Report, statsConfig config.StatsConfig, _ string, _ bool) (map[string]bool, bool, string, []string, tui.SessionItem, error) {
+			called = true
+			if statsConfig.MediumTokens != 2000 || statsConfig.HighTokens != 5000 || statsConfig.DefaultScope != "project" || statsConfig.SessionGapMinutes != 15 {
+				t.Fatalf("expected stats config {2000,5000,project,15}, got %#v", statsConfig)
+			}
+			return nil, true, "", nil, tui.SessionItem{}, nil
+		},
+		LoadGlobalStats:  func(config.StatsConfig) (stats.Report, error) { return stats.Report{}, nil },
+		LoadProjectStats: func(string, config.StatsConfig) (stats.Report, error) { return stats.Report{}, nil },
+		ApplySelections:  config.ApplySelections,
+		WriteConfigFile:  config.WriteConfigFile,
+		OpenEditor:       func(string, string) error { return nil },
+		ParsePortRange:   port.ParseRange,
+		SelectPort:       port.Select,
+		IsPortAvailable:  port.IsAvailable,
+		SendToast:        func(context.Context, int, []string) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("RunWithDeps returned error: %v", err)
+	}
+	if !called {
+		t.Fatal("expected TUI to be called")
 	}
 }
 

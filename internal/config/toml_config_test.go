@@ -36,6 +36,7 @@ func TestLoadOcConfig_FieldParsing(t *testing.T) {
 		wantEditor           string
 		wantAllowMultiPlugin bool
 		wantPorts            string
+		wantStats            StatsConfig
 	}{
 		{
 			name:                 "plugins list",
@@ -44,6 +45,7 @@ func TestLoadOcConfig_FieldParsing(t *testing.T) {
 			wantEditor:           "",
 			wantAllowMultiPlugin: false,
 			wantPorts:            "",
+			wantStats:            StatsConfig{},
 		},
 		{
 			name:                 "empty plugins",
@@ -52,6 +54,7 @@ func TestLoadOcConfig_FieldParsing(t *testing.T) {
 			wantEditor:           "",
 			wantAllowMultiPlugin: false,
 			wantPorts:            "",
+			wantStats:            StatsConfig{},
 		},
 		{
 			name: "editor configured",
@@ -61,6 +64,7 @@ editor = "code --wait"`,
 			wantEditor:           "code --wait",
 			wantAllowMultiPlugin: false,
 			wantPorts:            "",
+			wantStats:            StatsConfig{},
 		},
 		{
 			name: "allow multiple plugins true",
@@ -70,6 +74,7 @@ allow_multiple_plugins = true`,
 			wantEditor:           "",
 			wantAllowMultiPlugin: true,
 			wantPorts:            "",
+			wantStats:            StatsConfig{},
 		},
 		{
 			name:                 "optional fields omitted use defaults",
@@ -78,6 +83,25 @@ allow_multiple_plugins = true`,
 			wantEditor:           "",
 			wantAllowMultiPlugin: false,
 			wantPorts:            "",
+			wantStats:            StatsConfig{},
+		},
+		{
+			name:                 "stats configured",
+			content:              "stats.medium_tokens = 60000\nstats.high_tokens = 180000\nstats.session_gap_minutes = 15",
+			wantPlugins:          nil,
+			wantEditor:           "",
+			wantAllowMultiPlugin: false,
+			wantPorts:            "",
+			wantStats:            StatsConfig{MediumTokens: 60000, HighTokens: 180000, SessionGapMinutes: 15},
+		},
+		{
+			name:                 "stats configured with default scope",
+			content:              "stats.medium_tokens = 60000\nstats.high_tokens = 180000\nstats.scope = \"project\"\nstats.session_gap_minutes = 20",
+			wantPlugins:          nil,
+			wantEditor:           "",
+			wantAllowMultiPlugin: false,
+			wantPorts:            "",
+			wantStats:            StatsConfig{MediumTokens: 60000, HighTokens: 180000, DefaultScope: "project", SessionGapMinutes: 20},
 		},
 	}
 
@@ -102,6 +126,9 @@ allow_multiple_plugins = true`,
 			}
 			if config.Ports != tt.wantPorts {
 				t.Fatalf("expected ports %q, got %q", tt.wantPorts, config.Ports)
+			}
+			if config.Stats != tt.wantStats {
+				t.Fatalf("expected stats %#v, got %#v", tt.wantStats, config.Stats)
 			}
 		})
 	}
@@ -146,6 +173,12 @@ allow_multiple_plugins = false
 editor = "nvim"
 ports = "55000-55500"
 
+  [oc.stats]
+  medium_tokens = 60000
+  high_tokens = 180000
+  scope = "project"
+  session_gap_minutes = 15
+
 [plugin.oh-my-opencode]
 ports = "55000-55500"`
 
@@ -166,6 +199,9 @@ ports = "55000-55500"`
 	if config.Ports != "55000-55500" {
 		t.Fatalf("expected oc ports 55000-55500, got %q", config.Ports)
 	}
+	if config.Stats != (StatsConfig{MediumTokens: 60000, HighTokens: 180000, DefaultScope: "project", SessionGapMinutes: 15}) {
+		t.Fatalf("unexpected stats config: %#v", config.Stats)
+	}
 	pluginConfig, ok := config.PluginConfigs["oh-my-opencode"]
 	if !ok {
 		t.Fatal("expected plugin config for oh-my-opencode")
@@ -179,12 +215,22 @@ func TestLoadOcConfigOcSectionOverridesFlatKeys(t *testing.T) {
 	content := `plugins = ["top-level"]
 editor = "vim"
 allow_multiple_plugins = true
+stats.medium_tokens = 40000
+stats.high_tokens = 120000
+stats.scope = "global"
+stats.session_gap_minutes = 10
 
 [oc]
 plugins = ["section-plugin"]
 editor = "nvim"
 allow_multiple_plugins = false
-ports = "55000-55500"`
+ports = "55000-55500"
+
+  [oc.stats]
+  medium_tokens = 50000
+  high_tokens = 150000
+	  scope = "project"
+	  session_gap_minutes = 25`
 
 	config := mustLoadOcConfig(t, content)
 
@@ -200,10 +246,19 @@ ports = "55000-55500"`
 	if config.Ports != "55000-55500" {
 		t.Fatalf("expected [oc] ports to be loaded, got %q", config.Ports)
 	}
+	if config.Stats != (StatsConfig{MediumTokens: 50000, HighTokens: 150000, DefaultScope: "project", SessionGapMinutes: 25}) {
+		t.Fatalf("expected [oc] stats to override flat values, got %#v", config.Stats)
+	}
 }
 
 func TestHasOcTableRecognizesPortsOnlyConfig(t *testing.T) {
 	if !hasOcTable(rawOcConfig{Oc: ocTable{Ports: "55000-55500"}}) {
 		t.Fatal("expected [oc].ports to count as an [oc] table")
+	}
+}
+
+func TestHasOcTableRecognizesStatsOnlyConfig(t *testing.T) {
+	if !hasOcTable(rawOcConfig{Oc: ocTable{Stats: StatsConfig{MediumTokens: 50000}}}) {
+		t.Fatal("expected [oc].stats to count as an [oc] table")
 	}
 }

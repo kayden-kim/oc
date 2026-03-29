@@ -18,11 +18,12 @@
 ```
  OC | v0.2.4 | [10m ago] Update README.md (ses_2dac2bd3bffebJEw4FXgej3q9) 
 
- 📋 Choose plugins to enable
+ 📋 Choose plugins
    > ✔  oh-my-opencode
         superpowers
 
- 💡 ↑/↓: navigate • space: toggle • enter: confirm • s: sessions • e: edit config • q: quit
+ 💡 ↑/↓: navigate • space: toggle • enter: confirm • q: quit
+    tab: stats • g: scope • s: sessions • c: config
 ```
 
 ## Features
@@ -33,7 +34,7 @@
 
 - **Port auto-selection** — For multi-instance workflows (tmux, multiple terminals), `oc` picks a free port from a configured range before launching. No more manual port juggling.
 
-- **Editor integration** — Press `e` to edit config files (`~/.oc`, `opencode.json`) without leaving the TUI. Supports custom editor commands via `EDITOR` or the config file.
+- **Editor integration** — Press `c` to edit config files (`~/.oc`, `opencode.json`) without leaving the TUI. Supports custom editor commands via `EDITOR` or the config file.
 
 - **Re-entrant loop** — After opencode exits, `oc` returns to the TUI so you can switch plugins, change sessions, and relaunch without restarting the process.
 
@@ -113,6 +114,11 @@ plugins = ["oh-my-opencode", "superpowers"]
 allow_multiple_plugins = false
 editor = "nvim"
 ports = "55000-55500"
+
+  [oc.stats]
+  medium_tokens = 1000000
+  high_tokens = 5000000
+  scope = "global"
 ```
 
 | Key | Type | Default | Description |
@@ -121,6 +127,13 @@ ports = "55000-55500"
 | `allow_multiple_plugins` | `bool` | `false` | Allow enabling multiple plugins at once. When `false`, selecting a plugin deselects all others. |
 | `editor` | `string` | platform default | Fallback editor command when `EDITOR` is unset. |
 | `ports` | `string` | `55500-55555` | Port range for auto-selection (e.g. `"55000-55500"`). |
+
+| `stats.medium_tokens` | `int` | `1000000` | Activity heatmap threshold for the medium (`▓`) token level. |
+| `stats.high_tokens` | `int` | `5000000` | Activity heatmap threshold for the high (`█`) token level. |
+| `stats.scope` | `string` | `"global"` | Initial stats scope when the launcher opens. Supported values: `"global"`, `"project"`. |
+
+> [!NOTE]
+> Stats options are read from `[oc.stats]`. If omitted, `oc` uses the built-in defaults shown above. Press `g` in the launcher or stats view to switch between global and project scope.
 
 **Editor resolution order:** `EDITOR` env var → `editor` in `~/.oc` → platform default (`notepad` / `open -t` / `xdg-open`).
 
@@ -148,7 +161,7 @@ ports = "55000-55500"
 | `Space` | Toggle plugin on/off |
 | `Enter` | Save selections and launch opencode |
 | `s` | Open session picker |
-| `e` | Open config editor picker |
+| `c` | Open config editor picker |
 | `q` / `Esc` / `Ctrl+C` | Quit |
 
 ### Session picker

@@ -1,0 +1,905 @@
+package tui
+
+import (
+	"fmt"
+	"math"
+	"strconv"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"charm.land/lipgloss/v2"
+	"github.com/kayden-kim/oc/internal/stats"
+)
+
+const (
+	rhythmFirstColumnWidth  = 22
+	metricColumnWidth       = 24
+	overviewPairColumnWidth = 28
+	trendLabelColumnWidth   = 10
+	metricsLabelColumnWidth = 14
+	metricsValueColumnWidth = 18
+	maxActivityItems        = 15
+	statsTabRowWidth        = 80
+	statsTabWidth           = 14
+)
+
+func statsTabTitles() []string {
+	return []string{"Overview", "Daily", "Monthly"}
+}
+
+func filterNonEmpty(parts []string) []string {
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.TrimSpace(part) != "" {
+			result = append(result, part)
+		}
+	}
+	return result
+}
+
+func (m Model) renderLauncherAnalytics() string {
+	report := m.currentReport()
+	headerPrefix := ""
+	if m.projectScope {
+		headerPrefix = "[Project] "
+	}
+	sections := []string{renderSubSectionHeader(headerPrefix+"Rhythm", habitSectionTitleStyle)}
+	minimap := m.renderLauncherMinimap(report)
+	habitLine := styledMetricLead("• active ", fmt.Sprintf("%d/30d", report.ActiveDays))
+	if minimap != "" {
+		habitLine += minimap
+	}
+	sections = append(sections, bulletLine(habitLine))
+	sections = append(sections, bulletLine(styledMetricLine("• streak ", formatStreakWithBest(report.CurrentStreak, displayBestStreak(report)))))
+	sections = append(sections, "", renderSubSectionHeader(headerPrefix+"Metrics", todaySectionTitleStyle))
+	sections = append(sections,
+		metricsHeaderLine(),
+		metricsValueLine("tokens", formatTokensWithTop(report.TodayTokens, report.Days), formatPeakValue(formatSummaryTokens(maxTokens(report.Days)), maxTokenDay(report.Days).Date), formatSummaryTokens(report.ThirtyDayTokens)),
+		metricsValueLine("cost", formatCurrencyWithTop(report.TodayCost, report.Days), formatPeakValue(formatSummaryCurrency(report.HighestBurnDay.Cost), report.HighestBurnDay.Date), formatSummaryCurrency(report.ThirtyDayCost)),
+		metricsValueLine("hours", formatHoursWithTop(report.TodaySessionMinutes, report.Days), formatPeakValue(formatSummaryHours(maxSessionMinutes(report.Days)), maxSessionDay(report.Days).Date), formatSummaryHours(report.ThirtyDaySessionMinutes)),
+		metricsValueLine("lines", formatCodeLinesWithTop(report.TodayCodeLines, report.Days), formatPeakValue(formatSummaryCodeLines(report.HighestCodeDay.CodeLines), report.HighestCodeDay.Date), formatSummaryCodeLines(report.ThirtyDayCodeLines)),
+	)
+	return strings.Join(sections, "\n")
+}
+
+func (m Model) currentReport() stats.Report {
+	if m.projectScope {
+		return m.projectStats
+	}
+	return m.globalStats
+}
+
+func maxTokens(days []stats.Day) int64 {
+	var max int64
+	for _, day := range days {
+		if day.Tokens > max {
+			max = day.Tokens
+		}
+	}
+	return max
+}
+
+func maxCost(days []stats.Day) float64 {
+	var max float64
+	for _, day := range days {
+		if day.Cost > max {
+			max = day.Cost
+		}
+	}
+	return max
+}
+
+func maxSessionMinutes(days []stats.Day) int {
+	var max int
+	for _, day := range days {
+		if day.SessionMinutes > max {
+			max = day.SessionMinutes
+		}
+	}
+	return max
+}
+
+func maxCodeLines(days []stats.Day) int {
+	var max int
+	for _, day := range days {
+		if day.CodeLines > max {
+			max = day.CodeLines
+		}
+	}
+	return max
+}
+
+func displayBestStreak(report stats.Report) int {
+	if report.BestStreak > report.CurrentStreak {
+		return report.BestStreak
+	}
+	return report.CurrentStreak
+}
+
+func formatStreakWithBest(current int, best int) string {
+	if current == best {
+		return fmt.Sprintf("%dd (best)", current)
+	}
+	return fmt.Sprintf("%dd (best %dd)", current, best)
+}
+
+func maxTokenDay(days []stats.Day) stats.Day {
+	var max stats.Day
+	for _, day := range days {
+		if day.Tokens > max.Tokens {
+			max = day
+		}
+	}
+	return max
+}
+
+func maxSessionDay(days []stats.Day) stats.Day {
+	var max stats.Day
+	for _, day := range days {
+		if day.SessionMinutes > max.SessionMinutes {
+			max = day
+		}
+	}
+	return max
+}
+
+func formatPeakValue(value string, date time.Time) string {
+	if date.IsZero() {
+		return value
+	}
+	return fmt.Sprintf("%s (%s)", value, date.Format("01-02"))
+}
+
+func (m Model) renderLauncherMinimap(report stats.Report) string {
+	if len(report.Days) == 0 {
+		return ""
+	}
+	count := 28
+	if m.width > 0 && m.width < 72 {
+		count = 21
+	}
+	if m.width > 0 && m.width < 40 {
+		return ""
+	}
+	days := report.Days
+	if len(days) > count {
+		days = days[len(days)-count:]
+	}
+	return fmt.Sprintf("%s", m.renderHeatmapLine(days))
+}
+
+func bulletLine(line string) string {
+	return defaultTextStyle.Render("    ") + line
+}
+
+func todayMetricLine(line string) string {
+	return defaultTextStyle.Render("    ") + line
+}
+
+func padStyledText(rendered string, visibleWidth int, targetWidth int) string {
+	if visibleWidth >= targetWidth {
+		return rendered
+	}
+	return rendered + defaultTextStyle.Render(strings.Repeat(" ", targetWidth-visibleWidth))
+}
+
+func styledTodayMetrics(labelA string, valueA string, labelB string, valueB string) string {
+	return renderTwoColumns(labelA, valueA, metricColumnWidth, labelB, valueB, metricColumnWidth)
+}
+
+func styledTodayMetricTriple(labelA string, valueA string, labelB string, valueB string, labelC string, valueC string) string {
+	return renderThreeColumns(labelA, valueA, metricColumnWidth, labelB, valueB, metricColumnWidth, labelC, valueC, metricColumnWidth)
+}
+
+func valueText(value string) string {
+	return statsValueTextStyle.Render(value)
+}
+
+func styledMetricLine(label string, value string) string {
+	return defaultTextStyle.Render(label) + valueText(value)
+}
+
+func styledTrendLine(label string, value string) string {
+	return padStyledText(defaultTextStyle.Render(label), utf8.RuneCountInString(label), trendLabelColumnWidth) + valueText(value)
+}
+
+func styledMetricLead(label string, value string) string {
+	return renderColumn(label, value, rhythmFirstColumnWidth)
+}
+
+func styledMetricFixedPair(labelA string, valueA string, labelB string, valueB string) string {
+	return renderTwoColumns(labelA, valueA, metricColumnWidth, labelB, valueB, metricColumnWidth)
+}
+
+func activitySectionHeader(title string, unique int) string {
+	return renderSubSectionHeader(fmt.Sprintf("%s (%s)", title, formatGroupedInt(unique)), habitSectionTitleStyle)
+}
+
+func styledOverviewPair(labelA string, valueA string, labelB string, valueB string) string {
+	return renderTwoColumns(labelA, valueA, overviewPairColumnWidth, labelB, valueB, overviewPairColumnWidth)
+}
+
+func metricsHeaderLine() string {
+	return defaultTextStyle.Render("    ") +
+		padStyledText(defaultTextStyle.Render(""), 0, metricsLabelColumnWidth) +
+		padStyledText(defaultTextStyle.Render("today"), len("today"), metricsValueColumnWidth) +
+		padStyledText(defaultTextStyle.Render("peak day"), len("peak day"), metricsValueColumnWidth) +
+		defaultTextStyle.Render("30d total")
+}
+
+func metricsValueLine(label string, today string, peak string, total string) string {
+	todayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF9900"))
+	return defaultTextStyle.Render("    ") +
+		padStyledText(defaultTextStyle.Render("  "+label), len("  "+label), metricsLabelColumnWidth) +
+		padStyledText(todayStyle.Render(today), len(today), metricsValueColumnWidth) +
+		padStyledText(statsValueTextStyle.Render(peak), len(peak), metricsValueColumnWidth) +
+		statsValueTextStyle.Render(total)
+}
+
+func styledMetricTriple(labelA string, valueA string, labelB string, valueB string, labelC string, valueC string) string {
+	return renderThreeColumns(labelA, valueA, metricColumnWidth, labelB, valueB, metricColumnWidth, labelC, valueC, metricColumnWidth)
+}
+
+func renderTwoColumns(labelA string, valueA string, widthA int, labelB string, valueB string, widthB int) string {
+	return renderColumn(labelA, valueA, widthA) + renderColumn(labelB, valueB, widthB)
+}
+
+func renderThreeColumns(labelA string, valueA string, widthA int, labelB string, valueB string, widthB int, labelC string, valueC string, widthC int) string {
+	return renderColumn(labelA, valueA, widthA) + renderColumn(labelB, valueB, widthB) + renderColumn(labelC, valueC, widthC)
+}
+
+func renderColumn(label string, value string, width int) string {
+	rendered := defaultTextStyle.Render(label) + valueText(value)
+	return padStyledText(rendered, utf8.RuneCountInString(label)+utf8.RuneCountInString(value), width)
+}
+
+func (m Model) renderHeatmapLine(days []stats.Day) string {
+	var b strings.Builder
+	todayKey := heatmapDayKey(time.Now())
+	for i, day := range days {
+		if i > 0 {
+			if i%7 == 0 {
+				b.WriteByte(' ')
+			}
+		}
+		b.WriteString(m.renderHeatmapCell(day, heatmapDayKey(day.Date) == todayKey))
+	}
+	return b.String()
+}
+
+func heatmapDayKey(t time.Time) string {
+	return t.In(time.Local).Format("2006-01-02")
+}
+
+func (m Model) renderHeatmapCell(day stats.Day, isToday bool) string {
+	level := m.activityLevel(day)
+	char := '·'
+	style := lipgloss.NewStyle().Foreground(lipgloss.Color("#303030"))
+	switch level {
+	case 1:
+		char = '░'
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("#505050"))
+	case 2:
+		char = '▓'
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("#787878"))
+	case 3:
+		char = '█'
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("#B8B8B8"))
+	}
+	if isToday {
+		switch level {
+		case 0:
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#5A3A00"))
+		case 1:
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#8A5400"))
+		case 2:
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#C97300"))
+		case 3:
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF9900"))
+		}
+	}
+	return style.Render(string(char))
+}
+
+func (m Model) activityLevel(day stats.Day) int {
+	if day.Tokens >= m.statsConfig.HighTokens {
+		return 3
+	}
+	if day.Tokens >= m.statsConfig.MediumTokens {
+		return 2
+	}
+	if isActive(day) {
+		return 1
+	}
+	return 0
+}
+
+func isActive(day stats.Day) bool {
+	return day.AssistantMessages > 0 || day.ToolCalls > 0 || day.StepFinishes > 0
+}
+
+func isAgent(day stats.Day) bool {
+	return day.Subtasks >= 1
+}
+
+func isAgentHeavy(day stats.Day) bool {
+	return day.Subtasks >= 2
+}
+
+func (m Model) renderStatsView() string {
+	lines := m.statsContentLines()
+	start, end := m.visibleStatsRange(len(lines))
+	parts := []string{
+		m.renderTopBadge(),
+		m.renderStatsTabs() + "\n" + strings.Join(lines[start:end], "\n"),
+		renderStatsHelpLine(),
+	}
+	return strings.Join(filterNonEmpty(parts), "\n\n")
+}
+
+func (m Model) statsContentLines() []string {
+	if m.statsTab == 0 && m.currentStatsLoading() && len(m.currentReport().Days) == 0 {
+		return []string{"Loading stats..."}
+	}
+	switch m.statsTab {
+	case 0:
+		return m.renderOverviewLines()
+	case 1:
+		if m.currentWindowLoading() && m.currentWindowReport().Label == "" {
+			return []string{"Loading stats..."}
+		}
+		return m.renderWindowLines(m.currentWindowReport())
+	default:
+		if m.currentWindowLoading() && m.currentWindowReport().Label == "" {
+			return []string{"Loading stats..."}
+		}
+		return m.renderWindowLines(m.currentWindowReport())
+	}
+}
+
+func (m Model) currentStatsLoading() bool {
+	if m.projectScope {
+		return m.projectStatsLoading
+	}
+	return m.globalStatsLoading
+}
+
+func (m Model) currentWindowReport() stats.WindowReport {
+	if m.projectScope {
+		if m.statsTab == 1 {
+			return m.projectDaily
+		}
+		return m.projectMonthly
+	}
+	if m.statsTab == 1 {
+		return m.globalDaily
+	}
+	return m.globalMonthly
+}
+
+func (m Model) currentWindowLoading() bool {
+	if m.projectScope {
+		if m.statsTab == 1 {
+			return m.projectDailyLoading
+		}
+		return m.projectMonthlyLoading
+	}
+	if m.statsTab == 1 {
+		return m.globalDailyLoading
+	}
+	return m.globalMonthlyLoading
+}
+
+func (m Model) renderStatsTabs() string {
+	titles := statsTabTitles()
+	if len(titles) == 0 {
+		return ""
+	}
+	labels := make([]string, 0, len(titles))
+	indicators := make([]string, 0, len(titles))
+	for i, title := range titles {
+		labels = append(labels, renderStatsTabLabel(title, i == m.statsTab))
+		if i == m.statsTab {
+			indicators = append(indicators, statsTabIndicatorStyle.Render(strings.Repeat("▔", statsTabWidth)))
+			continue
+		}
+		indicators = append(indicators, strings.Repeat(" ", statsTabWidth))
+	}
+	left := strings.Join(labels, "")
+	metaWidth := max(0, statsTabRowWidth-lipgloss.Width(left))
+	meta := statsTabMetaStyle.Width(metaWidth).Align(lipgloss.Right).Render(m.statsTabMeta())
+	indicatorRow := strings.Join(indicators, "") + strings.Repeat(" ", metaWidth)
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, meta) + "\n" + indicatorRow
+}
+
+func renderStatsTabLabel(title string, active bool) string {
+	style := statsTabStyle
+	if active {
+		style = statsTabActiveStyle
+	}
+	return style.Padding(0, 0).Width(statsTabWidth).Align(lipgloss.Center).Render("   " + title + "   ")
+}
+
+func (m Model) statsTabMeta() string {
+	return fmt.Sprintf(" %s (%s) ", m.statsScopeLabel(), m.statsTabDateRange())
+}
+
+func (m Model) statsScopeLabel() string {
+	if m.projectScope {
+		return "Project"
+	}
+	return "Global"
+}
+
+func (m Model) statsTabDateRange() string {
+	if m.statsTab != 0 {
+		window := m.currentWindowReport()
+		if !window.Start.IsZero() && !window.End.IsZero() {
+			return formatStatsDateRange(window.Start, window.End.Add(-time.Second))
+		}
+	}
+	report := m.currentReport()
+	if len(report.Days) == 0 {
+		return "--~--"
+	}
+	return formatStatsDateRange(report.Days[0].Date, report.Days[len(report.Days)-1].Date)
+}
+
+func formatStatsDateRange(start time.Time, end time.Time) string {
+	if start.IsZero() || end.IsZero() {
+		return "--~--"
+	}
+	return start.Format("2006-01-02") + "~" + end.Format("2006-01-02")
+}
+
+func (m Model) renderOverviewLines() []string {
+	report := m.currentReport()
+	lines := strings.Split(m.renderLauncherAnalytics(), "\n")
+	lines = append(lines,
+		"",
+		renderSubSectionHeader("Trends", habitSectionTitleStyle),
+		bulletLine(styledTrendLine("• tokens ", renderValueTrend(report.Days, func(day stats.Day) float64 { return float64(day.Tokens) }))),
+		bulletLine(styledTrendLine("• cost ", renderValueTrend(report.Days, func(day stats.Day) float64 { return day.Cost }))),
+		bulletLine(styledTrendLine("• hours ", renderValueTrend(report.Days, func(day stats.Day) float64 { return float64(day.SessionMinutes) }))),
+		bulletLine(styledTrendLine("• lines ", renderValueTrend(report.Days, func(day stats.Day) float64 { return float64(day.CodeLines) }))),
+		bulletLine(styledMetricLine("• reasoning ", fmt.Sprintf("%s today | %s baseline", formatPercent(report.TodayReasoningShare), formatPercent(report.RecentReasoningShare)))),
+		"",
+		activitySectionHeader("Activity - Models", report.UniqueModelCount),
+	)
+	lines = append(lines, renderUsageLines(report.TopModels, report.TotalModelTokens)...)
+	lines = append(lines,
+		"",
+		activitySectionHeader("Activity - Agents", report.UniqueAgentCount),
+	)
+	lines = append(lines, renderUsageLines(report.TopAgents, int64(report.TotalSubtasks))...)
+	lines = append(lines,
+		"",
+		activitySectionHeader("Activity - Skills", report.UniqueSkillCount),
+	)
+	lines = append(lines, renderUsageLines(report.TopSkills, int64(report.TotalSkillCalls))...)
+	lines = append(lines,
+		"",
+		activitySectionHeader("Activity - Tools", report.UniqueToolCount),
+	)
+	lines = append(lines, renderUsageLines(report.TopTools, int64(report.TotalToolCalls))...)
+	return lines
+}
+
+func renderUsageLines(items []stats.UsageCount, total int64) []string {
+	metricFormatter := formatUsageMetric
+	if usageItemsUseAmounts(items) {
+		metricFormatter = formatSummaryTokens
+	}
+	if len(items) == 0 {
+		return []string{bulletLine(styledMetricLine(fmt.Sprintf("• top %d ", maxActivityItems), "--"))}
+	}
+	visibleItems := items
+	if len(visibleItems) > maxActivityItems {
+		visibleItems = visibleItems[:maxActivityItems]
+	}
+	top := usageMetric(visibleItems[0])
+	labels := make([]string, len(visibleItems))
+	maxLabelWidth := 0
+	for i, item := range visibleItems {
+		labels[i] = fmt.Sprintf("• %s ", item.Name)
+		if width := utf8.RuneCountInString(labels[i]); width > maxLabelWidth {
+			maxLabelWidth = width
+		}
+	}
+	totalLabel := "• Total "
+	if width := utf8.RuneCountInString(totalLabel); width > maxLabelWidth {
+		maxLabelWidth = width
+	}
+	showOthers := len(items) > maxActivityItems && total > 0
+	othersLabel := "• others "
+	if showOthers {
+		if width := utf8.RuneCountInString(othersLabel); width > maxLabelWidth {
+			maxLabelWidth = width
+		}
+	}
+	othersMetric := total
+	lines := make([]string, 0, len(visibleItems)+2)
+	for i, item := range visibleItems {
+		label := labels[i]
+		itemMetric := usageMetric(item)
+		othersMetric -= itemMetric
+		value := fmt.Sprintf("%s %s (%s)", renderUsageBar(itemMetric, top, 8), metricFormatter(itemMetric), formatUsageShare(itemMetric, total))
+		lines = append(lines, bulletLine(padStyledText(defaultTextStyle.Render(label), utf8.RuneCountInString(label), maxLabelWidth)+valueText(value)))
+	}
+	if showOthers && othersMetric > 0 {
+		value := fmt.Sprintf("%s %s (%s)", renderUsageBar(othersMetric, top, 8), metricFormatter(othersMetric), formatUsageShare(othersMetric, total))
+		lines = append(lines, bulletLine(padStyledText(defaultTextStyle.Render(othersLabel), utf8.RuneCountInString(othersLabel), maxLabelWidth)+valueText(value)))
+	}
+	if total > 0 {
+		value := fmt.Sprintf("%s %s (%s)", strings.Repeat("·", 8), metricFormatter(total), "100%")
+		lines = append(lines, bulletLine(padStyledText(defaultTextStyle.Render(totalLabel), utf8.RuneCountInString(totalLabel), maxLabelWidth)+valueText(value)))
+	}
+	return lines
+}
+
+func usageItemsUseAmounts(items []stats.UsageCount) bool {
+	for _, item := range items {
+		if item.Amount > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func formatUsageMetric(value int64) string {
+	return formatGroupedNumber(value)
+}
+
+func renderUsageBar(count int64, maxCount int64, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if count <= 0 || maxCount <= 0 {
+		return strings.Repeat("·", width)
+	}
+	filled := int(math.Round((float64(count) / float64(maxCount)) * float64(width)))
+	if filled < 1 {
+		filled = 1
+	}
+	if filled > width {
+		filled = width
+	}
+	return strings.Repeat("█", filled) + strings.Repeat("·", width-filled)
+}
+
+func formatUsageShare(count int64, total int64) string {
+	if count <= 0 || total <= 0 {
+		return "--"
+	}
+	return fmt.Sprintf("%d%%", int(math.Round((float64(count)/float64(total))*100)))
+}
+
+func usageMetric(item stats.UsageCount) int64 {
+	if item.Amount > 0 {
+		return item.Amount
+	}
+	return int64(item.Count)
+}
+
+func (m Model) renderWindowLines(report stats.WindowReport) []string {
+	title := fmt.Sprintf("# Tokens used (%s)", report.End.Add(-time.Second).Format("02/01/2006"))
+	if report.Label == "Monthly" {
+		title = fmt.Sprintf("# Tokens used (%s)", report.Start.Format("01/2006"))
+	}
+	lines := []string{
+		title,
+		tableString(
+			[]string{"Window", "Messages", "Sessions", "Tokens", "Cost"},
+			[][]string{{
+				fmt.Sprintf("%s .. %s", report.Start.Format("15:04 2006-01-02"), report.End.Add(-time.Second).Format("15:04 2006-01-02")),
+				formatGroupedInt(report.Messages),
+				formatGroupedInt(report.Sessions),
+				formatSummaryTokens(report.Tokens),
+				formatSummaryCurrency(report.Cost),
+			}},
+			map[int]bool{1: true, 2: true, 3: true, 4: true},
+		),
+		"",
+		"## Models",
+		tableString(windowModelHeaders(), windowModelRows(report.Models), map[int]bool{2: true, 3: true, 4: true, 5: true, 6: true, 7: true, 8: true}),
+		"",
+		"## Top Sessions",
+		tableString(windowSessionHeaders(), m.windowSessionRows(report), map[int]bool{2: true, 3: true, 4: true}),
+	}
+	return lines
+}
+
+func renderValueTrend(days []stats.Day, extract func(stats.Day) float64) string {
+	if len(days) == 0 {
+		return "--"
+	}
+	values := make([]float64, len(days))
+	maxValue := 0.0
+	for i, day := range days {
+		values[i] = extract(day)
+		if values[i] > maxValue {
+			maxValue = values[i]
+		}
+	}
+	levels := []rune{'·', '░', '▓', '█'}
+	colors := []string{"#303030", "#505050", "#787878", "#B8B8B8"}
+	todayColors := []string{"#5A3A00", "#8A5400", "#C97300", "#FF9900"}
+	var b strings.Builder
+	for i, value := range values {
+		if maxValue == 0 {
+			palette := colors
+			if i == len(values)-1 {
+				palette = todayColors
+			}
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(palette[0])).Render("·"))
+			continue
+		}
+		index := int(math.Round((value / maxValue) * float64(len(levels)-1)))
+		if index < 0 {
+			index = 0
+		}
+		if index >= len(levels) {
+			index = len(levels) - 1
+		}
+		palette := colors
+		if i == len(values)-1 {
+			palette = todayColors
+		}
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(palette[index])).Render(string(levels[index])))
+	}
+	return b.String()
+}
+
+func formatCurrencyWithTop(today float64, days []stats.Day) string {
+	return fmt.Sprintf("%s (%s)", formatSummaryCurrency(today), formatRatioToTop(today, maxCost(days)))
+}
+
+func formatTokensWithTop(today int64, days []stats.Day) string {
+	return fmt.Sprintf("%s (%s)", formatSummaryTokens(today), formatRatioToTop(float64(today), float64(maxTokens(days))))
+}
+
+func formatHoursWithTop(today int, days []stats.Day) string {
+	return fmt.Sprintf("%s (%s)", formatSummaryHours(today), formatRatioToTop(float64(today), float64(maxSessionMinutes(days))))
+}
+
+func formatCodeLinesWithTop(today int, days []stats.Day) string {
+	return fmt.Sprintf("%s (%s)", formatSummaryCodeLines(today), formatRatioToTop(float64(today), float64(maxCodeLines(days))))
+}
+
+func formatSummaryCurrency(value float64) string {
+	if value <= 0 {
+		return "--"
+	}
+	return formatCurrency(value)
+}
+
+func formatSummaryTokens(value int64) string {
+	if value <= 0 {
+		return "--"
+	}
+	return formatCompactTokens(value)
+}
+
+func formatSummaryHours(minutes int) string {
+	if minutes <= 0 {
+		return "0.0h"
+	}
+	return formatGroupedFloat(float64(minutes)/60, 1) + "h"
+}
+
+func formatSummaryCodeLines(value int) string {
+	if value <= 0 {
+		return "--"
+	}
+	if value >= 1000 {
+		return fmt.Sprintf("%.1fk", float64(value)/1000)
+	}
+	return formatGroupedInt(value)
+}
+
+func formatCurrency(value float64) string {
+	return "$" + formatGroupedFloat(value, 2)
+}
+
+func formatCompactTokens(value int64) string {
+	if value >= 1_000_000 {
+		return fmt.Sprintf("%.1fM", float64(value)/1_000_000)
+	}
+	if value >= 1000 {
+		return fmt.Sprintf("%dk", int(math.Round(float64(value)/1000)))
+	}
+	return formatGroupedNumber(value)
+}
+
+func formatGroupedInt(value int) string {
+	return formatGroupedNumber(int64(value))
+}
+
+func formatGroupedNumber(value int64) string {
+	if value == 0 {
+		return "0"
+	}
+	negative := value < 0
+	if negative {
+		value = -value
+	}
+	s := strconv.FormatInt(value, 10)
+	if len(s) <= 3 {
+		if negative {
+			return "-" + s
+		}
+		return s
+	}
+	var b strings.Builder
+	if negative {
+		b.WriteByte('-')
+	}
+	firstGroupLen := len(s) % 3
+	if firstGroupLen == 0 {
+		firstGroupLen = 3
+	}
+	b.WriteString(s[:firstGroupLen])
+	for i := firstGroupLen; i < len(s); i += 3 {
+		b.WriteByte(',')
+		b.WriteString(s[i : i+3])
+	}
+	return b.String()
+}
+
+func formatGroupedFloat(value float64, decimals int) string {
+	negative := value < 0
+	if negative {
+		value = -value
+	}
+	raw := strconv.FormatFloat(value, 'f', decimals, 64)
+	parts := strings.SplitN(raw, ".", 2)
+	result := formatGroupedNumber(mustParseInt64(parts[0]))
+	if len(parts) == 2 {
+		result += "." + parts[1]
+	}
+	if negative {
+		return "-" + result
+	}
+	return result
+}
+
+func mustParseInt64(value string) int64 {
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return parsed
+}
+
+func formatDelta(today float64, yesterday float64) string {
+	if yesterday == 0 {
+		if today == 0 {
+			return "--"
+		}
+		return "new"
+	}
+	change := ((today - yesterday) / yesterday) * 100
+	if change > 0 {
+		return fmt.Sprintf("↑%.0f%%", math.Abs(change))
+	}
+	if change < 0 {
+		return fmt.Sprintf("↓%.0f%%", math.Abs(change))
+	}
+	return "--"
+}
+
+func formatRatioToTop(today float64, maxValue float64) string {
+	if today <= 0 || maxValue <= 0 {
+		return "--"
+	}
+	if maxValue <= 0 {
+		return "--"
+	}
+	if today >= maxValue {
+		return "max"
+	}
+	ratio := (today / maxValue) * 100
+	return fmt.Sprintf("%.0f%%", math.Abs(ratio))
+}
+
+func formatPercent(value float64) string {
+	return fmt.Sprintf("%.0f%%", value*100)
+}
+
+func formatDay(day time.Time) string {
+	if day.IsZero() {
+		return "--"
+	}
+	return day.Format("2006-01-02")
+}
+
+func windowModelHeaders() []string {
+	return []string{"Source", "Model", "Input", "Output", "C.Read", "C.Write", "Reasoning", "Total", "Cost"}
+}
+
+func windowModelRows(models []stats.ModelUsage) [][]string {
+	rows := make([][]string, 0, len(models))
+	for _, model := range models {
+		rows = append(rows, []string{
+			model.Source,
+			model.Model,
+			formatSummaryTokens(model.InputTokens),
+			formatSummaryTokens(model.OutputTokens),
+			formatSummaryTokens(model.CacheReadTokens),
+			formatSummaryTokens(model.CacheWriteTokens),
+			formatSummaryTokens(model.ReasoningTokens),
+			formatSummaryTokens(model.TotalTokens),
+			formatSummaryCurrency(model.Cost),
+		})
+	}
+	if len(rows) == 0 {
+		return [][]string{{"-", "-", "-", "-", "-", "-", "-", "-", "-"}}
+	}
+	return rows
+}
+
+func windowSessionHeaders() []string {
+	return []string{"Current", "Session", "Cost", "Tokens", "Msgs", "Title"}
+}
+
+func (m Model) windowSessionRows(report stats.WindowReport) [][]string {
+	rows := make([][]string, 0, len(report.TopSessions)+1)
+	foundCurrent := false
+	for _, session := range report.TopSessions {
+		currentMark := ""
+		if m.session.ID != "" && session.ID == m.session.ID {
+			currentMark = "*"
+			foundCurrent = true
+		}
+		rows = append(rows, []string{currentMark, session.ID, formatSummaryCurrency(session.Cost), formatSummaryTokens(session.Tokens), formatGroupedInt(session.Messages), blankDash(session.Title)})
+	}
+	if m.session.ID != "" && !foundCurrent {
+		rows = append([][]string{{"*", "(current session not in selected window)", "-", "-", "-", "-"}}, rows...)
+	}
+	if len(rows) == 0 {
+		rows = [][]string{{"", "-", "-", "-", "-", "-"}}
+	}
+	return rows
+}
+
+func blankDash(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "-"
+	}
+	return value
+}
+
+func tableString(headers []string, rows [][]string, rightAligned map[int]bool) string {
+	widths := make([]int, len(headers))
+	for i, header := range headers {
+		widths[i] = len(header)
+	}
+	for _, row := range rows {
+		for i, cell := range row {
+			if len(cell) > widths[i] {
+				widths[i] = len(cell)
+			}
+		}
+	}
+	formatRow := func(row []string) string {
+		parts := make([]string, len(row))
+		for i, cell := range row {
+			if rightAligned[i] {
+				parts[i] = fmt.Sprintf("%*s", widths[i], cell)
+			} else {
+				parts[i] = fmt.Sprintf("%-*s", widths[i], cell)
+			}
+		}
+		return "| " + strings.Join(parts, " | ") + " |"
+	}
+	sep := make([]string, len(headers))
+	for i := range headers {
+		sep[i] = strings.Repeat("-", widths[i])
+	}
+	lines := []string{formatRow(headers), "| " + strings.Join(sep, " | ") + " |"}
+	for _, row := range rows {
+		lines = append(lines, formatRow(row))
+	}
+	return strings.Join(lines, "\n")
+}
