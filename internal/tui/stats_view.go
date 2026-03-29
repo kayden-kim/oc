@@ -64,6 +64,12 @@ func (m Model) renderLauncherAnalytics() string {
 		habitLine += minimap
 	}
 	sections = append(sections, bulletLine(habitLine))
+	sparkline := m.render24hSparkline(report)
+	todayLine := styledMetricLead("• today  ", formatSummaryHours(report.Rolling24hSessionMinutes))
+	if sparkline != "" {
+		todayLine += sparkline
+	}
+	sections = append(sections, bulletLine(todayLine))
 	sections = append(sections, bulletLine(styledMetricLine("• streak ", formatRhythmStreak(report))))
 	sections = append(sections, "", renderSubSectionHeader(headerPrefix+"Metrics", todaySectionTitleStyle))
 	sections = append(sections, renderMetricsTable(report)...)

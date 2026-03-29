@@ -2089,3 +2089,28 @@ func TestRender24hSparkline_WidthAdaptation(t *testing.T) {
 		})
 	}
 }
+
+func TestView_RendersRhythmWithSparkline(t *testing.T) {
+	var slots [48]int64
+	slots[47] = 100000 // some activity in the current slot
+	report := stats.Report{
+		Days:                     make([]stats.Day, 30),
+		ActiveDays:               15,
+		CurrentStreak:            5,
+		BestStreak:               5,
+		Rolling24hSlots:          slots,
+		Rolling24hSessionMinutes: 90,
+	}
+	cfg := config.StatsConfig{HighTokens: 5000000, MediumTokens: 1000000}
+	m := NewModel([]PluginItem{{Name: "test-plugin", InitiallyEnabled: true}}, nil, nil, SessionItem{}, report, stats.Report{}, cfg, "test", false)
+	m.width = 80
+	view := m.View().Content
+
+	// Should contain the "today" line with session hours
+	if !strings.Contains(view, "today") {
+		t.Error("view should contain 'today' sparkline line")
+	}
+	if !strings.Contains(view, "1.5h") {
+		t.Error("view should contain rolling 24h session hours '1.5h'")
+	}
+}
