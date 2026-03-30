@@ -27,6 +27,7 @@ type statsTableColumn struct {
 	Header     string
 	MinWidth   int
 	AlignRight bool
+	PathAware  bool
 	Style      lipgloss.Style
 }
 
@@ -123,6 +124,16 @@ func maxCodeLines(days []stats.Day) int {
 	for _, day := range days {
 		if day.CodeLines > max {
 			max = day.CodeLines
+		}
+	}
+	return max
+}
+
+func maxChangedFiles(days []stats.Day) int {
+	var max int
+	for _, day := range days {
+		if day.ChangedFiles > max {
+			max = day.ChangedFiles
 		}
 	}
 	return max
@@ -243,7 +254,7 @@ func formatPeakValue(value string, date time.Time) string {
 	if date.IsZero() {
 		return value
 	}
-	return fmt.Sprintf("%s (%s)", value, date.Format("01-02"))
+	return fmt.Sprintf("%s (%s)", value, date.Format("2006-01-02"))
 }
 
 func (m Model) renderLauncherMinimap(report stats.Report) string {
@@ -332,6 +343,7 @@ func (m Model) renderMetricsTable(report stats.Report) []string {
 		{Cells: []string{"cost", formatCurrencyWithTop(report.TodayCost, report.Days), formatPeakValue(formatSummaryCurrency(report.HighestBurnDay.Cost), report.HighestBurnDay.Date), formatSummaryCurrency(report.ThirtyDayCost)}},
 		{Cells: []string{"hours", formatHoursWithTop(report.TodaySessionMinutes, report.Days), formatPeakValue(formatSummaryHours(maxSessionMinutes(report.Days)), maxSessionDay(report.Days).Date), formatSummaryHours(report.ThirtyDaySessionMinutes)}},
 		{Cells: []string{"lines", formatCodeLinesWithTop(report.TodayCodeLines, report.Days), formatPeakValue(formatSummaryCodeLines(report.HighestCodeDay.CodeLines), report.HighestCodeDay.Date), formatSummaryCodeLines(report.ThirtyDayCodeLines)}},
+		{Cells: []string{"files", formatChangedFilesWithTop(report.TodayChangedFiles, report.Days), formatPeakValue(formatSummaryChangedFiles(report.HighestChangedFilesDay.ChangedFiles), report.HighestChangedFilesDay.Date), formatSummaryChangedFiles(report.ThirtyDayChangedFiles)}},
 		{Divider: true},
 		{Cells: []string{"tok/h", formatTokensPerHourWithTop(report.TodayTokens, report.TodaySessionMinutes, report.Days), formatPeakValue(formatSummaryTokensPerHour(maxTokensPerHourDay(report.Days).Tokens, maxTokensPerHourDay(report.Days).SessionMinutes), maxTokensPerHourDay(report.Days).Date), formatSummaryTokensPerHour(report.ThirtyDayTokens, report.ThirtyDaySessionMinutes)}},
 		{Cells: []string{"line/h", formatCodeLinesPerHourWithTop(report.TodayCodeLines, report.TodaySessionMinutes, report.Days), formatPeakValue(formatSummaryCodeLinesPerHour(maxCodeLinesPerHourDay(report.Days).CodeLines, maxCodeLinesPerHourDay(report.Days).SessionMinutes), maxCodeLinesPerHourDay(report.Days).Date), formatSummaryCodeLinesPerHour(report.ThirtyDayCodeLines, report.ThirtyDaySessionMinutes)}},
@@ -369,7 +381,7 @@ func headerCells(columns []statsTableColumn) []string {
 func renderStatsTableHeader(columns []statsTableColumn, widths []int) string {
 	parts := make([]string, len(columns))
 	for i, column := range columns {
-		parts[i] = renderStatsTableCell(column.Header, widths[i], column.AlignRight, defaultTextStyle)
+		parts[i] = renderStatsTableCell(column.Header, widths[i], column.AlignRight, column.PathAware, defaultTextStyle)
 	}
 	return defaultTextStyle.Render("    ") + strings.Join(parts, defaultTextStyle.Render(strings.Repeat(" ", statsTableColumnGap)))
 }
@@ -456,13 +468,16 @@ func renderStatsTableLine(columns []statsTableColumn, widths []int, cells []stri
 		if i < len(cells) {
 			cell = cells[i]
 		}
-		parts[i] = renderStatsTableCell(cell, widths[i], column.AlignRight, column.Style)
+		parts[i] = renderStatsTableCell(cell, widths[i], column.AlignRight, column.PathAware, column.Style)
 	}
 	return defaultTextStyle.Render("    ") + strings.Join(parts, defaultTextStyle.Render(strings.Repeat(" ", statsTableColumnGap)))
 }
 
-func renderStatsTableCell(value string, width int, alignRight bool, style lipgloss.Style) string {
-	truncated := truncatePathAware(value, width)
+func renderStatsTableCell(value string, width int, alignRight bool, pathAware bool, style lipgloss.Style) string {
+	truncated := truncateDisplayWidth(value, width)
+	if pathAware {
+		truncated = truncatePathAware(value, width)
+	}
 	visible := lipgloss.Width(truncated)
 	padding := width - visible
 	if padding < 0 {
@@ -808,24 +823,36 @@ func renderStatsTabLabel(title string, active bool) string {
 }
 
 func (m Model) statsTabMeta() string {
-	return fmt.Sprintf(" %s (%s) ", m.statsScopeLabel(), m.statsTabDateRange())
+	return fmt.Sprintf(" %s • %s ", m.statsScopeLabel(), m.statsTabDateRange())
 }
 
 func (m Model) statsScopeLabel() string {
 	if m.projectScope {
-		return "Project"
+		return "project"
 	}
-	return "Global"
+	return "global"
 }
 
 func (m Model) statsTabDateRange() string {
+	report := m.currentReport()
+	if m.statsTab == 0 {
+		if len(report.Days) == 0 {
+			return "-- ~"
+		}
+		return report.Days[0].Date.Format("2006-01-02") + " ~"
+	}
 	if m.statsTab != 0 {
 		window := m.currentWindowReport()
 		if !window.Start.IsZero() && !window.End.IsZero() {
+			if window.Label == "Monthly" {
+				return window.Start.Format("2006-01")
+			}
+			if window.Label == "Daily" {
+				return window.Start.Format("2006-01-02")
+			}
 			return formatStatsDateRange(window.Start, window.End.Add(-time.Second))
 		}
 	}
-	report := m.currentReport()
 	if len(report.Days) == 0 {
 		return "--~--"
 	}
@@ -850,6 +877,7 @@ func (m Model) renderOverviewLines() []string {
 			bulletLine(styledTrendLine("• cost ", renderValueTrend(report.Days, func(day stats.Day) float64 { return day.Cost }))),
 			bulletLine(styledTrendLine("• hours ", renderValueTrend(report.Days, func(day stats.Day) float64 { return float64(day.SessionMinutes) }))),
 			bulletLine(styledTrendLine("• lines ", renderValueTrend(report.Days, func(day stats.Day) float64 { return float64(day.CodeLines) }))),
+			bulletLine(styledTrendLine("• files ", renderValueTrend(report.Days, func(day stats.Day) float64 { return float64(day.ChangedFiles) }))),
 		)
 	}
 	lines = append(lines,
@@ -858,7 +886,7 @@ func (m Model) renderOverviewLines() []string {
 		"",
 		activitySectionHeader("Activity - Models", report.UniqueModelCount),
 	)
-	lines = append(lines, m.renderUsageLines("tokens", report.TopModels, report.TotalModelTokens)...)
+	lines = append(lines, m.renderModelUsageLines(report.TopModels, report.TotalModelTokens)...)
 	if !m.projectScope {
 		lines = append(lines,
 			"",
@@ -868,9 +896,9 @@ func (m Model) renderOverviewLines() []string {
 	}
 	lines = append(lines,
 		"",
-		activitySectionHeader("Activity - Agents", report.UniqueAgentCount),
+		activitySectionHeader("Activity - Agents", report.UniqueAgentModelCount),
 	)
-	lines = append(lines, m.renderUsageLines("count", report.TopAgents, int64(report.TotalSubtasks))...)
+	lines = append(lines, m.renderAgentModelUsageLines(report.TopAgentModels, int64(report.TotalAgentModelCalls))...)
 	lines = append(lines,
 		"",
 		activitySectionHeader("Activity - Skills", report.UniqueSkillCount),
@@ -918,7 +946,7 @@ func (m Model) renderUsageLines(metricHeader string, items []stats.UsageCount, t
 		return strings.Repeat("·", usageBarWidth) + " " + value
 	}
 	columns := []statsTableColumn{
-		{Header: "", MinWidth: 12, Style: defaultTextStyle},
+		{Header: "", MinWidth: 12, PathAware: compactPathColumns, Style: defaultTextStyle},
 		{Header: metricLabel, MinWidth: metricMinWidth, AlignRight: true, Style: statsValueTextStyle},
 		{Header: shareLabel, MinWidth: shareMinWidth, Style: statsValueTextStyle},
 	}
@@ -949,6 +977,164 @@ func (m Model) renderUsageLines(metricHeader string, items []stats.UsageCount, t
 		rows = append(rows, statsTableRow{Divider: true}, statsTableRow{Cells: []string{"Total", metricFormatter(total), placeholderShare("100%")}})
 	}
 	return renderStatsTable(columns, rows, m.statsTableMaxWidth())
+}
+
+func (m Model) renderAgentModelUsageLines(items []stats.UsageCount, total int64) []string {
+	metricLabel := "count"
+	shareLabel := "share"
+	metricMinWidth := 7
+	shareMinWidth := 5
+	if m.isNarrowLayout() {
+		metricLabel = "cnt"
+		shareLabel = "%"
+		metricMinWidth = 3
+		shareMinWidth = 4
+	}
+	shareCell := func(value int64, top int64) string {
+		share := formatUsageShare(value, total)
+		if m.isNarrowLayout() {
+			return share
+		}
+		return renderUsageBar(value, top, usageBarWidth) + " " + share
+	}
+	placeholderShare := func(value string) string {
+		if m.isNarrowLayout() {
+			return value
+		}
+		return strings.Repeat("·", usageBarWidth) + " " + value
+	}
+	columns := []statsTableColumn{
+		{Header: "", MinWidth: 10, Style: defaultTextStyle},
+		{Header: "model", MinWidth: 18, Style: defaultTextStyle},
+		{Header: metricLabel, MinWidth: metricMinWidth, AlignRight: true, Style: statsValueTextStyle},
+		{Header: shareLabel, MinWidth: shareMinWidth, Style: statsValueTextStyle},
+	}
+	if len(items) == 0 {
+		rows := []statsTableRow{{Cells: []string{"top 15", "--", "--", placeholderShare("--")}}}
+		if total > 0 {
+			rows = append(rows, statsTableRow{Divider: true}, statsTableRow{Cells: []string{"Total", "", formatUsageMetric(total), placeholderShare("100%")}})
+		}
+		return renderStatsTable(columns, rows, m.statsTableMaxWidth())
+	}
+	visibleItems := items
+	if len(visibleItems) > maxActivityItems {
+		visibleItems = visibleItems[:maxActivityItems]
+	}
+	top := usageMetric(visibleItems[0])
+	showOthers := len(items) > maxActivityItems && total > 0
+	othersMetric := total
+	rows := make([]statsTableRow, 0, len(visibleItems)+2)
+	for _, item := range visibleItems {
+		agent, model := splitAgentModelUsageKey(item.Name)
+		itemMetric := usageMetric(item)
+		othersMetric -= itemMetric
+		rows = append(rows, statsTableRow{Cells: []string{agent, model, formatUsageMetric(itemMetric), shareCell(itemMetric, top)}})
+	}
+	if showOthers && othersMetric > 0 {
+		rows = append(rows, statsTableRow{Cells: []string{"others", "", formatUsageMetric(othersMetric), shareCell(othersMetric, top)}})
+	}
+	if total > 0 {
+		rows = append(rows, statsTableRow{Divider: true}, statsTableRow{Cells: []string{"Total", "", formatUsageMetric(total), placeholderShare("100%")}})
+	}
+	return renderStatsTable(columns, rows, m.statsTableMaxWidth())
+}
+
+func (m Model) renderModelUsageLines(items []stats.UsageCount, total int64) []string {
+	metricLabel := "tokens"
+	shareLabel := "share"
+	metricMinWidth := 7
+	shareMinWidth := 5
+	if m.isNarrowLayout() {
+		metricLabel = "tok"
+		shareLabel = "%"
+		metricMinWidth = 3
+		shareMinWidth = 4
+	}
+	shareCell := func(value int64, top int64) string {
+		share := formatUsageShare(value, total)
+		if m.isNarrowLayout() {
+			return share
+		}
+		return renderUsageBar(value, top, usageBarWidth) + " " + share
+	}
+	placeholderShare := func(value string) string {
+		if m.isNarrowLayout() {
+			return value
+		}
+		return strings.Repeat("·", usageBarWidth) + " " + value
+	}
+	columns := []statsTableColumn{
+		{Header: "", MinWidth: 18, Style: defaultTextStyle},
+		{Header: "provider", MinWidth: 10, Style: defaultTextStyle},
+		{Header: metricLabel, MinWidth: metricMinWidth, AlignRight: true, Style: statsValueTextStyle},
+		{Header: shareLabel, MinWidth: shareMinWidth, Style: statsValueTextStyle},
+	}
+	if len(items) == 0 {
+		rows := []statsTableRow{{Cells: []string{"top 15", "--", "--", placeholderShare("--")}}}
+		if total > 0 {
+			rows = append(rows, statsTableRow{Divider: true}, statsTableRow{Cells: []string{"Total", "", formatSummaryTokens(total), placeholderShare("100%")}})
+		}
+		return renderStatsTable(columns, rows, m.statsTableMaxWidth())
+	}
+	visibleItems := items
+	if len(visibleItems) > maxActivityItems {
+		visibleItems = visibleItems[:maxActivityItems]
+	}
+	top := usageMetric(visibleItems[0])
+	showOthers := len(items) > maxActivityItems && total > 0
+	othersMetric := total
+	rows := make([]statsTableRow, 0, len(visibleItems)+2)
+	for _, item := range visibleItems {
+		provider, model := splitProviderModelUsageKey(item.Name)
+		itemMetric := usageMetric(item)
+		othersMetric -= itemMetric
+		rows = append(rows, statsTableRow{Cells: []string{model, provider, formatSummaryTokens(itemMetric), shareCell(itemMetric, top)}})
+	}
+	if showOthers && othersMetric > 0 {
+		rows = append(rows, statsTableRow{Cells: []string{"others", "", formatSummaryTokens(othersMetric), shareCell(othersMetric, top)}})
+	}
+	if total > 0 {
+		rows = append(rows, statsTableRow{Divider: true}, statsTableRow{Cells: []string{"Total", "", formatSummaryTokens(total), placeholderShare("100%")}})
+	}
+	return renderStatsTable(columns, rows, m.statsTableMaxWidth())
+}
+
+func splitAgentModelUsageKey(value string) (string, string) {
+	parts := strings.SplitN(value, "\x00", 2)
+	if len(parts) != 2 {
+		if strings.TrimSpace(value) == "" {
+			return "--", "--"
+		}
+		return value, "--"
+	}
+	agent := strings.TrimSpace(parts[0])
+	model := strings.TrimSpace(parts[1])
+	if agent == "" {
+		agent = "--"
+	}
+	if model == "" {
+		model = "--"
+	}
+	return agent, model
+}
+
+func splitProviderModelUsageKey(value string) (string, string) {
+	parts := strings.SplitN(value, "\x00", 2)
+	if len(parts) != 2 {
+		if strings.TrimSpace(value) == "" {
+			return "--", "--"
+		}
+		return "--", value
+	}
+	provider := strings.TrimSpace(parts[0])
+	model := strings.TrimSpace(parts[1])
+	if provider == "" {
+		provider = "--"
+	}
+	if model == "" {
+		model = "--"
+	}
+	return provider, model
 }
 
 func usageItemsUseAmounts(items []stats.UsageCount) bool {
@@ -1008,38 +1194,23 @@ func usageMetric(item stats.UsageCount) int64 {
 }
 
 func (m Model) renderWindowLines(report stats.WindowReport) []string {
-	title := fmt.Sprintf("# Tokens used (%s)", report.End.Add(-time.Second).Format("02/01/2006"))
-	if report.Label == "Monthly" {
-		title = fmt.Sprintf("# Tokens used (%s)", report.Start.Format("01/2006"))
-	}
+	title := renderSubSectionHeader(formatWindowTitle(report), todaySectionTitleStyle)
 	if m.isNarrowLayout() {
-		return m.renderCompactWindowLines(title, report)
+		return m.renderCompactWindowLines(report)
 	}
-	lines := []string{
-		title,
-		tableStringWithMaxWidth(
-			[]string{"Window", "Messages", "Sessions", "Tokens", "Cost"},
-			[][]string{{
-				fmt.Sprintf("%s .. %s", report.Start.Format("15:04 2006-01-02"), report.End.Add(-time.Second).Format("15:04 2006-01-02")),
-				formatGroupedInt(report.Messages),
-				formatGroupedInt(report.Sessions),
-				formatSummaryTokens(report.Tokens),
-				formatSummaryCurrency(report.Cost),
-			}},
-			map[int]bool{1: true, 2: true, 3: true, 4: true},
-			m.layoutWidth(),
-		),
+	lines := []string{title}
+	lines = append(lines, renderStatsTable(windowSummaryColumns(), windowSummaryRows(report), m.statsTableMaxWidth())...)
+	lines = append(lines, "")
+	lines = append(lines, renderStatsTable(windowModelColumns(), windowModelTableRows(report.Models), m.statsTableMaxWidth())...)
+	lines = append(lines,
 		"",
-		"## Models",
-		tableStringWithMaxWidth(windowModelHeaders(), windowModelRows(report.Models), map[int]bool{2: true, 3: true, 4: true, 5: true, 6: true, 7: true, 8: true}, m.layoutWidth()),
-		"",
-		"## Top Sessions",
-		tableStringWithMaxWidth(windowSessionHeaders(), m.windowSessionRows(report), map[int]bool{2: true, 3: true, 4: true}, m.layoutWidth()),
-	}
+		renderSubSectionHeader("Top Sessions", habitSectionTitleStyle),
+	)
+	lines = append(lines, renderStatsTable(windowSessionColumns(), m.windowSessionTableRows(report), m.statsTableMaxWidth())...)
 	return lines
 }
 
-func (m Model) renderCompactWindowLines(title string, report stats.WindowReport) []string {
+func (m Model) renderCompactWindowLines(report stats.WindowReport) []string {
 	clamp := func(text string) string {
 		return truncateDisplayWidth(text, m.layoutWidth())
 	}
@@ -1047,14 +1218,13 @@ func (m Model) renderCompactWindowLines(title string, report stats.WindowReport)
 		return defaultTextStyle.Render("    ") + truncateDisplayWidth(text, max(0, m.layoutWidth()-4))
 	}
 	lines := []string{
-		clamp(title),
-		bullet("• window " + fmt.Sprintf("%s..%s", report.Start.Format("01-02 15:04"), report.End.Add(-time.Second).Format("01-02 15:04"))),
+		clamp(renderSubSectionHeader(formatWindowTitle(report), todaySectionTitleStyle)),
+		bullet("• window " + formatWindowRange(report.Start, report.End)),
 		bullet("• messages " + formatGroupedInt(report.Messages)),
 		bullet("• sessions " + formatGroupedInt(report.Sessions)),
 		bullet("• tokens " + formatSummaryTokens(report.Tokens)),
 		bullet("• cost " + formatSummaryCurrency(report.Cost)),
 		"",
-		"## Models",
 	}
 	if len(report.Models) == 0 {
 		lines = append(lines, bullet("• -"))
@@ -1063,11 +1233,29 @@ func (m Model) renderCompactWindowLines(title string, report stats.WindowReport)
 			lines = append(lines, bullet(fmt.Sprintf("• %s %s %s", blankDash(model.Model), formatSummaryTokens(model.TotalTokens), formatSummaryCurrency(model.Cost))))
 		}
 	}
-	lines = append(lines, "", "## Top Sessions")
+	lines = append(lines, "", clamp(renderSubSectionHeader("Top Sessions", habitSectionTitleStyle)))
 	for _, row := range m.windowSessionRows(report) {
 		lines = append(lines, bullet("• "+strings.TrimSpace(strings.Join(row, " "))))
 	}
 	return lines
+}
+
+func formatWindowTitle(report stats.WindowReport) string {
+	if report.Label == "Monthly" && !report.Start.IsZero() {
+		return "Token Used"
+	}
+	end := report.End.Add(-time.Second)
+	if !end.IsZero() {
+		return "Token Used"
+	}
+	return "Token Used"
+}
+
+func formatWindowRange(start time.Time, end time.Time) string {
+	if start.IsZero() || end.IsZero() {
+		return "--"
+	}
+	return fmt.Sprintf("%s .. %s", start.Format("2006-01-02 15:04"), end.Add(-time.Second).Format("2006-01-02 15:04"))
 }
 
 func renderValueTrend(days []stats.Day, extract func(stats.Day) float64) string {
@@ -1132,6 +1320,10 @@ func formatRolling24hHours(minutes int) string {
 
 func formatCodeLinesWithTop(today int, days []stats.Day) string {
 	return fmt.Sprintf("%s (%s)", formatSummaryCodeLines(today), formatRatioToTop(float64(today), float64(maxCodeLines(days))))
+}
+
+func formatChangedFilesWithTop(today int, days []stats.Day) string {
+	return fmt.Sprintf("%s (%s)", formatSummaryChangedFiles(today), formatRatioToTop(float64(today), float64(maxChangedFiles(days))))
 }
 
 func perHourRate(value float64, sessionMinutes int) float64 {
@@ -1219,6 +1411,16 @@ func formatSummaryHours(minutes int) string {
 }
 
 func formatSummaryCodeLines(value int) string {
+	if value <= 0 {
+		return "--"
+	}
+	if value >= 1000 {
+		return fmt.Sprintf("%.1fk", float64(value)/1000)
+	}
+	return formatGroupedInt(value)
+}
+
+func formatSummaryChangedFiles(value int) string {
 	if value <= 0 {
 		return "--"
 	}
@@ -1360,15 +1562,78 @@ func formatDay(day time.Time) string {
 	return day.Format("2006-01-02")
 }
 
+func windowSummaryColumns() []statsTableColumn {
+	return []statsTableColumn{
+		{Header: "window", MinWidth: 16, Style: defaultTextStyle},
+		{Header: "messages", MinWidth: 8, AlignRight: true, Style: statsValueTextStyle},
+		{Header: "sessions", MinWidth: 8, AlignRight: true, Style: statsValueTextStyle},
+		{Header: "tokens", MinWidth: 8, AlignRight: true, Style: statsValueTextStyle},
+		{Header: "cost", MinWidth: 8, AlignRight: true, Style: statsValueTextStyle},
+	}
+}
+
+func windowSummaryRows(report stats.WindowReport) []statsTableRow {
+	return []statsTableRow{{Cells: []string{
+		formatWindowRange(report.Start, report.End),
+		formatGroupedInt(report.Messages),
+		formatGroupedInt(report.Sessions),
+		formatSummaryTokens(report.Tokens),
+		formatSummaryCurrency(report.Cost),
+	}}}
+}
+
+func windowModelColumns() []statsTableColumn {
+	return []statsTableColumn{
+		{Header: "", MinWidth: 12, Style: defaultTextStyle},
+		{Header: "input", MinWidth: 6, AlignRight: true, Style: statsValueTextStyle},
+		{Header: "output", MinWidth: 6, AlignRight: true, Style: statsValueTextStyle},
+		{Header: "c.read", MinWidth: 6, AlignRight: true, Style: statsValueTextStyle},
+		{Header: "c.write", MinWidth: 7, AlignRight: true, Style: statsValueTextStyle},
+		{Header: "reasoning", MinWidth: 8, AlignRight: true, Style: statsValueTextStyle},
+		{Header: "total", MinWidth: 6, AlignRight: true, Style: statsValueTextStyle},
+		{Header: "cost", MinWidth: 6, AlignRight: true, Style: statsValueTextStyle},
+	}
+}
+
+func windowModelTableRows(models []stats.ModelUsage) []statsTableRow {
+	rows := make([]statsTableRow, 0, len(models))
+	for _, model := range models {
+		rows = append(rows, statsTableRow{Cells: []string{
+			model.Model,
+			formatSummaryTokens(model.InputTokens),
+			formatSummaryTokens(model.OutputTokens),
+			formatSummaryTokens(model.CacheReadTokens),
+			formatSummaryTokens(model.CacheWriteTokens),
+			formatSummaryTokens(model.ReasoningTokens),
+			formatSummaryTokens(model.TotalTokens),
+			formatSummaryCurrency(model.Cost),
+		}})
+	}
+	if len(rows) == 0 {
+		return []statsTableRow{{Cells: []string{"-", "-", "-", "-", "-", "-", "-", "-"}}}
+	}
+	return rows
+}
+
+func windowSessionColumns() []statsTableColumn {
+	return []statsTableColumn{
+		{Header: "", MinWidth: 1, Style: defaultTextStyle},
+		{Header: "", MinWidth: 12, Style: defaultTextStyle},
+		{Header: "msgs", MinWidth: 5, AlignRight: true, Style: statsValueTextStyle},
+		{Header: "tokens", MinWidth: 6, AlignRight: true, Style: statsValueTextStyle},
+		{Header: "cost", MinWidth: 6, AlignRight: true, Style: statsValueTextStyle},
+		{Header: "title", MinWidth: 10, Style: defaultTextStyle},
+	}
+}
+
 func windowModelHeaders() []string {
-	return []string{"Source", "Model", "Input", "Output", "C.Read", "C.Write", "Reasoning", "Total", "Cost"}
+	return []string{"Model", "Input", "Output", "C.Read", "C.Write", "Reasoning", "Total", "Cost"}
 }
 
 func windowModelRows(models []stats.ModelUsage) [][]string {
 	rows := make([][]string, 0, len(models))
 	for _, model := range models {
 		rows = append(rows, []string{
-			model.Source,
 			model.Model,
 			formatSummaryTokens(model.InputTokens),
 			formatSummaryTokens(model.OutputTokens),
@@ -1380,13 +1645,13 @@ func windowModelRows(models []stats.ModelUsage) [][]string {
 		})
 	}
 	if len(rows) == 0 {
-		return [][]string{{"-", "-", "-", "-", "-", "-", "-", "-", "-"}}
+		return [][]string{{"-", "-", "-", "-", "-", "-", "-", "-"}}
 	}
 	return rows
 }
 
 func windowSessionHeaders() []string {
-	return []string{"Current", "Session", "Cost", "Tokens", "Msgs", "Title"}
+	return []string{"Current", "Session", "Msgs", "Tokens", "Cost", "Title"}
 }
 
 func (m Model) windowSessionRows(report stats.WindowReport) [][]string {
@@ -1398,13 +1663,22 @@ func (m Model) windowSessionRows(report stats.WindowReport) [][]string {
 			currentMark = "*"
 			foundCurrent = true
 		}
-		rows = append(rows, []string{currentMark, session.ID, formatSummaryCurrency(session.Cost), formatSummaryTokens(session.Tokens), formatGroupedInt(session.Messages), blankDash(session.Title)})
+		rows = append(rows, []string{currentMark, session.ID, formatGroupedInt(session.Messages), formatSummaryTokens(session.Tokens), formatSummaryCurrency(session.Cost), blankDash(session.Title)})
 	}
 	if m.session.ID != "" && !foundCurrent {
 		rows = append([][]string{{"*", "(current session not in selected window)", "-", "-", "-", "-"}}, rows...)
 	}
 	if len(rows) == 0 {
 		rows = [][]string{{"", "-", "-", "-", "-", "-"}}
+	}
+	return rows
+}
+
+func (m Model) windowSessionTableRows(report stats.WindowReport) []statsTableRow {
+	stringRows := m.windowSessionRows(report)
+	rows := make([]statsTableRow, 0, len(stringRows))
+	for _, row := range stringRows {
+		rows = append(rows, statsTableRow{Cells: row})
 	}
 	return rows
 }

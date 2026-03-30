@@ -960,7 +960,7 @@ func TestSessionTimestampPrefix_ReturnsFullDateTimeForOlderSession(t *testing.T)
 	now := time.Date(2026, time.March, 23, 14, 30, 0, 0, time.Local)
 	updatedAt := time.Date(2026, time.March, 22, 9, 8, 7, 0, time.Local)
 
-	if got := sessionTimestampPrefix(updatedAt, now); got != "[2026-03-22 09:08:07] " {
+	if got := sessionTimestampPrefix(updatedAt, now); got != "[2026-03-22 09:08] " {
 		t.Fatalf("expected full datetime prefix for older session, got %q", got)
 	}
 }
@@ -1015,19 +1015,22 @@ func TestView_RendersStyledHelpLine(t *testing.T) {
 }
 
 func TestView_RendersRhythmAndMetricsSections(t *testing.T) {
-	report := stats.Report{CurrentStreak: 6, BestStreak: 6, CurrentHourlyStreakSlots: 0, BestHourlyStreakSlots: 0, AgentDays: 17, TodayCost: 1.84, YesterdayCost: 1.50, TodayTokens: 148000, YesterdayTokens: 170000, ThirtyDayCost: 7.42, ThirtyDayTokens: 420000, TodaySessionMinutes: 95, YesterdaySessionMinutes: 120, ThirtyDaySessionMinutes: 765, Rolling24hSessionMinutes: 95, TodayCodeLines: 150, YesterdayCodeLines: 190, ThirtyDayCodeLines: 1820, WeeklyActiveDays: 4, HighestBurnDay: stats.Day{Cost: 12.34}, HighestCodeDay: stats.Day{CodeLines: 190}, Days: make([]stats.Day, 30)}
+	report := stats.Report{CurrentStreak: 6, BestStreak: 6, CurrentHourlyStreakSlots: 0, BestHourlyStreakSlots: 0, AgentDays: 17, TodayCost: 1.84, YesterdayCost: 1.50, TodayTokens: 148000, YesterdayTokens: 170000, ThirtyDayCost: 7.42, ThirtyDayTokens: 420000, TodaySessionMinutes: 95, YesterdaySessionMinutes: 120, ThirtyDaySessionMinutes: 765, Rolling24hSessionMinutes: 95, TodayCodeLines: 150, YesterdayCodeLines: 190, ThirtyDayCodeLines: 1820, TodayChangedFiles: 7, YesterdayChangedFiles: 9, ThirtyDayChangedFiles: 84, WeeklyActiveDays: 4, HighestBurnDay: stats.Day{Cost: 12.34}, HighestCodeDay: stats.Day{CodeLines: 190}, HighestChangedFilesDay: stats.Day{ChangedFiles: 9}, Days: make([]stats.Day, 30)}
 	for i := range report.Days {
-		report.Days[i] = stats.Day{Date: time.Now().AddDate(0, 0, -(29 - i)), Tokens: 1000, Cost: 0.5, SessionMinutes: 10, CodeLines: 20}
+		report.Days[i] = stats.Day{Date: time.Now().AddDate(0, 0, -(29 - i)), Tokens: 1000, Cost: 0.5, SessionMinutes: 10, CodeLines: 20, ChangedFiles: 3}
 	}
 	report.Days[len(report.Days)-1].Tokens = 160000
 	report.Days[len(report.Days)-1].Cost = 1.84
 	report.Days[len(report.Days)-1].SessionMinutes = 95
 	report.Days[len(report.Days)-1].CodeLines = 150
+	report.Days[len(report.Days)-1].ChangedFiles = 7
 	report.Days[len(report.Days)-2].Cost = 12.34
 	report.Days[len(report.Days)-2].SessionMinutes = 120
 	report.Days[len(report.Days)-2].CodeLines = 190
+	report.Days[len(report.Days)-2].ChangedFiles = 9
 	report.HighestBurnDay = report.Days[len(report.Days)-2]
 	report.HighestCodeDay = report.Days[len(report.Days)-2]
+	report.HighestChangedFilesDay = report.Days[len(report.Days)-2]
 	model := NewModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{}, testVersion, true)
 	view := model.View().Content
 
@@ -1069,12 +1072,13 @@ func TestView_RendersRhythmAndMetricsSections(t *testing.T) {
 	}
 	todayAccent := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF9900"))
 	for _, row := range []struct{ label, today, peak, total string }{
-		{"tokens", "148k (92%)", "160k (" + report.Days[len(report.Days)-1].Date.Format("01-02") + ")", "420k"},
-		{"tok/h", "93k (92%)", "101k (" + report.Days[len(report.Days)-1].Date.Format("01-02") + ")", "33k"},
-		{"cost", "$1.84 (15%)", "$12.34 (" + report.HighestBurnDay.Date.Format("01-02") + ")", "$7.42"},
-		{"hours", "1.6h (79%)", "2.0h (" + report.Days[len(report.Days)-2].Date.Format("01-02") + ")", "12.8h"},
-		{"lines", "150 (79%)", "190 (" + report.HighestCodeDay.Date.Format("01-02") + ")", "1.8k"},
-		{"line/h", "95 (79%)", "120 (" + report.Days[0].Date.Format("01-02") + ")", "143"},
+		{"tokens", "148k (92%)", "160k (" + report.Days[len(report.Days)-1].Date.Format("2006-01-02") + ")", "420k"},
+		{"tok/h", "93k (92%)", "101k (" + report.Days[len(report.Days)-1].Date.Format("2006-01-02") + ")", "33k"},
+		{"cost", "$1.84 (15%)", "$12.34 (" + report.HighestBurnDay.Date.Format("2006-01-02") + ")", "$7.42"},
+		{"hours", "1.6h (79%)", "2.0h (" + report.Days[len(report.Days)-2].Date.Format("2006-01-02") + ")", "12.8h"},
+		{"lines", "150 (79%)", "190 (" + report.HighestCodeDay.Date.Format("2006-01-02") + ")", "1.8k"},
+		{"files", "7 (78%)", "9 (" + report.HighestChangedFilesDay.Date.Format("2006-01-02") + ")", "84"},
+		{"line/h", "95 (79%)", "120 (" + report.Days[0].Date.Format("2006-01-02") + ")", "143"},
 	} {
 		if !strings.Contains(view, defaultTextStyle.Render(row.label)) || !strings.Contains(view, todayAccent.Render(row.today)) || !strings.Contains(view, statsValueTextStyle.Render(row.peak)) || !strings.Contains(view, statsValueTextStyle.Render(row.total)) {
 			t.Fatalf("expected metrics row for %s, got %q", row.label, view)
@@ -1086,6 +1090,7 @@ func TestView_RendersRhythmAndMetricsSections(t *testing.T) {
 	firstDivider := strings.Index(view, metricsDividerLine())
 	secondDivider := strings.LastIndex(view, metricsDividerLine())
 	if !(strings.Index(view, defaultTextStyle.Render("lines")) < secondDivider &&
+		strings.Index(view, defaultTextStyle.Render("files")) < secondDivider &&
 		firstDivider < secondDivider &&
 		secondDivider < strings.Index(view, defaultTextStyle.Render("tok/h")) &&
 		strings.Index(view, defaultTextStyle.Render("tok/h")) < strings.Index(view, defaultTextStyle.Render("line/h"))) {
@@ -1131,10 +1136,12 @@ func TestRenderOverviewLines_GroupsPostMetricsIntoSections(t *testing.T) {
 		ThirtyDayTokens:         420000,
 		ThirtyDaySessionMinutes: 765,
 		TotalSubtasks:           11,
+		TotalAgentModelCalls:    11,
 		TotalToolCalls:          42,
 		TotalSkillCalls:         7,
 		UniqueProjectCount:      2,
 		UniqueAgentCount:        3,
+		UniqueAgentModelCount:   6,
 		UniqueSkillCount:        2,
 		UniqueToolCount:         9,
 		HighestBurnDay:          stats.Day{Date: time.Now().AddDate(0, 0, -1), Cost: 12.34},
@@ -1144,15 +1151,20 @@ func TestRenderOverviewLines_GroupsPostMetricsIntoSections(t *testing.T) {
 	report.TopProjects = []stats.UsageCount{{Name: "/tmp/work-a", Amount: 280000}, {Name: "/tmp/work-b", Amount: 140000}}
 	setRankedUsageField(&report, "TopTools", []usageFixture{{"bash", 21}, {"read", 11}, {"edit", 8}, {"grep", 6}, {"write", 4}, {"glob", 2}})
 	setRankedUsageField(&report, "TopSkills", []usageFixture{{"writing-plans", 5}, {"test-driven-development", 2}})
-	setRankedUsageField(&report, "TopAgents", []usageFixture{{"explore", 7}, {"oracle", 3}, {"planner", 2}, {"review", 2}, {"debug", 1}, {"legacy", 1}})
+	setRankedUsageField(&report, "TopAgentModels", []usageFixture{{"explore\x00gpt-5.4", 4}, {"oracle\x00gpt-5.4", 2}, {"planner\x00claude-sonnet-4.5", 2}, {"review\x00gemini-2.5-pro", 1}, {"debug\x00o4-mini", 1}, {"legacy\x00claude-haiku-4.5", 1}})
 	for i := range report.Days {
 		report.Days[i] = stats.Day{Date: time.Now().AddDate(0, 0, -(29 - i)), Tokens: int64((i + 1) * 1000), Cost: float64(i+1) / 10, SessionMinutes: i + 1}
 	}
 	report.TodayCodeLines = 150
+	report.TodayChangedFiles = 7
 	report.ThirtyDayCodeLines = 1820
+	report.ThirtyDayChangedFiles = 84
 	report.HighestCodeDay = stats.Day{Date: time.Now().AddDate(0, 0, -1), CodeLines: 190}
+	report.HighestChangedFilesDay = stats.Day{Date: time.Now().AddDate(0, 0, -1), ChangedFiles: 9}
 	report.Days[len(report.Days)-1].CodeLines = 150
+	report.Days[len(report.Days)-1].ChangedFiles = 7
 	report.Days[len(report.Days)-2].CodeLines = 190
+	report.Days[len(report.Days)-2].ChangedFiles = 9
 	report.WeekdayActiveCounts = [7]int{4, 4, 4, 3, 3, 3, 1}
 	report.WeekdayAgentCounts = [7]int{4, 4, 4, 3, 3, 3, 1}
 	report.LongestSessionDay = report.Days[len(report.Days)-1]
@@ -1161,7 +1173,7 @@ func TestRenderOverviewLines_GroupsPostMetricsIntoSections(t *testing.T) {
 	content := strings.Join(model.renderOverviewLines(), "\n")
 	plainContent := stripANSI(content)
 
-	for _, section := range []string{"Trends", "Activity - Models (0)", "Activity - Projects (2)", "Activity - Agents (3)", "Activity - Skills (2)", "Activity - Tools (9)"} {
+	for _, section := range []string{"Trends", "Activity - Models (0)", "Activity - Projects (2)", "Activity - Agents (6)", "Activity - Skills (2)", "Activity - Tools (9)"} {
 		if !strings.Contains(plainContent, section) {
 			t.Fatalf("expected %s section in overview, got %q", section, plainContent)
 		}
@@ -1184,7 +1196,7 @@ func TestRenderOverviewLines_GroupsPostMetricsIntoSections(t *testing.T) {
 			t.Fatalf("expected activity summary snippet %q to be removed, got %q", snippet, content)
 		}
 	}
-	for _, snippet := range []string{"/tmp/work-a", "/tmp/work-b", "bash", "read", "write", "explore", "oracle", "debug", "writing-plans", "test-driven-development", "Total", "100%", "50%", "64%"} {
+	for _, snippet := range []string{"/tmp/work-a", "/tmp/work-b", "bash", "read", "write", "explore", "oracle", "debug", "gpt-5.4", "claude-haiku-4.5", "writing-plans", "test-driven-development", "provider", "Total", "100%", "50%", "67%", "36%"} {
 		if !strings.Contains(plainContent, snippet) {
 			t.Fatalf("expected ranked activity snippet %q, got %q", snippet, plainContent)
 		}
@@ -1194,7 +1206,7 @@ func TestRenderOverviewLines_GroupsPostMetricsIntoSections(t *testing.T) {
 			t.Fatalf("expected ordinal prefixes to be removed, got %q", content)
 		}
 	}
-	for _, snippet := range []string{"• hours ", "1.6h", "150 (79%)", "93k (max)", "95 (24%)", "today", "peak day", "30d total", "tokens", "tok/h", "lines", "line/h", "(" + maxTokensPerHourDay(report.Days).Date.Format("01-02") + ")", "420k", "1.8k"} {
+	for _, snippet := range []string{"• hours ", "1.6h", "150 (79%)", "7 (78%)", "93k (max)", "95 (24%)", "today", "peak day", "30d total", "tokens", "tok/h", "lines", "files", "line/h", "(" + maxTokensPerHourDay(report.Days).Date.Format("2006-01-02") + ")", "420k", "1.8k", "84"} {
 		if !strings.Contains(content, snippet) {
 			t.Fatalf("expected hours snippet %q, got %q", snippet, content)
 		}
@@ -1208,15 +1220,19 @@ func TestRenderOverviewLines_GroupsPostMetricsIntoSections(t *testing.T) {
 	if strings.Contains(content, renderSubSectionHeader("Today", todaySectionTitleStyle)) {
 		t.Fatalf("did not expect Today section in overview, got %q", content)
 	}
-	if !strings.Contains(content, defaultTextStyle.Render("tokens")) || !strings.Contains(content, defaultTextStyle.Render("tok/h")) || !strings.Contains(content, defaultTextStyle.Render("cost")) || !strings.Contains(content, defaultTextStyle.Render("hours")) || !strings.Contains(content, defaultTextStyle.Render("lines")) || !strings.Contains(content, defaultTextStyle.Render("line/h")) {
+	if !strings.Contains(content, defaultTextStyle.Render("tokens")) || !strings.Contains(content, defaultTextStyle.Render("tok/h")) || !strings.Contains(content, defaultTextStyle.Render("cost")) || !strings.Contains(content, defaultTextStyle.Render("hours")) || !strings.Contains(content, defaultTextStyle.Render("lines")) || !strings.Contains(content, defaultTextStyle.Render("files")) || !strings.Contains(content, defaultTextStyle.Render("line/h")) {
 		t.Fatalf("expected metrics table rows, got %q", content)
 	}
 	if !strings.Contains(content, defaultTextStyle.Render("• lines ")) {
 		t.Fatalf("expected lines trend row, got %q", content)
 	}
+	if !strings.Contains(content, defaultTextStyle.Render("• files ")) {
+		t.Fatalf("expected files trend row, got %q", content)
+	}
 	metricsSection := strings.SplitN(strings.SplitN(plainContent, "Metrics", 2)[1], "Trends", 2)[0]
 	if !(strings.Count(metricsSection, strings.Repeat("┈", 10)) >= 2 &&
 		strings.Index(metricsSection, "lines") < strings.LastIndex(metricsSection, strings.Repeat("┈", 10)) &&
+		strings.Index(metricsSection, "files") < strings.LastIndex(metricsSection, strings.Repeat("┈", 10)) &&
 		strings.LastIndex(metricsSection, strings.Repeat("┈", 10)) < strings.Index(metricsSection, "tok/h") &&
 		strings.Index(metricsSection, "tok/h") < strings.Index(metricsSection, "line/h")) {
 		t.Fatalf("expected divider between summary and rate metrics in overview, got %q", metricsSection)
@@ -1234,6 +1250,7 @@ func TestRenderOverviewLines_KeepsTrendsAsCompactList(t *testing.T) {
 		TodayTokens:          148000,
 		TodaySessionMinutes:  95,
 		TodayCodeLines:       150,
+		TodayChangedFiles:    7,
 		TodayReasoningShare:  0.25,
 		RecentReasoningShare: 0.18,
 		Days:                 make([]stats.Day, 30),
@@ -1245,6 +1262,7 @@ func TestRenderOverviewLines_KeepsTrendsAsCompactList(t *testing.T) {
 			Cost:           float64(i+1) / 10,
 			SessionMinutes: i + 1,
 			CodeLines:      i + 2,
+			ChangedFiles:   i%5 + 1,
 		}
 	}
 
@@ -1257,6 +1275,7 @@ func TestRenderOverviewLines_KeepsTrendsAsCompactList(t *testing.T) {
 		defaultTextStyle.Render("• cost "),
 		defaultTextStyle.Render("• hours "),
 		defaultTextStyle.Render("• lines "),
+		defaultTextStyle.Render("• files "),
 		defaultTextStyle.Render("• reasoning "),
 	} {
 		if !strings.Contains(trendsSection, snippet) {
@@ -1289,6 +1308,7 @@ func TestRenderOverviewLines_OrdersTrendRowsAsRequested(t *testing.T) {
 			Cost:           float64(i + 1),
 			SessionMinutes: i + 1,
 			CodeLines:      i + 2,
+			ChangedFiles:   i%4 + 1,
 		}
 	}
 
@@ -1301,40 +1321,48 @@ func TestRenderOverviewLines_OrdersTrendRowsAsRequested(t *testing.T) {
 		strings.Index(trendsSection, defaultTextStyle.Render("• cost ")),
 		strings.Index(trendsSection, defaultTextStyle.Render("• hours ")),
 		strings.Index(trendsSection, defaultTextStyle.Render("• lines ")),
+		strings.Index(trendsSection, defaultTextStyle.Render("• files ")),
 	}
 	for i, pos := range positions {
 		if pos < 0 {
 			t.Fatalf("expected trend row %d in %q", i, trendsSection)
 		}
 	}
-	if !(positions[0] < positions[1] && positions[1] < positions[2] && positions[2] < positions[3]) {
-		t.Fatalf("expected trend order tokens -> cost -> hours -> lines, got %q", trendsSection)
+	if !(positions[0] < positions[1] && positions[1] < positions[2] && positions[2] < positions[3] && positions[3] < positions[4]) {
+		t.Fatalf("expected trend order tokens -> cost -> hours -> lines -> files, got %q", trendsSection)
 	}
 }
 
 func TestRenderOverviewLines_IncludesModelActivitySection(t *testing.T) {
 	report := stats.Report{
-		TotalToolCalls:   42,
-		UniqueToolCount:  9,
-		TotalSubtasks:    11,
-		UniqueAgentCount: 3,
-		TotalModelTokens: 730,
-		UniqueModelCount: 12,
-		TotalSkillCalls:  0,
-		UniqueSkillCount: 0,
-		Days:             make([]stats.Day, 30),
+		TotalToolCalls:        42,
+		UniqueToolCount:       9,
+		TotalSubtasks:         11,
+		TotalAgentModelCalls:  11,
+		UniqueAgentCount:      3,
+		UniqueAgentModelCount: 11,
+		TotalModelTokens:      730,
+		UniqueModelCount:      12,
+		TotalSkillCalls:       0,
+		UniqueSkillCount:      0,
+		Days:                  make([]stats.Day, 30),
+		TopAgentModels: []stats.UsageCount{
+			{Name: "explore\x00gpt-5.4", Count: 3},
+			{Name: "oracle\x00claude-sonnet-4.5", Count: 2},
+			{Name: "planner\x00gemini-2.5-pro", Count: 1},
+		},
 		TopModels: []stats.UsageCount{
-			{Name: "[OpenAI] gpt-5.4", Amount: 120},
-			{Name: "[Anthropic] claude-sonnet-4.5", Amount: 100},
-			{Name: "[Google] gemini-2.5-pro", Amount: 90},
-			{Name: "[OpenRouter] qwen/qwen3-coder", Amount: 75},
-			{Name: "[Azure] gpt-4.1", Amount: 65},
-			{Name: "[Bedrock] claude-3.7-sonnet", Amount: 55},
-			{Name: "[Vertex] gemini-2.0-flash", Amount: 50},
-			{Name: "[Copilot] gpt-4o", Amount: 45},
-			{Name: "[Copilot] mistral-large", Amount: 40},
-			{Name: "[OpenAI] o4-mini", Amount: 35},
-			{Name: "[Anthropic] claude-haiku-4.5", Amount: 30},
+			{Name: "openai\x00gpt-5.4", Amount: 120},
+			{Name: "anthropic\x00claude-sonnet-4.5", Amount: 100},
+			{Name: "google\x00gemini-2.5-pro", Amount: 90},
+			{Name: "openrouter\x00qwen/qwen3-coder", Amount: 75},
+			{Name: "azure\x00gpt-4.1", Amount: 65},
+			{Name: "bedrock\x00claude-3.7-sonnet", Amount: 55},
+			{Name: "vertex_ai\x00gemini-2.0-flash", Amount: 50},
+			{Name: "copilot\x00gpt-4o", Amount: 45},
+			{Name: "github_models\x00mistral-large", Amount: 40},
+			{Name: "openai\x00o4-mini", Amount: 35},
+			{Name: "anthropic\x00claude-haiku-4.5", Amount: 30},
 		},
 	}
 	for i := range report.Days {
@@ -1343,51 +1371,57 @@ func TestRenderOverviewLines_IncludesModelActivitySection(t *testing.T) {
 
 	model := NewModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{}, testVersion, true)
 	content := strings.Join(model.renderOverviewLines(), "\n")
-	modelSection := strings.SplitN(strings.SplitN(content, renderSubSectionHeader("Activity - Models (12)", habitSectionTitleStyle), 2)[1], renderSubSectionHeader("Activity - Agents (3)", habitSectionTitleStyle), 2)[0]
+	modelSection := strings.SplitN(strings.SplitN(content, renderSubSectionHeader("Activity - Models (12)", habitSectionTitleStyle), 2)[1], renderSubSectionHeader("Activity - Agents (11)", habitSectionTitleStyle), 2)[0]
 	plainContent := stripANSI(content)
 	plainModelSection := stripANSI(modelSection)
 
-	for _, snippet := range []string{"Activity - Models (12)", "730", "[OpenAI] gpt-5.4", "[Anthropic] claude-haiku-4.5", "Total", "100%", "16%"} {
+	for _, snippet := range []string{"Activity - Models (12)", "730", "openai", "anthropic", "gpt-5.4", "claude-haiku-4.5", "Total", "100%", "16%"} {
 		if !strings.Contains(plainContent, snippet) {
 			t.Fatalf("expected model activity snippet %q, got %q", snippet, plainContent)
 		}
 	}
-	for _, snippet := range []string{"tokens", "share"} {
+	for _, snippet := range []string{"provider", "tokens", "share"} {
 		if !strings.Contains(plainModelSection, snippet) {
 			t.Fatalf("expected model activity table header %q, got %q", snippet, plainModelSection)
 		}
 	}
-	if strings.Contains(plainModelSection, "model") || strings.Contains(plainModelSection, "bar") {
-		t.Fatalf("expected first header removed and bar merged into share, got %q", plainModelSection)
+	headerLine := strings.Split(strings.TrimLeft(plainModelSection, "\n"), "\n")[0]
+	if strings.Contains(headerLine, "model") {
+		t.Fatalf("expected blank model column header, got %q", plainModelSection)
 	}
-	for _, snippet := range []string{"• tokens ", "• unique ", "• 1 [OpenAI] gpt-5.4", "• 10 [OpenAI] o4-mini"} {
+	if strings.Contains(plainModelSection, "bar") {
+		t.Fatalf("expected bar merged into share, got %q", plainModelSection)
+	}
+	for _, snippet := range []string{"• tokens ", "• unique ", "• 1 gpt-5.4", "• 10 o4-mini"} {
 		if strings.Contains(modelSection, snippet) {
 			t.Fatalf("expected old model activity formatting to be removed, got %q", modelSection)
 		}
 	}
-	if strings.Contains(modelSection, "11 [Anthropic] claude-haiku-4.5") {
+	if strings.Contains(modelSection, "11 claude-haiku-4.5") {
 		t.Fatalf("expected model activity section to keep plain labels without ordinal prefixes, got %q", modelSection)
 	}
 }
 
 func TestRenderOverviewLines_OrdersActivitySectionsAsRequested(t *testing.T) {
 	report := stats.Report{
-		UniqueModelCount:   1,
-		UniqueProjectCount: 1,
-		UniqueAgentCount:   1,
-		UniqueSkillCount:   1,
-		UniqueToolCount:    1,
-		TotalModelTokens:   100,
-		ThirtyDayTokens:    100,
-		TotalSubtasks:      2,
-		TotalSkillCalls:    3,
-		TotalToolCalls:     4,
-		TopModels:          []stats.UsageCount{{Name: "[OpenAI] gpt-5.4", Amount: 100}},
-		TopProjects:        []stats.UsageCount{{Name: "/tmp/work", Amount: 100}},
-		TopAgents:          []stats.UsageCount{{Name: "explore", Count: 2}},
-		TopSkills:          []stats.UsageCount{{Name: "writing-plans", Count: 3}},
-		TopTools:           []stats.UsageCount{{Name: "bash", Count: 4}},
-		Days:               make([]stats.Day, 30),
+		UniqueModelCount:      1,
+		UniqueProjectCount:    1,
+		UniqueAgentCount:      1,
+		UniqueAgentModelCount: 1,
+		UniqueSkillCount:      1,
+		UniqueToolCount:       1,
+		TotalModelTokens:      100,
+		ThirtyDayTokens:       100,
+		TotalSubtasks:         2,
+		TotalAgentModelCalls:  2,
+		TotalSkillCalls:       3,
+		TotalToolCalls:        4,
+		TopModels:             []stats.UsageCount{{Name: "openai\x00gpt-5.4", Amount: 100}},
+		TopProjects:           []stats.UsageCount{{Name: "/tmp/work", Amount: 100}},
+		TopAgentModels:        []stats.UsageCount{{Name: "explore\x00gpt-5.4", Count: 2}},
+		TopSkills:             []stats.UsageCount{{Name: "writing-plans", Count: 3}},
+		TopTools:              []stats.UsageCount{{Name: "bash", Count: 4}},
+		Days:                  make([]stats.Day, 30),
 	}
 	for i := range report.Days {
 		report.Days[i] = stats.Day{Date: time.Now().AddDate(0, 0, -(29 - i)), Tokens: 100}
@@ -1614,7 +1648,7 @@ func TestRenderUsageLines_ShowsTotalWhenItemsMissingButTotalExists(t *testing.T)
 }
 
 func TestRenderUsageLines_FormatsModelAmountsCompactly(t *testing.T) {
-	lines := (Model{}).renderUsageLines("tokens", []stats.UsageCount{{Name: "[OpenAI] gpt-5.4", Amount: 1_250_000}}, 1_500_000)
+	lines := (Model{}).renderUsageLines("tokens", []stats.UsageCount{{Name: "gpt-5.4", Amount: 1_250_000}}, 1_500_000)
 
 	if len(lines) != 5 {
 		t.Fatalf("expected 5 usage lines, got %d", len(lines))
@@ -1639,11 +1673,15 @@ func TestRenderWindowLines_GroupsSummaryCounts(t *testing.T) {
 	}
 	model := NewModel(nil, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true)
 	content := strings.Join(model.renderWindowLines(report), "\n")
+	plain := stripANSI(content)
 
-	for _, snippet := range []string{"12,345", "2,345", "988k", "$1,234.56"} {
-		if !strings.Contains(content, snippet) {
-			t.Fatalf("expected grouped window snippet %q, got %q", snippet, content)
+	for _, snippet := range []string{"Token Used", "2026-03-28 00:00 .. 2026-03-28 23:59", "Top Sessions", "12,345", "2,345", "988k", "$1,234.56"} {
+		if !strings.Contains(plain, snippet) && !(snippet == "2026-03-28 00:00 .. 2026-03-28 23:59" && strings.Contains(plain, "2026-03-28 00:00 .. 2026-03-28 23:…")) {
+			t.Fatalf("expected grouped window snippet %q, got %q", snippet, plain)
 		}
+	}
+	if strings.Contains(plain, "# Token Used") || strings.Contains(plain, "## Models") || strings.Contains(plain, "| Window") {
+		t.Fatalf("expected overview-style window rendering without markdown headings or pipe tables, got %q", plain)
 	}
 }
 
@@ -1652,7 +1690,7 @@ func TestWindowSessionRows_GroupsMessageCounts(t *testing.T) {
 	model := NewModel(nil, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true)
 	rows := model.windowSessionRows(report)
 
-	if got := rows[0][4]; got != "12,345" {
+	if got := rows[0][2]; got != "12,345" {
 		t.Fatalf("expected grouped session message count, got %q", got)
 	}
 }
@@ -1726,7 +1764,7 @@ func TestUpdate_LeftRightMovesStatsTabs(t *testing.T) {
 	if model.statsTab != 1 {
 		t.Fatalf("expected stats tab 1, got %d", model.statsTab)
 	}
-	if !strings.Contains(model.View().Content, "# Tokens used") {
+	if !strings.Contains(model.View().Content, "Token Used") {
 		t.Fatalf("expected daily tab content, got %q", model.View().Content)
 	}
 	updated, _ = model.Update(mockKeyMsg("left"))
@@ -1757,12 +1795,12 @@ func TestRenderStatsTabs_ShowsUnderlineStyleTabsWithMetadata(t *testing.T) {
 	if got := lipgloss.Width(lines[1]); got != maxLayoutWidth {
 		t.Fatalf("expected underline row width %d, got %d in %q", maxLayoutWidth, got, lines[1])
 	}
-	for _, snippet := range []string{"Overview", "Daily", "Monthly", "Global", "2026-03-01~2026-03-30"} {
+	for _, snippet := range []string{"Overview", "Daily", "Monthly", "global", "2026-03-01 ~"} {
 		if !strings.Contains(rendered, snippet) {
 			t.Fatalf("expected %q in tab row, got %q", snippet, rendered)
 		}
 	}
-	for _, snippet := range []string{"   Overview   ", "   Daily   ", "   Monthly   ", " Global (2026-03-01~2026-03-30)"} {
+	for _, snippet := range []string{"   Overview   ", "   Daily   ", "   Monthly   ", " global • 2026-03-01 ~ "} {
 		if !strings.Contains(rendered, snippet) {
 			t.Fatalf("expected padded snippet %q in tab row, got %q", snippet, rendered)
 		}
@@ -1780,7 +1818,7 @@ func TestRenderStatsTabs_ShowsUnderlineStyleTabsWithMetadata(t *testing.T) {
 	if rendered == updated {
 		t.Fatal("expected tab row to change when scope changes")
 	}
-	if !strings.Contains(updated, "Project") {
+	if !strings.Contains(updated, "project") {
 		t.Fatalf("expected project scope label, got %q", updated)
 	}
 }
@@ -1825,7 +1863,7 @@ func TestRenderStatsTabs_UsesWindowRangeForMonthlyTab(t *testing.T) {
 	}
 
 	rendered := model.renderStatsTabs()
-	if !strings.Contains(rendered, "Global (2026-03-01~2026-03-31)") {
+	if !strings.Contains(rendered, "global • 2026-03") {
 		t.Fatalf("expected monthly window range in tab metadata, got %q", rendered)
 	}
 }
@@ -2105,7 +2143,7 @@ func TestRenderWindowLines_UsesCompactLayoutOnNarrowWidth(t *testing.T) {
 	if strings.Contains(content, "| Window") {
 		t.Fatalf("expected narrow window view to avoid wide tables, got %q", stripANSI(content))
 	}
-	for _, snippet := range []string{"messages 12,345", "sessions 2,345", "tokens 988k", "cost $1,234.56"} {
+	for _, snippet := range []string{"Token Used", "window 2026-03-28 00:00 ..", "Top Sessions", "messages 12,345", "sessions 2,345", "tokens 988k", "cost $1,234.56"} {
 		if !strings.Contains(stripANSI(content), snippet) {
 			t.Fatalf("expected compact summary snippet %q, got %q", snippet, stripANSI(content))
 		}

@@ -59,6 +59,38 @@ func TestRenderStatsTable_UsesDisplayWidthForWideGlyphs(t *testing.T) {
 	}
 }
 
+func TestRenderStatsTable_DoesNotPathTruncateModelNamesByDefault(t *testing.T) {
+	lines := renderStatsTable(
+		[]statsTableColumn{{Header: "Agent", MinWidth: 6, Style: defaultTextStyle}, {Header: "Model", MinWidth: 10, Style: defaultTextStyle}},
+		[]statsTableRow{{Cells: []string{"explore", "qwen/qwen3-coder-super-long-model"}}},
+		24,
+	)
+
+	plain := stripANSI(lines[2])
+	if strings.Contains(plain, "..") {
+		t.Fatalf("expected model names to use plain truncation, got %q", plain)
+	}
+	if !strings.Contains(plain, "qwen/") {
+		t.Fatalf("expected model prefix to stay visible, got %q", plain)
+	}
+	if !strings.Contains(plain, "…") {
+		t.Fatalf("expected truncated model ellipsis, got %q", plain)
+	}
+}
+
+func TestRenderStatsTable_PathAwareColumnsUsePathTruncation(t *testing.T) {
+	lines := renderStatsTable(
+		[]statsTableColumn{{Header: "Project", MinWidth: 10, PathAware: true, Style: defaultTextStyle}},
+		[]statsTableRow{{Cells: []string{"/Users/kayden/workspace/super-long-project-name"}}},
+		18,
+	)
+
+	plain := stripANSI(lines[2])
+	if !strings.Contains(plain, "..") {
+		t.Fatalf("expected path-aware truncation, got %q", plain)
+	}
+}
+
 func TestShortenPathMiddle_PreservesPathEnds(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -126,6 +158,26 @@ func TestFormatSummaryCodeLinesPerHour(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := formatSummaryCodeLinesPerHour(tt.lines, tt.sessionMinutes); got != tt.want {
 				t.Fatalf("formatSummaryCodeLinesPerHour(%d, %d) = %q, want %q", tt.lines, tt.sessionMinutes, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatSummaryChangedFiles(t *testing.T) {
+	tests := []struct {
+		name  string
+		files int
+		want  string
+	}{
+		{name: "zero files", files: 0, want: "--"},
+		{name: "small count", files: 42, want: "42"},
+		{name: "compact count", files: 1250, want: "1.2k"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatSummaryChangedFiles(tt.files); got != tt.want {
+				t.Fatalf("formatSummaryChangedFiles(%d) = %q, want %q", tt.files, got, tt.want)
 			}
 		})
 	}

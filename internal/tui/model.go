@@ -284,7 +284,7 @@ func sessionTimestampPrefix(updatedAt time.Time, now time.Time) string {
 		}
 	}
 
-	return "[" + localUpdated.Format("2006-01-02 15:04:05") + "] "
+	return "[" + localUpdated.Format("2006-01-02 15:04") + "] "
 }
 
 func sessionLine(session SessionItem) string {
