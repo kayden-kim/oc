@@ -1082,7 +1082,7 @@ func TestRenderOverviewLines_GroupsPostMetricsIntoSections(t *testing.T) {
 			t.Fatalf("expected ordinal prefixes to be removed, got %q", content)
 		}
 	}
-	for _, snippet := range []string{"• hours ", "1.6h", "150 (79%)", "93k (max)", "95 (24%)", "today", "peak day", "30d total", "tokens", "tok/h", "lines", "line/h", "(03-28)", "420k", "1.8k"} {
+	for _, snippet := range []string{"• hours ", "1.6h", "150 (79%)", "93k (max)", "95 (24%)", "today", "peak day", "30d total", "tokens", "tok/h", "lines", "line/h", "(" + maxTokensPerHourDay(report.Days).Date.Format("01-02") + ")", "420k", "1.8k"} {
 		if !strings.Contains(content, snippet) {
 			t.Fatalf("expected hours snippet %q, got %q", snippet, content)
 		}
