@@ -2,6 +2,7 @@ package stats
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -32,14 +33,17 @@ type Day struct {
 	ReasoningTokens   int64
 	SessionMinutes    int
 	CodeLines         int
+	ChangedFiles      int
 	ToolCounts        map[string]int
 	SkillCounts       map[string]int
 	AgentCounts       map[string]int
+	AgentModelCounts  map[string]int
 	ModelCounts       map[string]int64
 	eventTimes        []int64
 	UniqueTools       map[string]struct{}
 	UniqueSkills      map[string]struct{}
 	UniqueAgents      map[string]struct{}
+	UniqueAgentModels map[string]struct{}
 	SlotTokens        [48]int64
 }
 
@@ -67,22 +71,27 @@ type Report struct {
 	ThirtyDayTokens          int64
 	ThirtyDaySessionMinutes  int
 	ThirtyDayCodeLines       int
+	ThirtyDayChangedFiles    int
 	TotalToolCalls           int
 	TotalSkillCalls          int
 	TotalSubtasks            int
 	UniqueToolCount          int
 	UniqueSkillCount         int
 	UniqueAgentCount         int
+	UniqueAgentModelCount    int
 	UniqueModelCount         int
 	TodayCost                float64
 	YesterdayCost            float64
 	TodayTokens              int64
 	YesterdayTokens          int64
 	TotalModelTokens         int64
+	TotalAgentModelCalls     int
 	TodaySessionMinutes      int
 	YesterdaySessionMinutes  int
 	TodayCodeLines           int
 	YesterdayCodeLines       int
+	TodayChangedFiles        int
+	YesterdayChangedFiles    int
 	TodayReasoningShare      float64
 	RecentReasoningShare     float64
 	WeekdayActiveCounts      [7]int
@@ -90,11 +99,13 @@ type Report struct {
 	TopTools                 []UsageCount
 	TopSkills                []UsageCount
 	TopAgents                []UsageCount
+	TopAgentModels           []UsageCount
 	TopProjects              []UsageCount
 	TopModels                []UsageCount
 	UniqueProjectCount       int
 	HighestBurnDay           Day
 	HighestCodeDay           Day
+	HighestChangedFilesDay   Day
 	LongestSessionDay        Day
 	MostEfficientDay         Day
 	Rolling24hSlots          [48]int64
@@ -114,7 +125,6 @@ type WindowReport struct {
 }
 
 type ModelUsage struct {
-	Source           string
 	Model            string
 	InputTokens      int64
 	OutputTokens     int64
@@ -250,6 +260,9 @@ func loadAtWithOptions(now time.Time, dir string, options Options) (Report, erro
 	if err := mergeSessionCodeStats(db, dir, since, now.Location(), dayMap); err != nil {
 		return Report{}, err
 	}
+	if err := mergePartFileStats(db, dir, since, now.Location(), dayMap); err != nil {
+		return Report{}, err
+	}
 
 	days := make([]Day, 0, len(dayMap))
 	for _, day := range dayMap {
@@ -330,15 +343,17 @@ func buildEmptyDays(now time.Time) []Day {
 	days := make([]Day, 0, dayWindow)
 	for i := 0; i < dayWindow; i++ {
 		days = append(days, Day{
-			Date:         start.AddDate(0, 0, i),
-			ToolCounts:   map[string]int{},
-			SkillCounts:  map[string]int{},
-			AgentCounts:  map[string]int{},
-			ModelCounts:  map[string]int64{},
-			eventTimes:   nil,
-			UniqueTools:  map[string]struct{}{},
-			UniqueSkills: map[string]struct{}{},
-			UniqueAgents: map[string]struct{}{},
+			Date:              start.AddDate(0, 0, i),
+			ToolCounts:        map[string]int{},
+			SkillCounts:       map[string]int{},
+			AgentCounts:       map[string]int{},
+			AgentModelCounts:  map[string]int{},
+			ModelCounts:       map[string]int64{},
+			eventTimes:        nil,
+			UniqueTools:       map[string]struct{}{},
+			UniqueSkills:      map[string]struct{}{},
+			UniqueAgents:      map[string]struct{}{},
+			UniqueAgentModels: map[string]struct{}{},
 		})
 	}
 	return days
@@ -513,8 +528,18 @@ func mergePartStats(db *sql.DB, dir string, since int64, loc *time.Location, day
 			st := unixTimestampToTime(event.CreatedAt).In(loc)
 			day.SlotTokens[st.Hour()*2+st.Minute()/30] += stepTokens
 			name := modelLabel(event.ProviderID, event.ModelID)
+			modelName := strings.TrimSpace(event.ModelID)
 			if name != "" {
 				day.ModelCounts[name] += stepTokens
+			}
+			agentName := strings.TrimSpace(event.Agent)
+			if agentName == "" {
+				agentName = strings.TrimSpace(event.MessageAgent)
+			}
+			if agentName != "" && !strings.EqualFold(agentName, "compaction") && modelName != "" {
+				key := agentModelUsageKey(agentName, modelName)
+				day.AgentModelCounts[key]++
+				day.UniqueAgentModels[key] = struct{}{}
 			}
 		}
 	}
@@ -568,6 +593,170 @@ func mergeSessionCodeStats(db *sql.DB, dir string, since int64, loc *time.Locati
 	return rows.Err()
 }
 
+func mergePartFileStats(db *sql.DB, dir string, since int64, loc *time.Location, dayMap map[string]*Day) error {
+	query := `
+		SELECT
+			p.time_created,
+			CAST(COALESCE(p.data, '') AS TEXT),
+			CAST(COALESCE(json_extract(m.data, '$.summary'), 0) AS INTEGER),
+			CAST(COALESCE(json_extract(m.data, '$.agent'), '') AS TEXT)
+		FROM part p
+		%s
+		LEFT JOIN message m ON m.id = p.message_id
+		WHERE p.time_created >= ?
+	`
+	joinClause := ""
+	args := []any{since}
+	if dir != "" {
+		joinClause = "JOIN session s ON s.id = p.session_id"
+		query = strings.Replace(query, "%s", joinClause, 1)
+		query = strings.Replace(query, "WHERE p.time_created >= ?", "WHERE "+scopedDirectoryClause()+" AND p.time_created >= ?", 1)
+		args = []any{scopedDirectoryArg(dir), since}
+	} else {
+		query = strings.Replace(query, "%s", "", 1)
+	}
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	seenByDay := make(map[string]map[string]struct{}, len(dayMap))
+	for rows.Next() {
+		var createdAt int64
+		var raw string
+		var summary int64
+		var messageAgent string
+		if err := rows.Scan(&createdAt, &raw, &summary, &messageAgent); err != nil {
+			return err
+		}
+		if summary != 0 || strings.EqualFold(messageAgent, "compaction") {
+			continue
+		}
+		bucketKey := dayKey(unixTimestampToTime(createdAt).In(loc))
+		day := dayMap[bucketKey]
+		if day == nil {
+			continue
+		}
+		files := extractChangedFilesFromPart(raw)
+		if len(files) == 0 {
+			continue
+		}
+		seen := seenByDay[bucketKey]
+		if seen == nil {
+			seen = map[string]struct{}{}
+			seenByDay[bucketKey] = seen
+		}
+		for _, file := range files {
+			normalized := normalizeChangedFilePath(file)
+			if normalized == "" {
+				continue
+			}
+			if _, ok := seen[normalized]; ok {
+				continue
+			}
+			seen[normalized] = struct{}{}
+			day.ChangedFiles++
+		}
+	}
+
+	return rows.Err()
+}
+
+func extractChangedFilesFromPart(raw string) []string {
+	type partPayload struct {
+		Type  string   `json:"type"`
+		Tool  string   `json:"tool"`
+		Files []string `json:"files"`
+		State struct {
+			Status string `json:"status"`
+			Input  struct {
+				FilePath  string `json:"filePath"`
+				PatchText string `json:"patchText"`
+			} `json:"input"`
+		} `json:"state"`
+	}
+
+	var payload partPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return nil
+	}
+
+	fileSet := map[string]struct{}{}
+	addFile := func(path string) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return
+		}
+		fileSet[path] = struct{}{}
+	}
+
+	switch payload.Type {
+	case "patch":
+		for _, file := range payload.Files {
+			addFile(file)
+		}
+	case "tool":
+		if payload.State.Status != "completed" {
+			break
+		}
+		switch payload.Tool {
+		case "write", "edit":
+			addFile(payload.State.Input.FilePath)
+		case "apply_patch":
+			for _, file := range extractFilesFromPatchText(payload.State.Input.PatchText) {
+				addFile(file)
+			}
+		}
+	}
+
+	if len(fileSet) == 0 {
+		return nil
+	}
+	files := make([]string, 0, len(fileSet))
+	for file := range fileSet {
+		files = append(files, file)
+	}
+	return files
+}
+
+func extractFilesFromPatchText(patchText string) []string {
+	if strings.TrimSpace(patchText) == "" {
+		return nil
+	}
+	files := map[string]struct{}{}
+	for _, line := range strings.Split(patchText, "\n") {
+		switch {
+		case strings.HasPrefix(line, "*** Add File: "):
+			files[strings.TrimSpace(strings.TrimPrefix(line, "*** Add File: "))] = struct{}{}
+		case strings.HasPrefix(line, "*** Update File: "):
+			files[strings.TrimSpace(strings.TrimPrefix(line, "*** Update File: "))] = struct{}{}
+		case strings.HasPrefix(line, "*** Delete File: "):
+			files[strings.TrimSpace(strings.TrimPrefix(line, "*** Delete File: "))] = struct{}{}
+		}
+	}
+	if len(files) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(files))
+	for file := range files {
+		result = append(result, file)
+	}
+	return result
+}
+
+func normalizeChangedFilePath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	path = filepath.Clean(path)
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(filepath.ToSlash(path))
+	}
+	return path
+}
+
 func hasSessionSummaryColumns(db *sql.DB) (bool, error) {
 	rows, err := db.Query(`PRAGMA table_info(session)`)
 	if err != nil {
@@ -605,13 +794,15 @@ func buildReport(days []Day, now time.Time, options Options) Report {
 		days = buildEmptyDays(now)
 	}
 
-	report := Report{Days: days, HighestBurnDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, ModelCounts: map[string]int64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}}, HighestCodeDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, ModelCounts: map[string]int64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}}, LongestSessionDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, ModelCounts: map[string]int64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}}, MostEfficientDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, ModelCounts: map[string]int64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}}}
+	report := Report{Days: days, HighestBurnDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, AgentModelCounts: map[string]int{}, ModelCounts: map[string]int64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}, UniqueAgentModels: map[string]struct{}{}}, HighestCodeDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, AgentModelCounts: map[string]int{}, ModelCounts: map[string]int64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}, UniqueAgentModels: map[string]struct{}{}}, HighestChangedFilesDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, AgentModelCounts: map[string]int{}, ModelCounts: map[string]int64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}, UniqueAgentModels: map[string]struct{}{}}, LongestSessionDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, AgentModelCounts: map[string]int{}, ModelCounts: map[string]int64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}, UniqueAgentModels: map[string]struct{}{}}, MostEfficientDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, AgentModelCounts: map[string]int{}, ModelCounts: map[string]int64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}, UniqueAgentModels: map[string]struct{}{}}}
 	allTools := map[string]struct{}{}
 	allSkills := map[string]struct{}{}
 	allAgents := map[string]struct{}{}
+	allAgentModels := map[string]struct{}{}
 	toolTotals := map[string]int{}
 	skillTotals := map[string]int{}
 	agentTotals := map[string]int{}
+	agentModelTotals := map[string]int{}
 	modelTotals := map[string]int64{}
 	for i, day := range days {
 		day.SessionMinutes = computeSessionMinutes(day.eventTimes, options.SessionGapMinutes)
@@ -629,6 +820,7 @@ func buildReport(days []Day, now time.Time, options Options) Report {
 		report.TotalSubtasks += day.Subtasks
 		report.ThirtyDaySessionMinutes += day.SessionMinutes
 		report.ThirtyDayCodeLines += day.CodeLines
+		report.ThirtyDayChangedFiles += day.ChangedFiles
 		for tool := range day.UniqueTools {
 			allTools[tool] = struct{}{}
 		}
@@ -646,6 +838,13 @@ func buildReport(days []Day, now time.Time, options Options) Report {
 		}
 		for agent, count := range day.AgentCounts {
 			agentTotals[agent] += count
+		}
+		for agentModel := range day.UniqueAgentModels {
+			allAgentModels[agentModel] = struct{}{}
+		}
+		for agentModel, count := range day.AgentModelCounts {
+			agentModelTotals[agentModel] += count
+			report.TotalAgentModelCalls += count
 		}
 		for name, amount := range day.ModelCounts {
 			modelTotals[name] += amount
@@ -667,6 +866,9 @@ func buildReport(days []Day, now time.Time, options Options) Report {
 		if day.CodeLines > report.HighestCodeDay.CodeLines {
 			report.HighestCodeDay = day
 		}
+		if day.ChangedFiles > report.HighestChangedFilesDay.ChangedFiles {
+			report.HighestChangedFilesDay = day
+		}
 		if day.SessionMinutes > report.LongestSessionDay.SessionMinutes {
 			report.LongestSessionDay = day
 		}
@@ -677,10 +879,12 @@ func buildReport(days []Day, now time.Time, options Options) Report {
 	report.UniqueToolCount = len(allTools)
 	report.UniqueSkillCount = len(allSkills)
 	report.UniqueAgentCount = len(allAgents)
+	report.UniqueAgentModelCount = len(allAgentModels)
 	report.UniqueModelCount = len(modelTotals)
 	report.TopTools = topUsageCounts(toolTotals, unlimitedUsageItems)
 	report.TopSkills = topUsageCounts(skillTotals, unlimitedUsageItems)
 	report.TopAgents = topUsageCounts(agentTotals, unlimitedUsageItems)
+	report.TopAgentModels = topUsageCounts(agentModelTotals, unlimitedUsageItems)
 	report.TopModels = topUsageAmounts(modelTotals, unlimitedUsageItems)
 	report.CurrentStreak = currentStreak(days)
 	report.BestStreak = bestStreak(days)
@@ -692,6 +896,7 @@ func buildReport(days []Day, now time.Time, options Options) Report {
 		report.TodayTokens = today.Tokens
 		report.TodaySessionMinutes = today.SessionMinutes
 		report.TodayCodeLines = today.CodeLines
+		report.TodayChangedFiles = today.ChangedFiles
 		report.TodayReasoningShare = reasoningShare(today)
 	}
 	if len(days) > 1 {
@@ -700,6 +905,7 @@ func buildReport(days []Day, now time.Time, options Options) Report {
 		report.YesterdayTokens = yesterday.Tokens
 		report.YesterdaySessionMinutes = yesterday.SessionMinutes
 		report.YesterdayCodeLines = yesterday.CodeLines
+		report.YesterdayChangedFiles = yesterday.ChangedFiles
 	}
 	if len(days) > 1 {
 		nowSlot := now.Hour()*2 + now.Minute()/30
@@ -736,6 +942,14 @@ func normalizeOptions(options Options) Options {
 		options.SessionGapMinutes = defaultSessionGapMinutes
 	}
 	return options
+}
+
+func agentModelUsageKey(agent string, model string) string {
+	return agent + "\x00" + model
+}
+
+func providerModelUsageKey(provider string, model string) string {
+	return provider + "\x00" + model
 }
 
 func computeSessionMinutes(eventTimes []int64, gapMinutes int) int {
@@ -928,39 +1142,13 @@ func topUsageAmounts(counts map[string]int64, limit int) []UsageCount {
 	return items
 }
 
-func providerLabel(provider string) string {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "openai":
-		return "OpenAI"
-	case "github", "copilot", "github_models":
-		return "Copilot"
-	case "anthropic":
-		return "Anthropic"
-	case "google", "gemini":
-		return "Google"
-	case "openrouter":
-		return "OpenRouter"
-	case "azure":
-		return "Azure"
-	case "vertex_ai":
-		return "Vertex"
-	case "bedrock":
-		return "Bedrock"
-	default:
-		if provider == "" {
-			return ""
-		}
-		return strings.ToUpper(provider[:1]) + provider[1:]
-	}
-}
-
 func modelLabel(provider string, model string) string {
-	provider = providerLabel(provider)
+	provider = strings.TrimSpace(provider)
 	model = strings.TrimSpace(model)
 	if provider == "" || model == "" {
 		return ""
 	}
-	return fmt.Sprintf("[%s] %s", provider, model)
+	return providerModelUsageKey(provider, model)
 }
 
 func startOfDay(t time.Time) time.Time {

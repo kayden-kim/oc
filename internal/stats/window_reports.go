@@ -58,7 +58,7 @@ func buildWindowReport(db *sql.DB, dir string, label string, start time.Time, en
 			continue
 		}
 
-		model := ensureModelUsage(modelAgg, providerLabel(row.ProviderID), row.ModelID)
+		model := ensureModelUsage(modelAgg, row.ModelID)
 		model.InputTokens += row.InputTokens
 		model.OutputTokens += row.OutputTokens
 		model.CacheReadTokens += row.CacheReadTokens
@@ -197,12 +197,12 @@ func ensureSessionUsage(m map[string]*SessionUsage, id, title string) *SessionUs
 	return usage
 }
 
-func ensureModelUsage(m map[string]*ModelUsage, source, model string) *ModelUsage {
-	key := source + "\x00" + model
+func ensureModelUsage(m map[string]*ModelUsage, model string) *ModelUsage {
+	key := strings.TrimSpace(model)
 	if usage, ok := m[key]; ok {
 		return usage
 	}
-	usage := &ModelUsage{Source: source, Model: model}
+	usage := &ModelUsage{Model: key}
 	m[key] = usage
 	return usage
 }

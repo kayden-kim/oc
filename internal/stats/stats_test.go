@@ -357,6 +357,67 @@ func TestLoadForDirAt_BuildsTopAgentUsage(t *testing.T) {
 	}
 }
 
+func TestLoadForDirAt_BuildsTopAgentModelUsage(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := filepath.Join(tmp, "work")
+	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
+	insertSession(t, db, "ses_work", dir)
+
+	entries := []struct {
+		messageID string
+		agent     string
+		provider  string
+		model     string
+	}{
+		{"msg_explore_1", "explore", "openai", "gpt-5.4"},
+		{"msg_explore_2", "explore", "openai", "gpt-5.4"},
+		{"msg_explore_3", "explore", "anthropic", "claude-sonnet-4.5"},
+		{"msg_oracle_1", "oracle", "openai", "gpt-5.4"},
+		{"msg_oracle_2", "oracle", "google", "gemini-2.5-pro"},
+	}
+	for i, entry := range entries {
+		insertMessage(t, db, entry.messageID, "ses_work", now, fmt.Sprintf(`{"role":"assistant","agent":%q,"providerID":%q,"modelID":%q}`, entry.agent, entry.provider, entry.model))
+		insertPart(t, db, fmt.Sprintf("part_%d", i), entry.messageID, "ses_work", now, `{"type":"step-finish","tokens":{"input":5,"output":5}}`)
+	}
+
+	insertMessage(t, db, "msg_no_agent", "ses_work", now, `{"role":"assistant","providerID":"openai","modelID":"gpt-5.4"}`)
+	insertPart(t, db, "part_no_agent", "msg_no_agent", "ses_work", now, `{"type":"step-finish","tokens":{"input":5,"output":5}}`)
+
+	t.Setenv("OPENCODE_DB", dbPath)
+	report, err := loadForDirAt(dir, now)
+	if err != nil {
+		t.Fatalf("loadForDirAt returned error: %v", err)
+	}
+
+	topAgentModels := rankedUsageFromReportField(t, report, "TopAgentModels")
+	expected := []usageSnapshot{{"explore\x00gpt-5.4", 2}, {"explore\x00claude-sonnet-4.5", 1}, {"oracle\x00gemini-2.5-pro", 1}, {"oracle\x00gpt-5.4", 1}}
+	if !reflect.DeepEqual(topAgentModels, expected) {
+		t.Fatalf("expected top agent models %v, got %v", expected, topAgentModels)
+	}
+	if report.UniqueAgentModelCount != 4 {
+		t.Fatalf("expected 4 unique agent/model pairs, got %d", report.UniqueAgentModelCount)
+	}
+	if report.TotalAgentModelCalls != 5 {
+		t.Fatalf("expected 5 agent/model calls, got %d", report.TotalAgentModelCalls)
+	}
+}
+
 func TestLoadForDirAt_BuildsTopModelUsage(t *testing.T) {
 	tmp := t.TempDir()
 	dbPath := filepath.Join(tmp, "opencode.db")
@@ -438,18 +499,18 @@ func TestLoadForDirAt_BuildsTopModelUsage(t *testing.T) {
 		t.Fatalf("expected all 12 ranked models, got %d (%v)", len(topModels), topModels)
 	}
 	expected := []usageMetric{
-		{Name: "[OpenAI] gpt-5.4", Amount: 1120},
-		{Name: "[Anthropic] claude-sonnet-4.5", Amount: 900},
-		{Name: "[Google] gemini-2.5-pro", Amount: 690},
-		{Name: "[OpenRouter] qwen/qwen3-coder", Amount: 475},
-		{Name: "[Azure] gpt-4.1", Amount: 265},
-		{Name: "[Bedrock] claude-3.7-sonnet", Amount: 235},
-		{Name: "[Vertex] gemini-2.0-flash", Amount: 210},
-		{Name: "[Copilot] gpt-4o", Amount: 185},
-		{Name: "[Copilot] mistral-large", Amount: 160},
-		{Name: "[OpenAI] o4-mini", Amount: 135},
-		{Name: "[Anthropic] claude-haiku-4.5", Amount: 110},
-		{Name: "[Google] gemini-2.0-flash-lite", Amount: 85},
+		{Name: "openai\x00gpt-5.4", Amount: 1120},
+		{Name: "anthropic\x00claude-sonnet-4.5", Amount: 900},
+		{Name: "google\x00gemini-2.5-pro", Amount: 690},
+		{Name: "openrouter\x00qwen/qwen3-coder", Amount: 475},
+		{Name: "azure\x00gpt-4.1", Amount: 265},
+		{Name: "bedrock\x00claude-3.7-sonnet", Amount: 235},
+		{Name: "vertex_ai\x00gemini-2.0-flash", Amount: 210},
+		{Name: "copilot\x00gpt-4o", Amount: 185},
+		{Name: "github_models\x00mistral-large", Amount: 160},
+		{Name: "openai\x00o4-mini", Amount: 135},
+		{Name: "anthropic\x00claude-haiku-4.5", Amount: 110},
+		{Name: "google\x00gemini-2.0-flash-lite", Amount: 85},
 	}
 	if !reflect.DeepEqual(topModels, expected) {
 		t.Fatalf("expected top models %v, got %v", expected, topModels)
@@ -709,6 +770,78 @@ func TestLoadForDirAt_AggregatesCodeLinesFromSessionSummaries(t *testing.T) {
 	}
 	if report.HighestCodeDay.CodeLines != 150 {
 		t.Fatalf("expected highest code day code lines 150, got %d", report.HighestCodeDay.CodeLines)
+	}
+}
+
+func TestLoadForDirAt_AggregatesChangedFilesFromPartSignals(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := filepath.Join(tmp, "work")
+	otherDir := filepath.Join(tmp, "other")
+	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
+	yesterday := now.AddDate(0, 0, -1)
+
+	insertSession(t, db, "ses_work", dir)
+	insertSession(t, db, "ses_other", otherDir)
+
+	insertMessage(t, db, "msg_today", "ses_work", now, `{"role":"assistant"}`)
+	insertPart(t, db, "patch_today", "msg_today", "ses_work", now, `{"type":"patch","files":["internal/app/app.go","README.md"]}`)
+	insertPart(t, db, "write_today", "msg_today", "ses_work", now, `{"type":"tool","tool":"write","state":{"status":"completed","input":{"filePath":"docs/notes.md"}}}`)
+	insertPart(t, db, "edit_today", "msg_today", "ses_work", now, `{"type":"tool","tool":"edit","state":{"status":"completed","input":{"filePath":"docs/notes.md"}}}`)
+	insertPart(t, db, "apply_patch_today", "msg_today", "ses_work", now, `{"type":"tool","tool":"apply_patch","state":{"status":"completed","input":{"patchText":"*** Begin Patch\n*** Add File: internal/new/file.go\n*** Update File: README.md\n*** Delete File: docs/old.md\n*** End Patch"}}}`)
+	insertPart(t, db, "apply_patch_pending", "msg_today", "ses_work", now, `{"type":"tool","tool":"apply_patch","state":{"status":"pending","input":{"patchText":"*** Begin Patch\n*** Add File: should/not-count.go\n*** End Patch"}}}`)
+
+	insertMessage(t, db, "msg_yesterday", "ses_work", yesterday, `{"role":"assistant"}`)
+	insertPart(t, db, "patch_yesterday", "msg_yesterday", "ses_work", yesterday, `{"type":"patch","files":["cmd/oc/main.go","internal/tui/model.go"]}`)
+	insertPart(t, db, "write_yesterday_dup", "msg_yesterday", "ses_work", yesterday, `{"type":"tool","tool":"write","state":{"status":"completed","input":{"filePath":"cmd/oc/main.go"}}}`)
+
+	insertMessage(t, db, "msg_summary", "ses_work", now, `{"role":"assistant","summary":true,"agent":"compaction"}`)
+	insertPart(t, db, "patch_summary", "msg_summary", "ses_work", now, `{"type":"patch","files":["ignored/summary.go"]}`)
+
+	insertMessage(t, db, "msg_other", "ses_other", now, `{"role":"assistant"}`)
+	insertPart(t, db, "patch_other", "msg_other", "ses_other", now, `{"type":"patch","files":["other/project.go"]}`)
+
+	t.Setenv("OPENCODE_DB", dbPath)
+	report, err := loadForDirAt(dir, now)
+	if err != nil {
+		t.Fatalf("loadForDirAt returned error: %v", err)
+	}
+
+	if report.TodayChangedFiles != 5 {
+		t.Fatalf("expected today changed files 5, got %d", report.TodayChangedFiles)
+	}
+	if report.YesterdayChangedFiles != 2 {
+		t.Fatalf("expected yesterday changed files 2, got %d", report.YesterdayChangedFiles)
+	}
+	if report.ThirtyDayChangedFiles != 7 {
+		t.Fatalf("expected 30-day changed files 7, got %d", report.ThirtyDayChangedFiles)
+	}
+	if report.Days[len(report.Days)-1].ChangedFiles != 5 {
+		t.Fatalf("expected today day bucket changed files 5, got %d", report.Days[len(report.Days)-1].ChangedFiles)
+	}
+	if report.Days[len(report.Days)-2].ChangedFiles != 2 {
+		t.Fatalf("expected yesterday day bucket changed files 2, got %d", report.Days[len(report.Days)-2].ChangedFiles)
+	}
+	if report.HighestChangedFilesDay.Date.Format("2006-01-02") != now.Format("2006-01-02") {
+		t.Fatalf("expected highest changed-files day on %s, got %s", now.Format("2006-01-02"), report.HighestChangedFilesDay.Date.Format("2006-01-02"))
+	}
+	if report.HighestChangedFilesDay.ChangedFiles != 5 {
+		t.Fatalf("expected highest changed-files day 5, got %d", report.HighestChangedFilesDay.ChangedFiles)
 	}
 }
 
