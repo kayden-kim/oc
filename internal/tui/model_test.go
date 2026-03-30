@@ -996,6 +996,9 @@ func TestView_RendersRhythmPlaceholdersBeforeStatsLoad(t *testing.T) {
 	if !strings.Contains(view, defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("--")) {
 		t.Fatalf("expected daily placeholder before stats load, got %q", view)
 	}
+	if !strings.Contains(view, defaultTextStyle.Render("• hourly ")+statsValueTextStyle.Render("--")) {
+		t.Fatalf("expected hourly placeholder before stats load, got %q", view)
+	}
 	if !strings.Contains(view, defaultTextStyle.Render("• streak ")+statsValueTextStyle.Render("--")) {
 		t.Fatalf("expected streak placeholder before stats load, got %q", view)
 	}
@@ -2047,7 +2050,7 @@ func TestRender24hSparkline_BasicRendering(t *testing.T) {
 	}
 }
 
-func TestRender24hSparkline_UsesWorkdayAdjustedThreshold(t *testing.T) {
+func TestRender24hSparkline_UsesHourlyThreshold(t *testing.T) {
 	var slots [48]int64
 	slots[47] = 100000
 	report := stats.Report{Rolling24hSlots: slots}
@@ -2056,11 +2059,11 @@ func TestRender24hSparkline_UsesWorkdayAdjustedThreshold(t *testing.T) {
 	m.width = 80
 
 	result := m.render24hSparkline(report)
-	if !strings.ContainsRune(result, '▄') {
-		t.Fatalf("expected workday-adjusted threshold to render current slot as a mid-level bar, got %q", result)
+	if !strings.ContainsRune(result, '▂') {
+		t.Fatalf("expected hourly threshold to render current slot as a low bar, got %q", result)
 	}
-	if strings.ContainsRune(result, '█') {
-		t.Fatalf("expected workday-adjusted threshold to avoid max-level bar for 100000 tokens, got %q", result)
+	if strings.ContainsRune(result, '▃') {
+		t.Fatalf("expected hourly threshold to avoid a higher bar for 100000 tokens, got %q", result)
 	}
 }
 
@@ -2068,6 +2071,13 @@ func TestSparklineCell_UsesGrayPaletteForYesterdaySlots(t *testing.T) {
 	cell := sparklineCell(3, false, false)
 	if !strings.Contains(cell, "38;2;96;96;96") {
 		t.Fatalf("expected yesterday sparkline cell to use gray palette, got %q", cell)
+	}
+}
+
+func TestSparklineCell_UsesDarkerTodayPaletteForLowLevels(t *testing.T) {
+	cell := sparklineCell(2, false, true)
+	if !strings.Contains(cell, "38;2;86;54;0") {
+		t.Fatalf("expected today sparkline cell to use darker orange low-level tone, got %q", cell)
 	}
 }
 
@@ -2084,10 +2094,10 @@ func TestRender24hSparklineAt_SplitsYesterdayAndTodayColors(t *testing.T) {
 	m.width = 80
 
 	result := m.render24hSparklineAt(report, now)
-	if !strings.Contains(result, "38;2;184;184;184") {
+	if !strings.Contains(result, "38;2;64;64;64") {
 		t.Fatalf("expected yesterday segment to use gray palette, got %q", result)
 	}
-	if !strings.Contains(result, "38;2;255;153;0") {
+	if !strings.Contains(result, "38;2;63;40;0") {
 		t.Fatalf("expected today segment to use orange palette, got %q", result)
 	}
 }
@@ -2103,8 +2113,8 @@ func TestRender24hSparkline_WidthAdaptation(t *testing.T) {
 		wantLen int // 0 means hidden
 		desc    string
 	}{
-		{80, 48, "wide: full 48 slots"},
-		{50, 24, "medium: compressed 24 slots"},
+		{80, 24, "wide: 24 hourly slots"},
+		{50, 24, "medium: 24 hourly slots"},
 		{30, 0, "narrow: hidden"},
 	}
 	for _, tt := range tests {
@@ -2151,11 +2161,14 @@ func TestView_RendersRhythmWithSparkline(t *testing.T) {
 	m.width = 80
 	view := m.View().Content
 
-	// Should contain the "today" line with session hours
-	if !strings.Contains(view, "today") {
-		t.Error("view should contain 'today' sparkline line")
+	// Should contain the "hourly" label with session hours
+	if !strings.Contains(view, defaultTextStyle.Render("• hourly ")) {
+		t.Error("view should contain 'hourly' sparkline label")
 	}
-	if !strings.Contains(view, "1.5h") {
-		t.Error("view should contain rolling 24h session hours '1.5h'")
+	if strings.Contains(view, defaultTextStyle.Render("• 24h    ")) {
+		t.Error("view should not contain the old '24h' sparkline label")
+	}
+	if !strings.Contains(view, "1.5/24h") {
+		t.Error("view should contain rolling 24h session ratio '1.5/24h'")
 	}
 }
