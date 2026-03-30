@@ -180,7 +180,9 @@ func selectedSessionSummary(session SessionItem, maxWidth int) string {
 	availableTitleWidth := maxWidth - lipgloss.Width(prefix) - lipgloss.Width(suffix)
 	title := session.Title
 	if availableTitleWidth > 0 && lipgloss.Width(title) > availableTitleWidth {
-		if availableTitleWidth <= 3 {
+		if isPathLike(title) {
+			title = shortenPathMiddle(title, availableTitleWidth)
+		} else if availableTitleWidth <= 3 {
 			title = strings.Repeat(".", max(0, availableTitleWidth))
 		} else {
 			title = truncateString(title, availableTitleWidth-3) + "..."

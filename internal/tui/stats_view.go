@@ -164,14 +164,13 @@ func formatPulseValue(primary string, summary string) string {
 	if summary == "" {
 		return primary
 	}
-	gap := "   "
-	if !strings.Contains(summary, ", best ") {
-		gap = "  "
-	}
-	return primary + gap + summary
+	return primary + " " + summary
 }
 
 func formatInlineStreakSummary(current string, best string) string {
+	if current == "--" && best == "--" {
+		return ""
+	}
 	if current == best && current != "--" {
 		return fmt.Sprintf("(streak %s)", current)
 	}
@@ -463,7 +462,7 @@ func renderStatsTableLine(columns []statsTableColumn, widths []int, cells []stri
 }
 
 func renderStatsTableCell(value string, width int, alignRight bool, style lipgloss.Style) string {
-	truncated := truncateDisplayWidth(value, width)
+	truncated := truncatePathAware(value, width)
 	visible := lipgloss.Width(truncated)
 	padding := width - visible
 	if padding < 0 {
@@ -890,6 +889,21 @@ func (m Model) renderUsageLines(metricHeader string, items []stats.UsageCount, t
 	if usageItemsUseAmounts(items) {
 		metricFormatter = formatSummaryTokens
 	}
+	compactPathColumns := m.isNarrowLayout() && usageItemsLookLikePaths(items)
+	metricLabel := metricHeader
+	shareLabel := "share"
+	metricMinWidth := 7
+	shareMinWidth := 5
+	if compactPathColumns {
+		if metricHeader == "tokens" {
+			metricLabel = "tok"
+		} else if metricHeader == "count" {
+			metricLabel = "cnt"
+		}
+		shareLabel = "%"
+		metricMinWidth = 3
+		shareMinWidth = 4
+	}
 	shareCell := func(value int64, top int64) string {
 		share := formatUsageShare(value, total)
 		if m.isNarrowLayout() {
@@ -905,8 +919,8 @@ func (m Model) renderUsageLines(metricHeader string, items []stats.UsageCount, t
 	}
 	columns := []statsTableColumn{
 		{Header: "", MinWidth: 12, Style: defaultTextStyle},
-		{Header: metricHeader, MinWidth: 7, AlignRight: true, Style: statsValueTextStyle},
-		{Header: "share", MinWidth: 5, Style: statsValueTextStyle},
+		{Header: metricLabel, MinWidth: metricMinWidth, AlignRight: true, Style: statsValueTextStyle},
+		{Header: shareLabel, MinWidth: shareMinWidth, Style: statsValueTextStyle},
 	}
 	if len(items) == 0 {
 		rows := []statsTableRow{{Cells: []string{"top 15", "--", placeholderShare("--")}}}
@@ -944,6 +958,18 @@ func usageItemsUseAmounts(items []stats.UsageCount) bool {
 		}
 	}
 	return false
+}
+
+func usageItemsLookLikePaths(items []stats.UsageCount) bool {
+	if len(items) == 0 {
+		return false
+	}
+	for _, item := range items {
+		if item.Name == "" || !isPathLike(item.Name) {
+			return false
+		}
+	}
+	return true
 }
 
 func formatUsageMetric(value int64) string {
@@ -1436,7 +1462,7 @@ func tableStringWithMaxWidth(headers []string, rows [][]string, rightAligned map
 	formatRow := func(row []string) string {
 		parts := make([]string, len(row))
 		for i, cell := range row {
-			cell = truncateDisplayWidth(cell, widths[i])
+			cell = truncatePathAware(cell, widths[i])
 			if rightAligned[i] {
 				padding := max(0, widths[i]-lipgloss.Width(cell))
 				parts[i] = strings.Repeat(" ", padding) + cell

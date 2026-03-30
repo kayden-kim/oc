@@ -59,6 +59,33 @@ func TestRenderStatsTable_UsesDisplayWidthForWideGlyphs(t *testing.T) {
 	}
 }
 
+func TestShortenPathMiddle_PreservesPathEnds(t *testing.T) {
+	tests := []struct {
+		name  string
+		path  string
+		width int
+		want  []string
+	}{
+		{name: "unix path", path: "/Users/kayden/workspace/super-long-project-name", width: 24, want: []string{"/Users", "..", "project-name"}},
+		{name: "windows path", path: `C:\Users\kayden\workspace\super-long-project-name`, width: 26, want: []string{`C:\Users`, "..", "project-name"}},
+		{name: "non path fallback", path: "very-long-non-path-value", width: 10, want: []string{"…"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncatePathAware(tt.path, tt.width)
+			if lipgloss.Width(got) > tt.width {
+				t.Fatalf("expected width <= %d, got %d in %q", tt.width, lipgloss.Width(got), got)
+			}
+			for _, snippet := range tt.want {
+				if !strings.Contains(got, snippet) {
+					t.Fatalf("expected %q in %q", snippet, got)
+				}
+			}
+		})
+	}
+}
+
 func TestFormatSummaryTokensPerHour(t *testing.T) {
 	tests := []struct {
 		name           string

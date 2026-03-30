@@ -1040,13 +1040,13 @@ func TestView_RendersRhythmAndMetricsSections(t *testing.T) {
 	if !strings.Contains(view, "Metrics") {
 		t.Fatalf("expected Metrics section, got %q", view)
 	}
-	if !strings.Contains(view, defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("0/30d  (streak 6d)")) {
+	if !strings.Contains(view, defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("0/30d (streak 6d)")) {
 		t.Fatalf("expected daily 30d summary, got %q", view)
 	}
-	if !strings.Contains(view, defaultTextStyle.Render("    ")+defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("0/30d  (streak 6d)")) {
+	if !strings.Contains(view, defaultTextStyle.Render("    ")+defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("0/30d (streak 6d)")) {
 		t.Fatalf("expected bulleted daily summary, got %q", view)
 	}
-	if !strings.Contains(view, defaultTextStyle.Render("• hourly ")+statsValueTextStyle.Render("1.6/24h  (streak 0h)")) {
+	if !strings.Contains(view, defaultTextStyle.Render("• hourly ")+statsValueTextStyle.Render("1.6/24h (streak 0h)")) {
 		t.Fatalf("expected hourly summary with inline streak stats, got %q", view)
 	}
 	if strings.Contains(view, defaultTextStyle.Render("• streak ")) {
@@ -1100,11 +1100,14 @@ func TestView_RendersRhythmPlaceholdersBeforeStatsLoad(t *testing.T) {
 	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true)
 	view := model.View().Content
 
-	if !strings.Contains(view, defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("--   (streak --, best --)")) {
+	if !strings.Contains(view, defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("--")) {
 		t.Fatalf("expected daily placeholder before stats load, got %q", view)
 	}
-	if !strings.Contains(view, defaultTextStyle.Render("• hourly ")+statsValueTextStyle.Render("--   (streak --, best --)")) {
+	if !strings.Contains(view, defaultTextStyle.Render("• hourly ")+statsValueTextStyle.Render("--")) {
 		t.Fatalf("expected hourly placeholder before stats load, got %q", view)
+	}
+	if strings.Contains(view, "streak") {
+		t.Fatalf("expected no streak text before stats load, got %q", view)
 	}
 	if strings.Contains(view, defaultTextStyle.Render("• streak ")) {
 		t.Fatalf("did not expect standalone streak placeholder before stats load, got %q", view)
@@ -1426,6 +1429,49 @@ func TestRenderOverviewLines_HidesProjectActivityInProjectScope(t *testing.T) {
 
 	if strings.Contains(stripANSI(content), "Activity - Projects") {
 		t.Fatalf("expected project activity section to stay hidden in project scope, got %q", content)
+	}
+}
+
+func TestRenderOverviewLines_ShortensProjectPathsInNarrowLayout(t *testing.T) {
+	report := stats.Report{
+		UniqueProjectCount: 1,
+		TopProjects:        []stats.UsageCount{{Name: "/Users/kayden/workspace/super-long-project-name", Amount: 100}},
+		ThirtyDayTokens:    100,
+		Days:               make([]stats.Day, 30),
+	}
+	for i := range report.Days {
+		report.Days[i] = stats.Day{Date: time.Now().AddDate(0, 0, -(29 - i)), Tokens: 100}
+	}
+
+	model := NewModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{}, testVersion, true)
+	model.width = 38
+	content := strings.Join(model.renderOverviewLines(), "\n")
+	plainContent := stripANSI(content)
+
+	if !strings.Contains(plainContent, "Activity - Projects") {
+		t.Fatalf("expected projects section, got %q", plainContent)
+	}
+	for _, snippet := range []string{"/Users", "..", "project-name"} {
+		if !strings.Contains(plainContent, snippet) {
+			t.Fatalf("expected shortened project path snippet %q, got %q", snippet, plainContent)
+		}
+	}
+	if got := maxRenderedLineWidth(content); got > 38 {
+		t.Fatalf("expected rendered width <= 38, got %d in %q", got, plainContent)
+	}
+}
+
+func TestSelectedSessionSummary_ShortensPathLikeTitlesInMiddle(t *testing.T) {
+	session := SessionItem{ID: "ses_123", Title: "/Users/kayden/workspace/super-long-project-name", UpdatedAt: time.Now()}
+	summary := selectedSessionSummary(session, 42)
+
+	for _, snippet := range []string{"/Users", "..", "name", "(ses_123)"} {
+		if !strings.Contains(summary, snippet) {
+			t.Fatalf("expected %q in %q", snippet, summary)
+		}
+	}
+	if lipgloss.Width(summary) > 42 {
+		t.Fatalf("expected width <= 42, got %d in %q", lipgloss.Width(summary), summary)
 	}
 }
 
@@ -1971,16 +2017,16 @@ func TestView_AnalyticsMinimapAdaptsToNarrowWidths(t *testing.T) {
 	narrowPlain := stripANSI(narrowView)
 	tinyPlain := stripANSI(tinyView)
 
-	if !strings.Contains(widePlain, "• daily  0/30d  (streak 0d)") {
+	if !strings.Contains(widePlain, "• daily  0/30d (streak 0d)") {
 		t.Fatalf("expected daily label in wide view, got %q", wideView)
 	}
 	if strings.Count(wideView, "█")+strings.Count(wideView, "▓")+strings.Count(wideView, "░")+strings.Count(wideView, "·") < 28 {
 		t.Fatalf("expected 4-week minimap density in wide view, got %q", wideView)
 	}
-	if !strings.Contains(narrowPlain, "• daily  0/30d  (streak 0d)") {
+	if !strings.Contains(narrowPlain, "• daily  0/30d (streak 0d)") {
 		t.Fatalf("expected daily label in narrow view, got %q", narrowView)
 	}
-	if !strings.Contains(tinyPlain, "• daily  0/30d  (streak 0d)") {
+	if !strings.Contains(tinyPlain, "• daily  0/30d (streak 0d)") {
 		t.Fatalf("expected daily label to remain in tiny view, got %q", tinyView)
 	}
 	if strings.Contains(narrowView, "·") || strings.Contains(narrowView, "░") || strings.Contains(narrowView, "▓") || strings.Contains(narrowView, "█") {
