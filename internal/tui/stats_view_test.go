@@ -21,6 +21,7 @@ func TestRenderStatsTable_RespectsMaxWidth(t *testing.T) {
 	lines := renderStatsTable(
 		[]statsTableColumn{{Header: "name", MinWidth: 4, Style: defaultTextStyle}, {Header: "value", MinWidth: 4, AlignRight: true, Style: statsValueTextStyle}, {Header: "share", MinWidth: 4, AlignRight: true, Style: statsValueTextStyle}},
 		[]statsTableRow{{Cells: []string{"very-long-entry-name", "123456", "99%"}}, {Divider: true}, {Cells: []string{"Total", "123456", "100%"}}},
+		statsTableMaxWidth,
 	)
 
 	if len(lines) != 5 {
@@ -44,6 +45,7 @@ func TestRenderStatsTable_UsesDisplayWidthForWideGlyphs(t *testing.T) {
 	lines := renderStatsTable(
 		[]statsTableColumn{{Header: "name", MinWidth: 4, Style: defaultTextStyle}, {Header: "value", MinWidth: 4, AlignRight: true, Style: statsValueTextStyle}},
 		[]statsTableRow{{Cells: []string{"모델이름이아주길어요테스트모델이름이아주길어요테스트모델이름이아주길어요테스트", "123456"}}, {Cells: []string{"🙂emoji-wide-name-with-extra-extra-extra-width", "42"}}},
+		statsTableMaxWidth,
 	)
 
 	for i, line := range lines {

@@ -172,7 +172,10 @@ In both files, `oc` only touches the `plugin` array. All other fields (schema, M
 
 | Key | Action |
 |-----|--------|
-| `↑` / `↓` or `j` / `k` | Navigate sessions |
+| `↑` / `↓` or `j` / `k` | Navigate sessions one line |
+| `PgUp` / `PgDn` | Move one visible page |
+| `Ctrl+U` / `Ctrl+D` | Move half page |
+| `Home` / `End` | Jump to top/bottom |
 | `Enter` | Select session and return to plugin selector |
 | `Esc` | Back without changing selection |
 
@@ -191,6 +194,18 @@ After saving, `oc` reloads configuration and returns to the plugin selector with
 When a project-level `.opencode/opencode.json` exists, the edit picker shows an extra entry for that file. If it does not exist, the picker omits that project `opencode.json` entry.
 
 If `oh-my-opencode.json`, `oh-my-opencode.jsonc`, `oh-my-openagent.json`, or `oh-my-openagent.jsonc` exist in either the user config directory or the project `.opencode` directory, the edit picker includes each discovered file as its own entry.
+
+### Stats view
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` or `j` / `k` | Scroll one line |
+| `PgUp` / `PgDn` | Scroll one visible page |
+| `Ctrl+U` / `Ctrl+D` | Scroll half page |
+| `Home` / `End` | Jump to top/bottom |
+| `←` / `→` or `h` / `l` | Switch stats tabs |
+| `g` | Toggle global/project scope |
+| `Tab` / `Esc` | Return to launcher |
 
 ## Building from source
 

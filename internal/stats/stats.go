@@ -59,6 +59,8 @@ type Report struct {
 	AgentDays                int
 	CurrentStreak            int
 	BestStreak               int
+	CurrentHourlyStreakSlots int
+	BestHourlyStreakSlots    int
 	WeeklyActiveDays         int
 	WeeklyAgentDays          int
 	ThirtyDayCost            float64
@@ -88,7 +90,9 @@ type Report struct {
 	TopTools                 []UsageCount
 	TopSkills                []UsageCount
 	TopAgents                []UsageCount
+	TopProjects              []UsageCount
 	TopModels                []UsageCount
+	UniqueProjectCount       int
 	HighestBurnDay           Day
 	HighestCodeDay           Day
 	LongestSessionDay        Day
@@ -255,7 +259,70 @@ func loadAtWithOptions(now time.Time, dir string, options Options) (Report, erro
 		return days[i].Date.Before(days[j].Date)
 	})
 
-	return buildReport(days, now, options), nil
+	report := buildReport(days, now, options)
+	if dir == "" {
+		projectTotals, err := loadProjectTokenUsage(db, since)
+		if err != nil {
+			return Report{}, err
+		}
+		report.TopProjects = topUsageAmounts(projectTotals, unlimitedUsageItems)
+		report.UniqueProjectCount = len(projectTotals)
+	}
+
+	return report, nil
+}
+
+func loadProjectTokenUsage(db *sql.DB, since int64) (map[string]int64, error) {
+	rows, err := db.Query(`
+		SELECT
+			CAST(COALESCE(s.directory, '') AS TEXT),
+			SUM(
+				CAST(COALESCE(json_extract(p.data, '$.tokens.input'), 0) AS INTEGER) +
+				CAST(COALESCE(json_extract(p.data, '$.tokens.output'), 0) AS INTEGER) +
+				CAST(COALESCE(json_extract(p.data, '$.tokens.reasoning'), 0) AS INTEGER) +
+				CAST(COALESCE(json_extract(p.data, '$.tokens.cache.read'), 0) AS INTEGER) +
+				CAST(COALESCE(json_extract(p.data, '$.tokens.cache.write'), 0) AS INTEGER)
+			) AS total_tokens
+		FROM part p
+		LEFT JOIN message m ON m.id = p.message_id
+		LEFT JOIN session s ON s.id = p.session_id
+		WHERE p.time_created >= ?
+		  AND CAST(COALESCE(json_extract(p.data, '$.type'), '') AS TEXT) = 'step-finish'
+		  AND CAST(COALESCE(json_extract(m.data, '$.summary'), 0) AS INTEGER) = 0
+		  AND lower(CAST(COALESCE(json_extract(m.data, '$.agent'), '') AS TEXT)) != 'compaction'
+		GROUP BY CAST(COALESCE(s.directory, '') AS TEXT)
+	`, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	projectTotals := make(map[string]int64)
+	for rows.Next() {
+		var directory string
+		var totalTokens int64
+		if err := rows.Scan(&directory, &totalTokens); err != nil {
+			return nil, err
+		}
+		if totalTokens <= 0 {
+			continue
+		}
+		projectTotals[normalizeProjectUsageKey(directory)] += totalTokens
+	}
+
+	return projectTotals, rows.Err()
+}
+
+func normalizeProjectUsageKey(directory string) string {
+	directory = strings.TrimSpace(directory)
+	if directory == "" {
+		return "(unknown project)"
+	}
+	cleaned := filepath.Clean(directory)
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(filepath.ToSlash(cleaned))
+	}
+	return cleaned
 }
 
 func buildEmptyDays(now time.Time) []Day {
@@ -617,6 +684,8 @@ func buildReport(days []Day, now time.Time, options Options) Report {
 	report.TopModels = topUsageAmounts(modelTotals, unlimitedUsageItems)
 	report.CurrentStreak = currentStreak(days)
 	report.BestStreak = bestStreak(days)
+	report.CurrentHourlyStreakSlots = currentHourlyStreakSlots(days)
+	report.BestHourlyStreakSlots = bestHourlyStreakSlots(days)
 	if len(days) > 0 {
 		today := days[len(days)-1]
 		report.TodayCost = today.Cost
@@ -736,6 +805,44 @@ func bestStreak(days []Day) int {
 			continue
 		}
 		current = 0
+	}
+	return best
+}
+
+func currentHourlyStreakSlots(days []Day) int {
+	streak := 0
+	activeFound := false
+	for dayIndex := len(days) - 1; dayIndex >= 0; dayIndex-- {
+		for slotIndex := len(days[dayIndex].SlotTokens) - 1; slotIndex >= 0; slotIndex-- {
+			if days[dayIndex].SlotTokens[slotIndex] > 0 {
+				activeFound = true
+				streak++
+				continue
+			}
+			if activeFound {
+				return streak
+			}
+		}
+	}
+	if !activeFound {
+		return 0
+	}
+	return streak
+}
+
+func bestHourlyStreakSlots(days []Day) int {
+	best, current := 0, 0
+	for _, day := range days {
+		for _, slotTokens := range day.SlotTokens {
+			if slotTokens > 0 {
+				current++
+				if current > best {
+					best = current
+				}
+				continue
+			}
+			current = 0
+		}
 	}
 	return best
 }

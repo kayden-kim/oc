@@ -76,7 +76,15 @@
 ## UNIQUE STYLES
 - The CLI is intentionally re-entrant: after `opencode` exits, the launcher returns to the TUI instead of terminating.
 - Session selection is cwd-filtered through `opencode session list --format json`.
-- TUI copy and styling use yellow/white/gray lipgloss palettes rather than terminal defaults.
+- TUI copy and styling use yellow/white/gray lipgloss palettes rather than terminal defaults; see the UI/UX guidelines below before changing shared TUI presentation.
+
+## TUI UI/UX GUIDELINES
+- Treat `internal/tui/model.go` as the shared visual identity layer. Keep core lipgloss styles (`defaultTextStyle`, `cursorStyle`, `sessionLabelStyle`, help styles, tab styles) centralized there and preserve the existing yellow/white/gray palette with dark neutral backgrounds.
+- Reuse the shared chrome before inventing new screen-specific framing: `renderTopBadge` for the top badge/header, `renderSectionHeader` and `renderSubSectionHeader` for section titles, and `renderHelpBlock` plus `helpEntry` for keyboard hints. Launcher, session picker, edit picker, and stats screens already follow this pattern.
+- Keep list interactions consistent across modes. Focus uses the `> ` cursor, selected plugin rows use the `✔  ` marker, and row emphasis flows through `stylePluginRow`. Navigation and confirmation keys are stable (`↑/↓` or `j/k` for one-line movement, `PgUp/PgDn` for a full page, `Ctrl+u/Ctrl+d` for a half page, `Home/End` for top/bottom, `space`, `enter`, `esc`, `q`, plus mode keys like `tab`, `g`, `s`, `c`); update README and tests if this contract changes.
+- Preserve the existing width and spacing rhythm. The full TUI layout caps at 80 columns, and narrower terminals should clamp content to the available width rather than expanding the chrome. Shared headers and help blocks should derive width from the same cap, while tables should use the existing padding/truncation helpers in `internal/tui/stats_view.go` instead of ad hoc alignment logic.
+- Keep stats-specific visualization patterns inside `internal/tui/stats_view.go`. Heatmaps, sparklines, usage bars, and similar graph-like affordances are supplemental visuals: render them at the 80-column layout, but omit them when the terminal is narrower and prioritize the textual metrics instead.
+- Keep launch progress isolated in `internal/tui/launch_model.go`. Do not fold async launch messaging or progress-specific behavior back into the main selector model; Bubble Tea messages should remain the boundary between background work and rendering.
 
 ## COMMANDS
 ```bash

@@ -10,6 +10,7 @@
 | Launch progress UI | `internal/tui/launch_model.go` | async executor feeds logs through a channel |
 | Core behavior tests | `internal/tui/model_test.go` | navigation, selection, rendering, helpers |
 | Launch-specific tests | `internal/tui/launch_model_test.go` | progress and ready-state coverage |
+| Shared scroll behavior | `internal/tui/model.go` | session and stats navigation helpers live alongside key handling |
 
 ## DATA TYPES
 - `PluginItem`: Represents a selectable plugin with `Name`, `InitiallyEnabled`, and `SourceLabel` fields. `SourceLabel` is optional and shows config source (`[User]`, `[Project]`, `[User, Project]`). Empty when only user config exists (backward compatible).
@@ -19,6 +20,7 @@
 - `Model` owns three modes: default plugin list, session picker, and config edit picker.
 - Empty plugin lists auto-confirm by setting `confirmed` in `NewModel`.
 - Single-select vs multi-select behavior is controlled by `allowMultiplePlugins` and enforced in `Update`.
+- Session and stats screens share the same extended navigation contract: `↑/↓` or `j/k` for one-line movement, `PgUp/PgDn` for a full page, `Ctrl+d/Ctrl+u` for a half page, and `Home/End` for top/bottom.
 - Launch progress uses an injected executor that writes `LaunchLogMsg` and `LaunchReadyMsg` into `msgCh`.
 - Lipgloss styling is centralized as package-level variables; keep the yellow/white/gray palette consistent.
 

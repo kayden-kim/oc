@@ -24,7 +24,7 @@ func newTestModelWithSession(items []PluginItem, editChoices []EditChoice, sessi
 }
 
 func expectedTopBadge(version string, session SessionItem) string {
-	targetWidth := 80
+	targetWidth := maxLayoutWidth
 	label := sessionLabelStyle.Render("OC")
 	versionText := sessionContentStyle.Render(sessionValueStyle.Render(version))
 	metaWidth := max(0, targetWidth-lipgloss.Width(label)-lipgloss.Width(versionText))
@@ -50,6 +50,37 @@ func openSessionPickerWithHeight(t *testing.T, sessions []SessionItem, session S
 	updatedModel, _ = model.Update(tea.WindowSizeMsg{Width: 80, Height: height})
 
 	return updatedModel.(Model)
+}
+
+func openDailyStatsViewWithHeight(t *testing.T, height int, sessionCount int) Model {
+	t.Helper()
+
+	report := stats.Report{}
+	daily := stats.WindowReport{Label: "Daily"}
+	for i := 0; i < sessionCount; i++ {
+		daily.TopSessions = append(daily.TopSessions, stats.SessionUsage{ID: fmt.Sprintf("ses_%02d", i), Title: fmt.Sprintf("Title %02d", i), Messages: i + 1})
+	}
+
+	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{}, testVersion, true)
+	model.globalDaily = daily
+	model.globalDailyLoaded = true
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: height})
+	model = updated.(Model)
+	updated, _ = model.Update(mockKeyMsg("tab"))
+	model = updated.(Model)
+	updated, _ = model.Update(mockKeyMsg("right"))
+
+	return updated.(Model)
+}
+
+func maxRenderedLineWidth(content string) int {
+	maxWidth := 0
+	for _, line := range strings.Split(content, "\n") {
+		if width := lipgloss.Width(stripANSI(line)); width > maxWidth {
+			maxWidth = width
+		}
+	}
+	return maxWidth
 }
 
 func TestNewModel_InitialState(t *testing.T) {
@@ -563,6 +594,59 @@ func TestUpdate_SessionPickerScrollsToKeepFocusedRowVisible(t *testing.T) {
 	}
 }
 
+func TestUpdate_SessionPickerPageNavigationKeys(t *testing.T) {
+	sessions := []SessionItem{
+		{ID: "ses_1", Title: "Session 1"},
+		{ID: "ses_2", Title: "Session 2"},
+		{ID: "ses_3", Title: "Session 3"},
+		{ID: "ses_4", Title: "Session 4"},
+		{ID: "ses_5", Title: "Session 5"},
+		{ID: "ses_6", Title: "Session 6"},
+	}
+	m := openSessionPickerWithHeight(t, sessions, SessionItem{}, 8)
+
+	updatedModel, _ := m.Update(mockKeyMsg("pgdown"))
+	m = updatedModel.(Model)
+	if m.sessionCursor != 2 {
+		t.Fatalf("expected pgdown to move one visible page, got cursor %d", m.sessionCursor)
+	}
+
+	updatedModel, _ = m.Update(mockKeyMsg("ctrl+d"))
+	m = updatedModel.(Model)
+	if m.sessionCursor != 3 {
+		t.Fatalf("expected ctrl+d to move half page, got cursor %d", m.sessionCursor)
+	}
+
+	updatedModel, _ = m.Update(mockKeyMsg("end"))
+	m = updatedModel.(Model)
+	if m.sessionCursor != len(sessions) {
+		t.Fatalf("expected end to jump to final row, got cursor %d", m.sessionCursor)
+	}
+	if m.sessionOffset == 0 {
+		t.Fatalf("expected end to move viewport near bottom, got offset %d", m.sessionOffset)
+	}
+
+	updatedModel, _ = m.Update(mockKeyMsg("home"))
+	m = updatedModel.(Model)
+	if m.sessionCursor != 0 {
+		t.Fatalf("expected home to jump to first row, got cursor %d", m.sessionCursor)
+	}
+	if m.sessionOffset != 0 {
+		t.Fatalf("expected home to reset viewport, got offset %d", m.sessionOffset)
+	}
+
+	updatedModel, _ = m.Update(mockKeyMsg("pgup"))
+	m = updatedModel.(Model)
+	if m.sessionCursor != 0 {
+		t.Fatalf("expected pgup at top to stay clamped, got cursor %d", m.sessionCursor)
+	}
+	updatedModel, _ = m.Update(mockKeyMsg("ctrl+u"))
+	m = updatedModel.(Model)
+	if m.sessionCursor != 0 {
+		t.Fatalf("expected ctrl+u at top to stay clamped, got cursor %d", m.sessionCursor)
+	}
+}
+
 func TestUpdate_SessionPickerWindowedViewStillAllowsClearingSession(t *testing.T) {
 	sessions := []SessionItem{{ID: "ses_latest", Title: "Latest session"}}
 	m := openSessionPickerWithHeight(t, sessions, sessions[0], 8)
@@ -763,7 +847,7 @@ func TestStylePluginRow_UsesCombinedStyleForFocusedSelectedRow(t *testing.T) {
 }
 
 func TestRenderHelpLine_IncludesStyledKeyTokens(t *testing.T) {
-	helpLine := renderHelpLine()
+	helpLine := renderHelpLine(maxLayoutWidth)
 
 	for _, token := range []string{"↑/↓", "space", "enter", "s", "c", "q"} {
 		if !strings.Contains(helpLine, helpBgKeyStyle.Render(token)) {
@@ -784,6 +868,26 @@ func TestRenderHelpLine_IncludesStyledKeyTokens(t *testing.T) {
 	}
 }
 
+func TestRenderSessionHelpLine_IncludesScrollNavigationTokens(t *testing.T) {
+	helpLine := renderSessionHelpLine(maxLayoutWidth)
+
+	for _, token := range []string{"↑/↓", "PgUp/PgDn", "Ctrl+U/D", "Home/End", "enter", "esc"} {
+		if !strings.Contains(helpLine, helpBgKeyStyle.Render(token)) {
+			t.Fatalf("expected styled help token %q in %q", token, helpLine)
+		}
+	}
+}
+
+func TestRenderStatsHelpLine_IncludesScrollNavigationTokens(t *testing.T) {
+	helpLine := renderStatsHelpLine(maxLayoutWidth)
+
+	for _, token := range []string{"↑/↓", "PgUp/PgDn", "Ctrl+U/D", "Home/End", "tab", "g", "←/→", "esc"} {
+		if !strings.Contains(helpLine, helpBgKeyStyle.Render(token)) {
+			t.Fatalf("expected styled help token %q in %q", token, helpLine)
+		}
+	}
+}
+
 func TestView_RendersStyledHeaderLine(t *testing.T) {
 	view := newTestModel([]PluginItem{{Name: "plugin-a"}}, nil, true).View().Content
 	headerLine := strings.Split(view, "\n")[0]
@@ -797,7 +901,7 @@ func TestView_RendersStyledHeaderLine(t *testing.T) {
 func TestView_RendersPluginSelectionPrompt(t *testing.T) {
 	view := newTestModel([]PluginItem{{Name: "plugin-a"}}, nil, true).View().Content
 
-	expected := renderSectionHeader("📋 Choose plugins")
+	expected := renderSectionHeader("📋 Choose plugins", maxLayoutWidth)
 	if !strings.Contains(view, expected) {
 		t.Fatalf("expected plugin prompt line %q in %q", expected, view)
 	}
@@ -808,7 +912,7 @@ func TestView_EditModeRendersInstructionPrompt(t *testing.T) {
 	updatedModel, _ := model.Update(mockKeyMsg("c"))
 	view := updatedModel.(Model).View().Content
 
-	expected := renderSectionHeader("📂 Choose config to edit")
+	expected := renderSectionHeader("📂 Choose config to edit", maxLayoutWidth)
 	if !strings.Contains(view, expected) {
 		t.Fatalf("expected edit prompt line %q in %q", expected, view)
 	}
@@ -819,7 +923,7 @@ func TestView_SessionModeRendersInstructionPrompt(t *testing.T) {
 	updatedModel, _ := model.Update(mockKeyMsg("s"))
 	view := updatedModel.(Model).View().Content
 
-	expected := renderSectionHeader("🕘 Choose session")
+	expected := renderSectionHeader("🕘 Choose session", maxLayoutWidth)
 	if !strings.Contains(view, expected) {
 		t.Fatalf("expected session prompt line %q in %q", expected, view)
 	}
@@ -905,13 +1009,13 @@ func TestView_EditModeRendersStyledHeaderLine(t *testing.T) {
 func TestView_RendersStyledHelpLine(t *testing.T) {
 	view := newTestModel([]PluginItem{{Name: "plugin-a"}}, nil, true).View().Content
 
-	if !strings.Contains(view, renderHelpLine()) {
-		t.Fatalf("expected help line %q in %q", renderHelpLine(), view)
+	if !strings.Contains(view, renderHelpLine(maxLayoutWidth)) {
+		t.Fatalf("expected help line %q in %q", renderHelpLine(maxLayoutWidth), view)
 	}
 }
 
 func TestView_RendersRhythmAndMetricsSections(t *testing.T) {
-	report := stats.Report{CurrentStreak: 6, AgentDays: 17, TodayCost: 1.84, YesterdayCost: 1.50, TodayTokens: 148000, YesterdayTokens: 170000, ThirtyDayCost: 7.42, ThirtyDayTokens: 420000, TodaySessionMinutes: 95, YesterdaySessionMinutes: 120, ThirtyDaySessionMinutes: 765, TodayCodeLines: 150, YesterdayCodeLines: 190, ThirtyDayCodeLines: 1820, WeeklyActiveDays: 4, HighestBurnDay: stats.Day{Cost: 12.34}, HighestCodeDay: stats.Day{CodeLines: 190}, Days: make([]stats.Day, 30)}
+	report := stats.Report{CurrentStreak: 6, BestStreak: 6, CurrentHourlyStreakSlots: 0, BestHourlyStreakSlots: 0, AgentDays: 17, TodayCost: 1.84, YesterdayCost: 1.50, TodayTokens: 148000, YesterdayTokens: 170000, ThirtyDayCost: 7.42, ThirtyDayTokens: 420000, TodaySessionMinutes: 95, YesterdaySessionMinutes: 120, ThirtyDaySessionMinutes: 765, Rolling24hSessionMinutes: 95, TodayCodeLines: 150, YesterdayCodeLines: 190, ThirtyDayCodeLines: 1820, WeeklyActiveDays: 4, HighestBurnDay: stats.Day{Cost: 12.34}, HighestCodeDay: stats.Day{CodeLines: 190}, Days: make([]stats.Day, 30)}
 	for i := range report.Days {
 		report.Days[i] = stats.Day{Date: time.Now().AddDate(0, 0, -(29 - i)), Tokens: 1000, Cost: 0.5, SessionMinutes: 10, CodeLines: 20}
 	}
@@ -927,8 +1031,8 @@ func TestView_RendersRhythmAndMetricsSections(t *testing.T) {
 	model := NewModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{}, testVersion, true)
 	view := model.View().Content
 
-	if !strings.Contains(view, "Rhythm") {
-		t.Fatalf("expected Rhythm section, got %q", view)
+	if !strings.Contains(view, "My Pulse") {
+		t.Fatalf("expected My Pulse section, got %q", view)
 	}
 	if strings.Contains(view, report.Days[0].Date.Format("2006-01-02")+"~") {
 		t.Fatalf("did not expect rhythm header date range, got %q", view)
@@ -936,14 +1040,17 @@ func TestView_RendersRhythmAndMetricsSections(t *testing.T) {
 	if !strings.Contains(view, "Metrics") {
 		t.Fatalf("expected Metrics section, got %q", view)
 	}
-	if !strings.Contains(view, defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("0/30d")) {
+	if !strings.Contains(view, defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("0/30d  (streak 6d)")) {
 		t.Fatalf("expected daily 30d summary, got %q", view)
 	}
-	if !strings.Contains(view, defaultTextStyle.Render("    ")+defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("0/30d")) {
+	if !strings.Contains(view, defaultTextStyle.Render("    ")+defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("0/30d  (streak 6d)")) {
 		t.Fatalf("expected bulleted daily summary, got %q", view)
 	}
-	if !strings.Contains(view, defaultTextStyle.Render("• streak ")+statsValueTextStyle.Render("6d (best)")) {
-		t.Fatalf("expected streak line with parenthetical best streak, got %q", view)
+	if !strings.Contains(view, defaultTextStyle.Render("• hourly ")+statsValueTextStyle.Render("1.6/24h  (streak 0h)")) {
+		t.Fatalf("expected hourly summary with inline streak stats, got %q", view)
+	}
+	if strings.Contains(view, defaultTextStyle.Render("• streak ")) {
+		t.Fatalf("did not expect standalone streak line, got %q", view)
 	}
 	if strings.Contains(view, "Today") {
 		t.Fatalf("did not expect Today section after Metrics table change, got %q", view)
@@ -993,14 +1100,14 @@ func TestView_RendersRhythmPlaceholdersBeforeStatsLoad(t *testing.T) {
 	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true)
 	view := model.View().Content
 
-	if !strings.Contains(view, defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("--")) {
+	if !strings.Contains(view, defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("--   (streak --, best --)")) {
 		t.Fatalf("expected daily placeholder before stats load, got %q", view)
 	}
-	if !strings.Contains(view, defaultTextStyle.Render("• hourly ")+statsValueTextStyle.Render("--")) {
+	if !strings.Contains(view, defaultTextStyle.Render("• hourly ")+statsValueTextStyle.Render("--   (streak --, best --)")) {
 		t.Fatalf("expected hourly placeholder before stats load, got %q", view)
 	}
-	if !strings.Contains(view, defaultTextStyle.Render("• streak ")+statsValueTextStyle.Render("--")) {
-		t.Fatalf("expected streak placeholder before stats load, got %q", view)
+	if strings.Contains(view, defaultTextStyle.Render("• streak ")) {
+		t.Fatalf("did not expect standalone streak placeholder before stats load, got %q", view)
 	}
 	if strings.Contains(view, statsValueTextStyle.Render("0/30d")) {
 		t.Fatalf("did not expect loaded active summary before stats load, got %q", view)
@@ -1023,6 +1130,7 @@ func TestRenderOverviewLines_GroupsPostMetricsIntoSections(t *testing.T) {
 		TotalSubtasks:           11,
 		TotalToolCalls:          42,
 		TotalSkillCalls:         7,
+		UniqueProjectCount:      2,
 		UniqueAgentCount:        3,
 		UniqueSkillCount:        2,
 		UniqueToolCount:         9,
@@ -1030,6 +1138,7 @@ func TestRenderOverviewLines_GroupsPostMetricsIntoSections(t *testing.T) {
 		MostEfficientDay:        stats.Day{Date: time.Now().AddDate(0, 0, -3), Cost: 0.42, Tokens: 25000},
 		Days:                    make([]stats.Day, 30),
 	}
+	report.TopProjects = []stats.UsageCount{{Name: "/tmp/work-a", Amount: 280000}, {Name: "/tmp/work-b", Amount: 140000}}
 	setRankedUsageField(&report, "TopTools", []usageFixture{{"bash", 21}, {"read", 11}, {"edit", 8}, {"grep", 6}, {"write", 4}, {"glob", 2}})
 	setRankedUsageField(&report, "TopSkills", []usageFixture{{"writing-plans", 5}, {"test-driven-development", 2}})
 	setRankedUsageField(&report, "TopAgents", []usageFixture{{"explore", 7}, {"oracle", 3}, {"planner", 2}, {"review", 2}, {"debug", 1}, {"legacy", 1}})
@@ -1049,7 +1158,7 @@ func TestRenderOverviewLines_GroupsPostMetricsIntoSections(t *testing.T) {
 	content := strings.Join(model.renderOverviewLines(), "\n")
 	plainContent := stripANSI(content)
 
-	for _, section := range []string{"Trends", "Activity - Models (0)", "Activity - Agents (3)", "Activity - Skills (2)", "Activity - Tools (9)"} {
+	for _, section := range []string{"Trends", "Activity - Models (0)", "Activity - Projects (2)", "Activity - Agents (3)", "Activity - Skills (2)", "Activity - Tools (9)"} {
 		if !strings.Contains(plainContent, section) {
 			t.Fatalf("expected %s section in overview, got %q", section, plainContent)
 		}
@@ -1072,7 +1181,7 @@ func TestRenderOverviewLines_GroupsPostMetricsIntoSections(t *testing.T) {
 			t.Fatalf("expected activity summary snippet %q to be removed, got %q", snippet, content)
 		}
 	}
-	for _, snippet := range []string{"bash", "read", "write", "explore", "oracle", "debug", "writing-plans", "test-driven-development", "Total", "100%", "50%", "64%"} {
+	for _, snippet := range []string{"/tmp/work-a", "/tmp/work-b", "bash", "read", "write", "explore", "oracle", "debug", "writing-plans", "test-driven-development", "Total", "100%", "50%", "64%"} {
 		if !strings.Contains(plainContent, snippet) {
 			t.Fatalf("expected ranked activity snippet %q, got %q", snippet, plainContent)
 		}
@@ -1260,19 +1369,22 @@ func TestRenderOverviewLines_IncludesModelActivitySection(t *testing.T) {
 
 func TestRenderOverviewLines_OrdersActivitySectionsAsRequested(t *testing.T) {
 	report := stats.Report{
-		UniqueModelCount: 1,
-		UniqueAgentCount: 1,
-		UniqueSkillCount: 1,
-		UniqueToolCount:  1,
-		TotalModelTokens: 100,
-		TotalSubtasks:    2,
-		TotalSkillCalls:  3,
-		TotalToolCalls:   4,
-		TopModels:        []stats.UsageCount{{Name: "[OpenAI] gpt-5.4", Amount: 100}},
-		TopAgents:        []stats.UsageCount{{Name: "explore", Count: 2}},
-		TopSkills:        []stats.UsageCount{{Name: "writing-plans", Count: 3}},
-		TopTools:         []stats.UsageCount{{Name: "bash", Count: 4}},
-		Days:             make([]stats.Day, 30),
+		UniqueModelCount:   1,
+		UniqueProjectCount: 1,
+		UniqueAgentCount:   1,
+		UniqueSkillCount:   1,
+		UniqueToolCount:    1,
+		TotalModelTokens:   100,
+		ThirtyDayTokens:    100,
+		TotalSubtasks:      2,
+		TotalSkillCalls:    3,
+		TotalToolCalls:     4,
+		TopModels:          []stats.UsageCount{{Name: "[OpenAI] gpt-5.4", Amount: 100}},
+		TopProjects:        []stats.UsageCount{{Name: "/tmp/work", Amount: 100}},
+		TopAgents:          []stats.UsageCount{{Name: "explore", Count: 2}},
+		TopSkills:          []stats.UsageCount{{Name: "writing-plans", Count: 3}},
+		TopTools:           []stats.UsageCount{{Name: "bash", Count: 4}},
+		Days:               make([]stats.Day, 30),
 	}
 	for i := range report.Days {
 		report.Days[i] = stats.Day{Date: time.Now().AddDate(0, 0, -(29 - i)), Tokens: 100}
@@ -1283,6 +1395,7 @@ func TestRenderOverviewLines_OrdersActivitySectionsAsRequested(t *testing.T) {
 
 	positions := []int{
 		strings.Index(content, renderSubSectionHeader("Activity - Models (1)", habitSectionTitleStyle)),
+		strings.Index(content, renderSubSectionHeader("Activity - Projects (1)", habitSectionTitleStyle)),
 		strings.Index(content, renderSubSectionHeader("Activity - Agents (1)", habitSectionTitleStyle)),
 		strings.Index(content, renderSubSectionHeader("Activity - Skills (1)", habitSectionTitleStyle)),
 		strings.Index(content, renderSubSectionHeader("Activity - Tools (1)", habitSectionTitleStyle)),
@@ -1292,13 +1405,32 @@ func TestRenderOverviewLines_OrdersActivitySectionsAsRequested(t *testing.T) {
 			t.Fatalf("expected activity section %d in %q", i, content)
 		}
 	}
-	if !(positions[0] < positions[1] && positions[1] < positions[2] && positions[2] < positions[3]) {
-		t.Fatalf("expected activity order models -> agents -> skills -> tools, got %q", content)
+	if !(positions[0] < positions[1] && positions[1] < positions[2] && positions[2] < positions[3] && positions[3] < positions[4]) {
+		t.Fatalf("expected activity order models -> projects -> agents -> skills -> tools, got %q", content)
+	}
+}
+
+func TestRenderOverviewLines_HidesProjectActivityInProjectScope(t *testing.T) {
+	report := stats.Report{
+		UniqueProjectCount: 1,
+		TopProjects:        []stats.UsageCount{{Name: "/tmp/work", Amount: 100}},
+		ThirtyDayTokens:    100,
+		Days:               make([]stats.Day, 30),
+	}
+	for i := range report.Days {
+		report.Days[i] = stats.Day{Date: time.Now().AddDate(0, 0, -(29 - i)), Tokens: 100}
+	}
+
+	model := NewModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{DefaultScope: "project"}, testVersion, true)
+	content := strings.Join(model.renderOverviewLines(), "\n")
+
+	if strings.Contains(stripANSI(content), "Activity - Projects") {
+		t.Fatalf("expected project activity section to stay hidden in project scope, got %q", content)
 	}
 }
 
 func TestRenderUsageLines_AlignsBarsToLongestLabel(t *testing.T) {
-	lines := renderUsageLines("count", []stats.UsageCount{
+	lines := (Model{}).renderUsageLines("count", []stats.UsageCount{
 		{Name: "bash", Count: 21},
 		{Name: "very-long-tool-name", Count: 11},
 		{Name: "go", Count: 8},
@@ -1334,7 +1466,7 @@ func TestRenderUsageLines_GroupsRemainderIntoOthersAfterTop15(t *testing.T) {
 		total += int64(count)
 	}
 
-	lines := renderUsageLines("count", items, total)
+	lines := (Model{}).renderUsageLines("count", items, total)
 
 	if len(lines) != 20 {
 		t.Fatalf("expected 20 usage lines including header/dividers/others/total, got %d", len(lines))
@@ -1360,7 +1492,7 @@ func TestRenderUsageLines_AlignsOthersAndTotalToLongestLabel(t *testing.T) {
 		items = append(items, stats.UsageCount{Name: fmt.Sprintf("t%d", i+1), Count: 20 - i})
 	}
 
-	lines := renderUsageLines("count", items, 200)
+	lines := (Model{}).renderUsageLines("count", items, 200)
 	if len(lines) < 3 {
 		t.Fatalf("expected usage lines, got %v", lines)
 	}
@@ -1380,7 +1512,7 @@ func TestRenderUsageLines_AlignsOthersAndTotalToLongestLabel(t *testing.T) {
 }
 
 func TestRenderUsageLines_GroupsLargeCounts(t *testing.T) {
-	lines := renderUsageLines("count", []stats.UsageCount{{Name: "bash", Count: 12345}}, 23456)
+	lines := (Model{}).renderUsageLines("count", []stats.UsageCount{{Name: "bash", Count: 12345}}, 23456)
 
 	if len(lines) != 5 {
 		t.Fatalf("expected 5 usage lines, got %d", len(lines))
@@ -1407,7 +1539,7 @@ func TestRenderUsageLines_GroupsLargeCounts(t *testing.T) {
 }
 
 func TestRenderUsageLines_ShowsPlaceholderOnlyWhenTotalIsZero(t *testing.T) {
-	lines := renderUsageLines("count", nil, 0)
+	lines := (Model{}).renderUsageLines("count", nil, 0)
 
 	if len(lines) != 3 {
 		t.Fatalf("expected 3 usage lines, got %d", len(lines))
@@ -1421,7 +1553,7 @@ func TestRenderUsageLines_ShowsPlaceholderOnlyWhenTotalIsZero(t *testing.T) {
 }
 
 func TestRenderUsageLines_ShowsTotalWhenItemsMissingButTotalExists(t *testing.T) {
-	lines := renderUsageLines("count", nil, 42)
+	lines := (Model{}).renderUsageLines("count", nil, 42)
 	plain := stripANSI(strings.Join(lines, "\n"))
 
 	if !strings.Contains(plain, "top 15") {
@@ -1436,7 +1568,7 @@ func TestRenderUsageLines_ShowsTotalWhenItemsMissingButTotalExists(t *testing.T)
 }
 
 func TestRenderUsageLines_FormatsModelAmountsCompactly(t *testing.T) {
-	lines := renderUsageLines("tokens", []stats.UsageCount{{Name: "[OpenAI] gpt-5.4", Amount: 1_250_000}}, 1_500_000)
+	lines := (Model{}).renderUsageLines("tokens", []stats.UsageCount{{Name: "[OpenAI] gpt-5.4", Amount: 1_250_000}}, 1_500_000)
 
 	if len(lines) != 5 {
 		t.Fatalf("expected 5 usage lines, got %d", len(lines))
@@ -1573,11 +1705,11 @@ func TestRenderStatsTabs_ShowsUnderlineStyleTabsWithMetadata(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("expected two-line tab render with underline row, got %d in %q", len(lines), rendered)
 	}
-	if got := lipgloss.Width(lines[0]); got != statsTabRowWidth {
-		t.Fatalf("expected first tab row width %d, got %d in %q", statsTabRowWidth, got, lines[0])
+	if got := lipgloss.Width(lines[0]); got != maxLayoutWidth {
+		t.Fatalf("expected first tab row width %d, got %d in %q", maxLayoutWidth, got, lines[0])
 	}
-	if got := lipgloss.Width(lines[1]); got != statsTabRowWidth {
-		t.Fatalf("expected underline row width %d, got %d in %q", statsTabRowWidth, got, lines[1])
+	if got := lipgloss.Width(lines[1]); got != maxLayoutWidth {
+		t.Fatalf("expected underline row width %d, got %d in %q", maxLayoutWidth, got, lines[1])
 	}
 	for _, snippet := range []string{"Overview", "Daily", "Monthly", "Global", "2026-03-01~2026-03-30"} {
 		if !strings.Contains(rendered, snippet) {
@@ -1666,7 +1798,7 @@ func TestUpdate_GTogglesProjectScopeAndHeaders(t *testing.T) {
 		t.Fatal("expected project scope after g toggle")
 	}
 	view := model.View().Content
-	if !strings.Contains(view, "[Project] Rhythm") || !strings.Contains(view, "[Project] Metrics") {
+	if !strings.Contains(view, "[Project] My Pulse") || !strings.Contains(view, "[Project] Metrics") {
 		t.Fatalf("expected project-prefixed headers, got %q", view)
 	}
 	updated, _ = model.Update(mockKeyMsg("g"))
@@ -1688,28 +1820,15 @@ func TestNewModel_UsesConfiguredDefaultProjectScope(t *testing.T) {
 		t.Fatal("expected project scope from config default")
 	}
 	view := model.View().Content
-	if !strings.Contains(view, "[Project] Rhythm") || !strings.Contains(view, "[Project] Metrics") {
+	if !strings.Contains(view, "[Project] My Pulse") || !strings.Contains(view, "[Project] Metrics") {
 		t.Fatalf("expected project-prefixed headers from default scope, got %q", view)
 	}
 }
 
 func TestUpdate_StatsViewScrollsWithUpDown(t *testing.T) {
-	report := stats.Report{}
-	daily := stats.WindowReport{Label: "Daily"}
-	for i := 0; i < 20; i++ {
-		daily.TopSessions = append(daily.TopSessions, stats.SessionUsage{ID: fmt.Sprintf("ses_%02d", i), Title: fmt.Sprintf("Title %02d", i), Messages: i + 1})
-	}
-	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{}, testVersion, true)
-	model.globalDaily = daily
-	model.globalDailyLoaded = true
-	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 12})
-	model = updated.(Model)
-	updated, _ = model.Update(mockKeyMsg("tab"))
-	model = updated.(Model)
-	updated, _ = model.Update(mockKeyMsg("right"))
-	model = updated.(Model)
+	model := openDailyStatsViewWithHeight(t, 12, 20)
 	before := model.View().Content
-	updated, _ = model.Update(mockKeyMsg("down"))
+	updated, _ := model.Update(mockKeyMsg("down"))
 	model = updated.(Model)
 	after := model.View().Content
 	if before == after {
@@ -1717,6 +1836,64 @@ func TestUpdate_StatsViewScrollsWithUpDown(t *testing.T) {
 	}
 	if model.statsOffset == 0 {
 		t.Fatalf("expected statsOffset to increase after scrolling, got %d", model.statsOffset)
+	}
+}
+
+func TestUpdate_StatsViewPageNavigationKeys(t *testing.T) {
+	model := openDailyStatsViewWithHeight(t, 12, 24)
+
+	updated, _ := model.Update(mockKeyMsg("pgdown"))
+	model = updated.(Model)
+	expectedStep := pageStep(model.availableStatsRows())
+	maxOffset := len(model.statsContentLines()) - model.availableStatsRows()
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if expectedStep > maxOffset {
+		expectedStep = maxOffset
+	}
+	if model.statsOffset != expectedStep {
+		t.Fatalf("expected pgdown to move to offset %d, got %d", expectedStep, model.statsOffset)
+	}
+
+	updated, _ = model.Update(mockKeyMsg("end"))
+	model = updated.(Model)
+	maxOffset = len(model.statsContentLines()) - model.availableStatsRows()
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if model.statsOffset != maxOffset {
+		t.Fatalf("expected end to jump to bottom offset %d, got %d", maxOffset, model.statsOffset)
+	}
+
+	updated, _ = model.Update(mockKeyMsg("home"))
+	model = updated.(Model)
+	if model.statsOffset != 0 {
+		t.Fatalf("expected home to reset offset, got %d", model.statsOffset)
+	}
+
+	updated, _ = model.Update(mockKeyMsg("ctrl+d"))
+	model = updated.(Model)
+	if model.statsOffset == 0 {
+		t.Fatalf("expected ctrl+d to move down from top, got offset %d", model.statsOffset)
+	}
+
+	updated, _ = model.Update(mockKeyMsg("home"))
+	model = updated.(Model)
+	if model.statsOffset != 0 {
+		t.Fatalf("expected home to reset offset after ctrl+d, got %d", model.statsOffset)
+	}
+
+	updated, _ = model.Update(mockKeyMsg("pgup"))
+	model = updated.(Model)
+	if model.statsOffset != 0 {
+		t.Fatalf("expected pgup at top to stay clamped, got %d", model.statsOffset)
+	}
+
+	updated, _ = model.Update(mockKeyMsg("ctrl+u"))
+	model = updated.(Model)
+	if model.statsOffset != 0 {
+		t.Fatalf("expected ctrl+u at top to stay clamped, got %d", model.statsOffset)
 	}
 }
 
@@ -1790,24 +1967,112 @@ func TestView_AnalyticsMinimapAdaptsToNarrowWidths(t *testing.T) {
 	narrowView := updated.(Model).View().Content
 	updated, _ = model.Update(tea.WindowSizeMsg{Width: 35, Height: 30})
 	tinyView := updated.(Model).View().Content
+	widePlain := stripANSI(wideView)
+	narrowPlain := stripANSI(narrowView)
+	tinyPlain := stripANSI(tinyView)
 
-	if !strings.Contains(wideView, defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("0/30d")) {
+	if !strings.Contains(widePlain, "• daily  0/30d  (streak 0d)") {
 		t.Fatalf("expected daily label in wide view, got %q", wideView)
 	}
 	if strings.Count(wideView, "█")+strings.Count(wideView, "▓")+strings.Count(wideView, "░")+strings.Count(wideView, "·") < 28 {
 		t.Fatalf("expected 4-week minimap density in wide view, got %q", wideView)
 	}
-	if !strings.Contains(narrowView, defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("0/30d")) {
+	if !strings.Contains(narrowPlain, "• daily  0/30d  (streak 0d)") {
 		t.Fatalf("expected daily label in narrow view, got %q", narrowView)
 	}
-	if !strings.Contains(tinyView, defaultTextStyle.Render("    ")+defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("0/30d")) {
+	if !strings.Contains(tinyPlain, "• daily  0/30d  (streak 0d)") {
 		t.Fatalf("expected daily label to remain in tiny view, got %q", tinyView)
+	}
+	if strings.Contains(narrowView, "·") || strings.Contains(narrowView, "░") || strings.Contains(narrowView, "▓") || strings.Contains(narrowView, "█") {
+		t.Fatalf("expected minimap cells hidden in narrow view when inline summaries take priority, got %q", narrowView)
 	}
 	if strings.Contains(tinyView, "·") || strings.Contains(tinyView, "░") || strings.Contains(tinyView, "▓") || strings.Contains(tinyView, "█") {
 		t.Fatalf("expected minimap cells hidden in tiny view, got %q", tinyView)
 	}
-	if !strings.Contains(tinyView, "streak") || !strings.Contains(tinyView, "cost") {
+	if !strings.Contains(tinyPlain, "streak") || !strings.Contains(tinyPlain, "cost") {
 		t.Fatalf("expected core metrics to remain in tiny view, got %q", tinyView)
+	}
+}
+
+func TestView_AnalyticsMinimapHidesWhenRenderedWidthWouldOverflow(t *testing.T) {
+	now := time.Now()
+	report := stats.Report{Days: make([]stats.Day, 30)}
+	for i := range report.Days {
+		report.Days[i] = stats.Day{Date: now.AddDate(0, 0, -(29 - i)), Tokens: 1000}
+	}
+	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{}, testVersion, true)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 70, Height: 30})
+	view := updated.(Model).View().Content
+
+	if strings.Contains(view, "·") || strings.Contains(view, "░") || strings.Contains(view, "▓") || strings.Contains(view, "█") {
+		t.Fatalf("expected minimap hidden when visible width is insufficient, got %q", view)
+	}
+}
+
+func TestView_ClampsPluginRowsToNarrowWidth(t *testing.T) {
+	model := NewModel([]PluginItem{{Name: "plugin-with-a-very-long-name-that-should-not-overflow-the-terminal-width", SourceLabel: "User, Project"}}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 35, Height: 20})
+	view := updated.(Model).View().Content
+
+	if got := maxRenderedLineWidth(view); got > 35 {
+		t.Fatalf("expected plugin view width <= 35, got %d in %q", got, stripANSI(view))
+	}
+	if !strings.Contains(stripANSI(view), "plugin-with") {
+		t.Fatalf("expected plugin row to retain visible content, got %q", stripANSI(view))
+	}
+}
+
+func TestView_ClampsSessionRowsToNarrowWidth(t *testing.T) {
+	session := SessionItem{ID: "ses_abcdefghijklmnopqrstuvwxyz", Title: "A very long session title that should be truncated on narrow terminals", UpdatedAt: time.Now()}
+	model := newTestModelWithSession([]PluginItem{{Name: "plugin-a"}}, nil, []SessionItem{session}, session, true)
+	updated, _ := model.Update(mockKeyMsg("s"))
+	updated, _ = updated.(Model).Update(tea.WindowSizeMsg{Width: 35, Height: 12})
+	view := updated.(Model).View().Content
+
+	if got := maxRenderedLineWidth(view); got > 35 {
+		t.Fatalf("expected session view width <= 35, got %d in %q", got, stripANSI(view))
+	}
+	if !strings.Contains(stripANSI(view), "ses_") {
+		t.Fatalf("expected session row to retain session id content, got %q", stripANSI(view))
+	}
+}
+
+func TestRenderWindowLines_UsesCompactLayoutOnNarrowWidth(t *testing.T) {
+	report := stats.WindowReport{
+		Label:       "Daily",
+		Start:       time.Date(2026, time.March, 28, 0, 0, 0, 0, time.Local),
+		End:         time.Date(2026, time.March, 29, 0, 0, 0, 0, time.Local),
+		Messages:    12345,
+		Sessions:    2345,
+		Tokens:      987654,
+		Cost:        1234.56,
+		Models:      []stats.ModelUsage{{Model: "gpt-5.4-with-a-long-name", TotalTokens: 123456, Cost: 12.34}},
+		TopSessions: []stats.SessionUsage{{ID: "ses_abcdefghijklmnopqrstuvwxyz", Title: "Very long session title", Messages: 123, Tokens: 456789, Cost: 45.67}},
+	}
+	model := NewModel(nil, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true)
+	model.width = 35
+	content := strings.Join(model.renderWindowLines(report), "\n")
+
+	if got := maxRenderedLineWidth(content); got > 35 {
+		t.Fatalf("expected compact window lines width <= 35, got %d in %q", got, stripANSI(content))
+	}
+	if strings.Contains(content, "| Window") {
+		t.Fatalf("expected narrow window view to avoid wide tables, got %q", stripANSI(content))
+	}
+	for _, snippet := range []string{"messages 12,345", "sessions 2,345", "tokens 988k", "cost $1,234.56"} {
+		if !strings.Contains(stripANSI(content), snippet) {
+			t.Fatalf("expected compact summary snippet %q, got %q", snippet, stripANSI(content))
+		}
+	}
+}
+
+func TestAvailableStatsRows_UsesCollapsedStatsChromeOnNarrowWidth(t *testing.T) {
+	model := newTestModel([]PluginItem{{Name: "plugin-a"}}, nil, true)
+	model.height = 12
+	model.width = 35
+
+	if got := model.availableStatsRows(); got != 6 {
+		t.Fatalf("expected 6 visible rows with collapsed narrow stats chrome, got %d", got)
 	}
 }
 
@@ -2114,7 +2379,7 @@ func TestRender24hSparkline_WidthAdaptation(t *testing.T) {
 		desc    string
 	}{
 		{80, 24, "wide: 24 hourly slots"},
-		{50, 24, "medium: 24 hourly slots"},
+		{50, 0, "medium: hidden when inline summary takes width"},
 		{30, 0, "narrow: hidden"},
 	}
 	for _, tt := range tests {
@@ -2153,6 +2418,8 @@ func TestView_RendersRhythmWithSparkline(t *testing.T) {
 		ActiveDays:               15,
 		CurrentStreak:            5,
 		BestStreak:               5,
+		CurrentHourlyStreakSlots: 3,
+		BestHourlyStreakSlots:    5,
 		Rolling24hSlots:          slots,
 		Rolling24hSessionMinutes: 90,
 	}
@@ -2170,5 +2437,8 @@ func TestView_RendersRhythmWithSparkline(t *testing.T) {
 	}
 	if !strings.Contains(view, "1.5/24h") {
 		t.Error("view should contain rolling 24h session ratio '1.5/24h'")
+	}
+	if !strings.Contains(view, "(streak 1.5h, best 2.5h)") {
+		t.Errorf("view should contain inline hourly streak summary, got %q", view)
 	}
 }

@@ -101,8 +101,14 @@ type windowReportLoadedMsg struct {
 }
 
 const sessionChromeHeight = 6
-const statsChromeHeight = 7
 const statsViewTTL = 5 * time.Minute
+
+type scrollTarget int
+
+const (
+	scrollTargetTop scrollTarget = iota
+	scrollTargetBottom
+)
 
 var (
 	defaultTextStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#7A7A7A"))
@@ -130,9 +136,12 @@ var (
 )
 
 func (m Model) renderTopBadge() string {
-	targetWidth := 80
+	targetWidth := m.layoutWidth()
 	label := sessionLabelStyle.Render("OC")
 	version := sessionContentStyle.Render(sessionValueStyle.Render(m.version))
+	if m.isNarrowLayout() {
+		return sessionContainerStyle.Render(lipgloss.JoinHorizontal(lipgloss.Top, label, version))
+	}
 	metaWidth := max(0, targetWidth-lipgloss.Width(label)-lipgloss.Width(version))
 	metaText := selectedSessionSummary(m.session, max(0, metaWidth-2))
 	return sessionContainerStyle.Render(lipgloss.JoinHorizontal(
@@ -148,8 +157,7 @@ var (
 	instructionBarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#60C5F1"))
 )
 
-func renderSectionHeader(text string) string {
-	const targetWidth = 80
+func renderSectionHeader(text string, targetWidth int) string {
 	bar := instructionBarStyle.Render("┃")
 	barWidth := lipgloss.Width(bar)
 	return bar + instructionTitleStyle.Width(max(0, targetWidth-barWidth)).Render(text)
@@ -206,8 +214,7 @@ func stylePluginRow(line string, focused bool, selected bool) string {
 	}
 }
 
-func renderHelpBlock(lines []string) string {
-	const targetWidth = 80
+func renderHelpBlock(lines []string, targetWidth int) string {
 	bar := helpBarStyle.Render("┃")
 	barWidth := lipgloss.Width(bar)
 	contentWidth := max(0, targetWidth-barWidth)
@@ -222,29 +229,31 @@ func helpEntry(key string, action string) string {
 	return helpBgKeyStyle.Render(key) + helpBgTextStyle.Render(": "+action)
 }
 
-func renderHelpLine() string {
+func renderHelpLine(targetWidth int) string {
 	return renderHelpBlock([]string{
 		helpBgTextStyle.Render("💡 ") + helpEntry("↑/↓", "navigate") + helpBgTextStyle.Render(" • ") + helpEntry("space", "toggle") + helpBgTextStyle.Render(" • ") + helpEntry("enter", "confirm") + helpBgTextStyle.Render(" • ") + helpEntry("q", "quit"),
 		helpBgTextStyle.Render("   ") + helpEntry("tab", "stats") + helpBgTextStyle.Render(" • ") + helpEntry("g", "scope") + helpBgTextStyle.Render(" • ") + helpEntry("s", "sessions") + helpBgTextStyle.Render(" • ") + helpEntry("c", "config"),
-	})
+	}, targetWidth)
 }
 
-func renderStatsHelpLine() string {
+func renderStatsHelpLine(targetWidth int) string {
 	return renderHelpBlock([]string{
-		helpBgTextStyle.Render("💡 ") + helpEntry("↑/↓", "scroll") + helpBgTextStyle.Render(" • ") + helpEntry("tab", "launcher") + helpBgTextStyle.Render(" • ") + helpEntry("g", "scope") + helpBgTextStyle.Render(" • ") + helpEntry("←/→", "tabs") + helpBgTextStyle.Render(" • ") + helpEntry("esc", "back"),
-	})
+		helpBgTextStyle.Render("💡 ") + helpEntry("↑/↓", "scroll") + helpBgTextStyle.Render(" • ") + helpEntry("PgUp/PgDn", "page") + helpBgTextStyle.Render(" • ") + helpEntry("Ctrl+U/D", "half") + helpBgTextStyle.Render(" • ") + helpEntry("Home/End", "top/bottom"),
+		helpBgTextStyle.Render("   ") + helpEntry("tab", "launcher") + helpBgTextStyle.Render(" • ") + helpEntry("g", "scope") + helpBgTextStyle.Render(" • ") + helpEntry("←/→", "tabs") + helpBgTextStyle.Render(" • ") + helpEntry("esc", "back"),
+	}, targetWidth)
 }
 
-func renderEditHelpLine() string {
+func renderEditHelpLine(targetWidth int) string {
 	return renderHelpBlock([]string{
 		helpBgTextStyle.Render("💡 ") + helpEntry("↑/↓", "navigate") + helpBgTextStyle.Render(" • ") + helpEntry("enter", "edit") + helpBgTextStyle.Render(" • ") + helpEntry("esc", "back"),
-	})
+	}, targetWidth)
 }
 
-func renderSessionHelpLine() string {
+func renderSessionHelpLine(targetWidth int) string {
 	return renderHelpBlock([]string{
-		helpBgTextStyle.Render("💡 ") + helpEntry("↑/↓", "navigate") + helpBgTextStyle.Render(" • ") + helpEntry("enter", "select") + helpBgTextStyle.Render(" • ") + helpEntry("esc", "back"),
-	})
+		helpBgTextStyle.Render("💡 ") + helpEntry("↑/↓", "navigate") + helpBgTextStyle.Render(" • ") + helpEntry("PgUp/PgDn", "page") + helpBgTextStyle.Render(" • ") + helpEntry("Ctrl+U/D", "half") + helpBgTextStyle.Render(" • ") + helpEntry("Home/End", "top/bottom"),
+		helpBgTextStyle.Render("   ") + helpEntry("enter", "select") + helpBgTextStyle.Render(" • ") + helpEntry("esc", "back"),
+	}, targetWidth)
 }
 
 func sessionTimestampPrefix(updatedAt time.Time, now time.Time) string {
@@ -309,6 +318,65 @@ func (m Model) availableSessionRows() int {
 	}
 
 	return rows
+}
+
+func pageStep(visibleRows int) int {
+	if visibleRows <= 0 {
+		return 1
+	}
+	return visibleRows
+}
+
+func halfPageStep(visibleRows int) int {
+	step := visibleRows / 2
+	if step < 1 {
+		return 1
+	}
+	return step
+}
+
+func clampCursor(cursor int, total int) int {
+	if total <= 0 {
+		return 0
+	}
+	if cursor < 0 {
+		return 0
+	}
+	if cursor >= total {
+		return total - 1
+	}
+	return cursor
+}
+
+func scrollBy(offset int, delta int, total int, visibleRows int) int {
+	if total <= 0 {
+		return 0
+	}
+	if visibleRows <= 0 || visibleRows >= total {
+		return 0
+	}
+	maxOffset := total - visibleRows
+	offset += delta
+	if offset < 0 {
+		return 0
+	}
+	if offset > maxOffset {
+		return maxOffset
+	}
+	return offset
+}
+
+func jumpTarget(target scrollTarget, total int, visibleRows int) int {
+	if total <= 0 {
+		return 0
+	}
+	if target == scrollTargetTop {
+		return 0
+	}
+	if visibleRows <= 0 || visibleRows >= total {
+		return 0
+	}
+	return total - visibleRows
 }
 
 func (m *Model) ensureSessionCursorVisible() {
@@ -382,11 +450,18 @@ func (m Model) availableStatsRows() int {
 	if m.height <= 0 {
 		return 1000
 	}
-	rows := m.height - statsChromeHeight
+	rows := m.height - m.statsChromeHeight()
 	if rows < 0 {
 		return 0
 	}
 	return rows
+}
+
+func (m Model) statsChromeHeight() int {
+	if m.isNarrowLayout() {
+		return 6
+	}
+	return 7
 }
 
 func (m Model) visibleStatsRange(total int) (int, int) {
@@ -430,6 +505,41 @@ func (m *Model) scrollStats(delta int, total int) {
 	if m.statsOffset > maxOffset {
 		m.statsOffset = maxOffset
 	}
+}
+
+func (m *Model) moveSessionCursor(delta int) {
+	m.sessionCursor = clampCursor(m.sessionCursor+delta, len(m.sessions)+1)
+	m.ensureSessionCursorVisible()
+}
+
+func (m *Model) pageSession(delta int) {
+	m.moveSessionCursor(delta * pageStep(m.availableSessionRows()))
+}
+
+func (m *Model) halfPageSession(delta int) {
+	m.moveSessionCursor(delta * halfPageStep(m.availableSessionRows()))
+}
+
+func (m *Model) jumpSessionTo(target scrollTarget) {
+	total := len(m.sessions) + 1
+	if target == scrollTargetTop {
+		m.sessionCursor = 0
+	} else {
+		m.sessionCursor = total - 1
+	}
+	m.ensureSessionCursorVisible()
+}
+
+func (m *Model) pageStats(delta int, total int) {
+	m.scrollStats(delta*pageStep(m.availableStatsRows()), total)
+}
+
+func (m *Model) halfPageStats(delta int, total int) {
+	m.scrollStats(delta*halfPageStep(m.availableStatsRows()), total)
+}
+
+func (m *Model) jumpStatsTo(target scrollTarget, total int) {
+	m.statsOffset = jumpTarget(target, total, m.availableStatsRows())
 }
 
 // NewModel creates a new TUI model with the given plugin items
@@ -685,10 +795,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.sessionMode {
-				if m.sessionCursor > 0 {
-					m.sessionCursor--
-				}
-				m.ensureSessionCursorVisible()
+				m.moveSessionCursor(-1)
 			} else if m.editMode {
 				if m.editCursor > 0 {
 					m.editCursor--
@@ -702,16 +809,67 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.sessionMode {
-				if m.sessionCursor < len(m.sessions) {
-					m.sessionCursor++
-				}
-				m.ensureSessionCursorVisible()
+				m.moveSessionCursor(1)
 			} else if m.editMode {
 				if m.editCursor < len(m.editChoices)-1 {
 					m.editCursor++
 				}
 			} else if m.cursor < len(m.plugins)-1 {
 				m.cursor++
+			}
+		case "pgup":
+			if m.statsMode {
+				m.pageStats(-1, len(m.statsContentLines()))
+				return m, nil
+			}
+			if m.sessionMode {
+				m.pageSession(-1)
+				return m, nil
+			}
+		case "pgdown":
+			if m.statsMode {
+				m.pageStats(1, len(m.statsContentLines()))
+				return m, nil
+			}
+			if m.sessionMode {
+				m.pageSession(1)
+				return m, nil
+			}
+		case "ctrl+u":
+			if m.statsMode {
+				m.halfPageStats(-1, len(m.statsContentLines()))
+				return m, nil
+			}
+			if m.sessionMode {
+				m.halfPageSession(-1)
+				return m, nil
+			}
+		case "ctrl+d":
+			if m.statsMode {
+				m.halfPageStats(1, len(m.statsContentLines()))
+				return m, nil
+			}
+			if m.sessionMode {
+				m.halfPageSession(1)
+				return m, nil
+			}
+		case "home":
+			if m.statsMode {
+				m.jumpStatsTo(scrollTargetTop, len(m.statsContentLines()))
+				return m, nil
+			}
+			if m.sessionMode {
+				m.jumpSessionTo(scrollTargetTop)
+				return m, nil
+			}
+		case "end":
+			if m.statsMode {
+				m.jumpStatsTo(scrollTargetBottom, len(m.statsContentLines()))
+				return m, nil
+			}
+			if m.sessionMode {
+				m.jumpSessionTo(scrollTargetBottom)
+				return m, nil
 			}
 		case " ", "space": // Space key toggles selection (v2 uses "space")
 			if !m.editMode && !m.sessionMode && !m.statsMode {
@@ -802,7 +960,7 @@ func (m Model) View() tea.View {
 	}
 
 	if m.editMode {
-		s := m.renderTopBadge() + "\n\n" + renderSectionHeader("📂 Choose config to edit") + "\n\n"
+		s := m.renderTopBadge() + "\n\n" + renderSectionHeader("📂 Choose config to edit", m.layoutWidth()) + "\n\n"
 
 		for i, choice := range m.editChoices {
 			cursor := "  "
@@ -811,19 +969,19 @@ func (m Model) View() tea.View {
 				cursor = "> "
 			}
 
-			line := fmt.Sprintf("%s%s", cursor, choice.Label)
+			line := truncateDisplayWidth(fmt.Sprintf("%s%s", cursor, choice.Label), m.layoutWidth())
 			line = stylePluginRow(line, focused, false)
 
 			s += line + "\n"
 		}
 
-		s += "\n" + renderEditHelpLine()
+		s += "\n" + renderEditHelpLine(m.layoutWidth())
 
 		return tea.NewView(s)
 	}
 
 	if m.sessionMode {
-		s := m.renderTopBadge() + "\n\n" + renderSectionHeader("🕘 Choose session") + "\n\n"
+		s := m.renderTopBadge() + "\n\n" + renderSectionHeader("🕘 Choose session", m.layoutWidth()) + "\n\n"
 		start, end := m.visibleSessionRange()
 
 		for i := start; i < end; i++ {
@@ -833,12 +991,17 @@ func (m Model) View() tea.View {
 				cursor = "> "
 			}
 
-			line := fmt.Sprintf("%s%s", cursor, sessionLine(m.sessionAt(i)))
+			rowText := "Start without session"
+			if item := m.sessionAt(i); item.ID != "" {
+				rowText = selectedSessionSummary(item, max(0, m.layoutWidth()-lipgloss.Width(cursor)))
+			}
+			line := fmt.Sprintf("%s%s", cursor, rowText)
+			line = truncateDisplayWidth(line, m.layoutWidth())
 			line = stylePluginRow(line, focused, m.sessionAt(i).ID == m.session.ID)
 			s += line + "\n"
 		}
 
-		s += "\n" + renderSessionHelpLine()
+		s += "\n" + renderSessionHelpLine(m.layoutWidth())
 
 		return tea.NewView(s)
 	}
@@ -847,7 +1010,7 @@ func (m Model) View() tea.View {
 		return tea.NewView(m.renderStatsView())
 	}
 
-	sections := []string{m.renderLauncherAnalytics(), renderSectionHeader("📋 Choose plugins")}
+	sections := []string{m.renderLauncherAnalytics(), renderSectionHeader("📋 Choose plugins", m.layoutWidth())}
 	s := m.renderTopBadge() + "\n\n" + strings.Join(filterNonEmpty(sections), "\n\n") + "\n\n"
 
 	for i, p := range m.plugins {
@@ -863,16 +1026,22 @@ func (m Model) View() tea.View {
 			checked = "✔  "
 		}
 
-		line := fmt.Sprintf("%s%s%s", cursor, checked, p.Name)
+		plainLine := fmt.Sprintf("%s%s%s", cursor, checked, p.Name)
+		line := truncateDisplayWidth(plainLine, m.layoutWidth())
 		if p.SourceLabel != "" {
-			line = line + " " + dimmedLabelStyle.Render("["+p.SourceLabel+"]")
+			plainWithLabel := plainLine + " [" + p.SourceLabel + "]"
+			if lipgloss.Width(plainWithLabel) <= m.layoutWidth() {
+				line = plainLine + " " + dimmedLabelStyle.Render("["+p.SourceLabel+"]")
+			} else {
+				line = truncateDisplayWidth(plainWithLabel, m.layoutWidth())
+			}
 		}
 		line = stylePluginRow(line, focused, selected)
 
 		s += line + "\n"
 	}
 
-	s += "\n" + renderHelpLine()
+	s += "\n" + renderHelpLine(m.layoutWidth())
 
 	return tea.NewView(s)
 }

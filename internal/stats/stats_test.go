@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -73,6 +74,12 @@ func TestLoadForDirAt_AggregatesGlobalStatsAndFiltersSynthetic(t *testing.T) {
 	}
 	if report.CurrentStreak != 3 {
 		t.Fatalf("expected current streak 3, got %d", report.CurrentStreak)
+	}
+	if report.CurrentHourlyStreakSlots != 1 {
+		t.Fatalf("expected current hourly streak 1 slot, got %d", report.CurrentHourlyStreakSlots)
+	}
+	if report.BestHourlyStreakSlots != 1 {
+		t.Fatalf("expected best hourly streak 1 slot, got %d", report.BestHourlyStreakSlots)
 	}
 	if report.TotalToolCalls != 6 {
 		t.Fatalf("expected 6 tool calls, got %d", report.TotalToolCalls)
@@ -446,6 +453,115 @@ func TestLoadForDirAt_BuildsTopModelUsage(t *testing.T) {
 	}
 	if !reflect.DeepEqual(topModels, expected) {
 		t.Fatalf("expected top models %v, got %v", expected, topModels)
+	}
+}
+
+func TestLoadGlobalAt_BuildsTopProjectUsage(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	projectA := filepath.Join(tmp, "work-a")
+	projectB := filepath.Join(tmp, "work-b")
+	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
+	insertSession(t, db, "ses_a1", projectA)
+	insertSession(t, db, "ses_a2", projectA)
+	insertSession(t, db, "ses_b1", projectB)
+
+	insertMessage(t, db, "msg_a1", "ses_a1", now, `{"role":"assistant"}`)
+	insertPart(t, db, "part_a1", "msg_a1", "ses_a1", now, `{"type":"step-finish","tokens":{"input":100,"output":50,"reasoning":25}}`)
+	insertMessage(t, db, "msg_a2", "ses_a2", now, `{"role":"assistant"}`)
+	insertPart(t, db, "part_a2", "msg_a2", "ses_a2", now, `{"type":"step-finish","tokens":{"input":80,"output":20,"reasoning":0}}`)
+	insertMessage(t, db, "msg_b1", "ses_b1", now, `{"role":"assistant"}`)
+	insertPart(t, db, "part_b1", "msg_b1", "ses_b1", now, `{"type":"step-finish","tokens":{"input":70,"output":20,"reasoning":10}}`)
+
+	insertMessage(t, db, "msg_compaction", "ses_b1", now, `{"role":"assistant","summary":true,"agent":"compaction"}`)
+	insertPart(t, db, "part_compaction", "msg_compaction", "ses_b1", now, `{"type":"step-finish","tokens":{"input":999,"output":999,"reasoning":999}}`)
+
+	t.Setenv("OPENCODE_DB", dbPath)
+	report, err := loadGlobalAt(now)
+	if err != nil {
+		t.Fatalf("loadGlobalAt returned error: %v", err)
+	}
+
+	if report.UniqueProjectCount != 2 {
+		t.Fatalf("expected 2 unique projects, got %d", report.UniqueProjectCount)
+	}
+	topProjects := rankedUsageMetricsFromReportField(t, report, "TopProjects")
+	expected := []usageMetric{{Name: normalizeProjectUsageKey(projectA), Amount: 275}, {Name: normalizeProjectUsageKey(projectB), Amount: 100}}
+	if !reflect.DeepEqual(topProjects, expected) {
+		t.Fatalf("expected top projects %v, got %v", expected, topProjects)
+	}
+}
+
+func TestLoadForDirAt_DoesNotAggregateTopProjectsInProjectScope(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := filepath.Join(tmp, "work")
+	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
+	insertSession(t, db, "ses_work", dir)
+	insertMessage(t, db, "msg_work", "ses_work", now, `{"role":"assistant"}`)
+	insertPart(t, db, "part_work", "msg_work", "ses_work", now, `{"type":"step-finish","tokens":{"input":10,"output":10,"reasoning":5}}`)
+
+	t.Setenv("OPENCODE_DB", dbPath)
+	report, err := loadForDirAt(dir, now)
+	if err != nil {
+		t.Fatalf("loadForDirAt returned error: %v", err)
+	}
+
+	if report.UniqueProjectCount != 0 {
+		t.Fatalf("expected no project aggregation in project scope, got %d", report.UniqueProjectCount)
+	}
+	if len(report.TopProjects) != 0 {
+		t.Fatalf("expected no top projects in project scope, got %v", report.TopProjects)
+	}
+}
+
+func TestNormalizeProjectUsageKey(t *testing.T) {
+	if got := normalizeProjectUsageKey("   "); got != "(unknown project)" {
+		t.Fatalf("expected unknown project label, got %q", got)
+	}
+
+	if runtime.GOOS == "windows" {
+		if got := normalizeProjectUsageKey(`C:/Work/App`); got != "c:/work/app" {
+			t.Fatalf("expected normalized windows project key, got %q", got)
+		}
+		if got := normalizeProjectUsageKey(`C:\\Work\\App`); got != "c:/work/app" {
+			t.Fatalf("expected slash-normalized windows project key, got %q", got)
+		}
+		return
+	}
+
+	if got := normalizeProjectUsageKey("/tmp/work/app/"); got != filepath.Clean("/tmp/work/app/") {
+		t.Fatalf("expected cleaned project key, got %q", got)
 	}
 }
 
@@ -1070,5 +1186,55 @@ func TestRolling24hSlotAssembly(t *testing.T) {
 	// Inactive slot should be 0
 	if report.Rolling24hSlots[0] != 0 {
 		t.Errorf("rolling slot 0 (inactive): got %d, want 0", report.Rolling24hSlots[0])
+	}
+}
+
+func TestHourlyStreakSlotsAcrossHalfHourWindows(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	_, err = db.Exec(`
+		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENCODE_DB", dbPath)
+
+	dir := filepath.Join(tmp, "work")
+	insertSession(t, db, "ses_work", dir)
+
+	insertMessage(t, db, "msg_a", "ses_work", time.Date(2026, time.March, 29, 8, 15, 0, 0, time.Local), `{"role":"assistant"}`)
+	insertPart(t, db, "step_a", "msg_a", "ses_work", time.Date(2026, time.March, 29, 8, 15, 0, 0, time.Local), `{"type":"step-finish","tokens":{"input":100,"output":100}}`)
+
+	insertMessage(t, db, "msg_b", "ses_work", time.Date(2026, time.March, 29, 8, 45, 0, 0, time.Local), `{"role":"assistant"}`)
+	insertPart(t, db, "step_b", "msg_b", "ses_work", time.Date(2026, time.March, 29, 8, 45, 0, 0, time.Local), `{"type":"step-finish","tokens":{"input":100,"output":100}}`)
+
+	insertMessage(t, db, "msg_c", "ses_work", time.Date(2026, time.March, 29, 9, 0, 0, 0, time.Local), `{"role":"assistant"}`)
+	insertPart(t, db, "step_c", "msg_c", "ses_work", time.Date(2026, time.March, 29, 9, 0, 0, 0, time.Local), `{"type":"step-finish","tokens":{"input":100,"output":100}}`)
+
+	insertMessage(t, db, "msg_d", "ses_work", time.Date(2026, time.March, 30, 10, 0, 0, 0, time.Local), `{"role":"assistant"}`)
+	insertPart(t, db, "step_d", "msg_d", "ses_work", time.Date(2026, time.March, 30, 10, 0, 0, 0, time.Local), `{"type":"step-finish","tokens":{"input":100,"output":100}}`)
+
+	insertMessage(t, db, "msg_e", "ses_work", time.Date(2026, time.March, 30, 10, 30, 0, 0, time.Local), `{"role":"assistant"}`)
+	insertPart(t, db, "step_e", "msg_e", "ses_work", time.Date(2026, time.March, 30, 10, 30, 0, 0, time.Local), `{"type":"step-finish","tokens":{"input":100,"output":100}}`)
+
+	now := time.Date(2026, time.March, 30, 12, 0, 0, 0, time.Local)
+	report, err := loadForDirAtWithOptions(dir, now, Options{SessionGapMinutes: 15})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if report.CurrentHourlyStreakSlots != 2 {
+		t.Fatalf("expected current hourly streak 2 slots, got %d", report.CurrentHourlyStreakSlots)
+	}
+	if report.BestHourlyStreakSlots != 3 {
+		t.Fatalf("expected best hourly streak 3 slots, got %d", report.BestHourlyStreakSlots)
 	}
 }
