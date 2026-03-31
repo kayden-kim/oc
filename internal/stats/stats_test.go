@@ -490,6 +490,9 @@ func TestLoadForDirAt_BuildsTopModelUsage(t *testing.T) {
 	if got := intFieldFromReport(t, report, "TotalModelTokens"); got != 4570 {
 		t.Fatalf("expected 4570 total model tokens, got %d", got)
 	}
+	if math.Abs(report.TotalModelCost-12.0) > 1e-9 {
+		t.Fatalf("expected 12.0 total model cost, got %.4f", report.TotalModelCost)
+	}
 	if got := intFieldFromReport(t, report, "UniqueModelCount"); got != 12 {
 		t.Fatalf("expected 12 unique models, got %d", got)
 	}
@@ -514,6 +517,96 @@ func TestLoadForDirAt_BuildsTopModelUsage(t *testing.T) {
 	}
 	if !reflect.DeepEqual(topModels, expected) {
 		t.Fatalf("expected top models %v, got %v", expected, topModels)
+	}
+	if math.Abs(report.TopModels[0].Cost-1.0) > 1e-9 {
+		t.Fatalf("expected top model cost 1.0, got %.4f", report.TopModels[0].Cost)
+	}
+	if math.Abs(report.TopModels[len(report.TopModels)-1].Cost-1.0) > 1e-9 {
+		t.Fatalf("expected trailing model cost 1.0, got %.4f", report.TopModels[len(report.TopModels)-1].Cost)
+	}
+}
+
+func TestLoadForDirAt_DoesNotDoubleCountModelCostWhenMessageCostExistsAcrossMultipleSteps(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := filepath.Join(tmp, "work")
+	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
+	insertSession(t, db, "ses_work", dir)
+	insertMessage(t, db, "msg_work", "ses_work", now, `{"role":"assistant","providerID":"openai","modelID":"gpt-5.4","cost":1.84}`)
+	insertPart(t, db, "part_work_1", "msg_work", "ses_work", now, `{"type":"step-finish","tokens":{"input":50,"output":25,"reasoning":5}}`)
+	insertPart(t, db, "part_work_2", "msg_work", "ses_work", now, `{"type":"step-finish","tokens":{"input":20,"output":10,"reasoning":0}}`)
+
+	t.Setenv("OPENCODE_DB", dbPath)
+	report, err := loadForDirAt(dir, now)
+	if err != nil {
+		t.Fatalf("loadForDirAt returned error: %v", err)
+	}
+
+	if math.Abs(report.TotalModelCost-1.84) > 1e-9 {
+		t.Fatalf("expected total model cost 1.84, got %.4f", report.TotalModelCost)
+	}
+	if len(report.TopModels) != 1 {
+		t.Fatalf("expected one top model, got %v", report.TopModels)
+	}
+	if math.Abs(report.TopModels[0].Cost-1.84) > 1e-9 {
+		t.Fatalf("expected model cost 1.84, got %.4f", report.TopModels[0].Cost)
+	}
+	if report.TopModels[0].Amount != 110 {
+		t.Fatalf("expected model tokens 110, got %d", report.TopModels[0].Amount)
+	}
+}
+
+func TestLoadForDirAt_CountsMessageCostInDailyTotalsOnceAcrossMultipleSteps(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := filepath.Join(tmp, "work")
+	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
+	insertSession(t, db, "ses_work", dir)
+	insertMessage(t, db, "msg_work", "ses_work", now, `{"role":"assistant","providerID":"openai","modelID":"gpt-5.4","cost":1.84}`)
+	insertPart(t, db, "part_work_1", "msg_work", "ses_work", now, `{"type":"step-finish","tokens":{"input":50,"output":25,"reasoning":5}}`)
+	insertPart(t, db, "part_work_2", "msg_work", "ses_work", now, `{"type":"step-finish","tokens":{"input":20,"output":10,"reasoning":0}}`)
+
+	t.Setenv("OPENCODE_DB", dbPath)
+	report, err := loadForDirAt(dir, now)
+	if err != nil {
+		t.Fatalf("loadForDirAt returned error: %v", err)
+	}
+
+	if math.Abs(report.TodayCost-1.84) > 1e-9 {
+		t.Fatalf("expected today cost 1.84, got %.4f", report.TodayCost)
+	}
+	if math.Abs(report.ThirtyDayCost-1.84) > 1e-9 {
+		t.Fatalf("expected 30-day cost 1.84, got %.4f", report.ThirtyDayCost)
 	}
 }
 
@@ -542,12 +635,12 @@ func TestLoadGlobalAt_BuildsTopProjectUsage(t *testing.T) {
 	insertSession(t, db, "ses_a2", projectA)
 	insertSession(t, db, "ses_b1", projectB)
 
-	insertMessage(t, db, "msg_a1", "ses_a1", now, `{"role":"assistant"}`)
-	insertPart(t, db, "part_a1", "msg_a1", "ses_a1", now, `{"type":"step-finish","tokens":{"input":100,"output":50,"reasoning":25}}`)
-	insertMessage(t, db, "msg_a2", "ses_a2", now, `{"role":"assistant"}`)
-	insertPart(t, db, "part_a2", "msg_a2", "ses_a2", now, `{"type":"step-finish","tokens":{"input":80,"output":20,"reasoning":0}}`)
-	insertMessage(t, db, "msg_b1", "ses_b1", now, `{"role":"assistant"}`)
-	insertPart(t, db, "part_b1", "msg_b1", "ses_b1", now, `{"type":"step-finish","tokens":{"input":70,"output":20,"reasoning":10}}`)
+	insertMessage(t, db, "msg_a1", "ses_a1", now, `{"role":"assistant","providerID":"openai","modelID":"gpt-5.4"}`)
+	insertPart(t, db, "part_a1", "msg_a1", "ses_a1", now, `{"type":"step-finish","cost":1.25,"tokens":{"input":100,"output":50,"reasoning":25}}`)
+	insertMessage(t, db, "msg_a2", "ses_a2", now, `{"role":"assistant","providerID":"anthropic","modelID":"claude-sonnet-4.5"}`)
+	insertPart(t, db, "part_a2", "msg_a2", "ses_a2", now, `{"type":"step-finish","cost":0.75,"tokens":{"input":80,"output":20,"reasoning":0}}`)
+	insertMessage(t, db, "msg_b1", "ses_b1", now, `{"role":"assistant","providerID":"google","modelID":"gemini-2.5-pro"}`)
+	insertPart(t, db, "part_b1", "msg_b1", "ses_b1", now, `{"type":"step-finish","cost":0.50,"tokens":{"input":70,"output":20,"reasoning":10}}`)
 
 	insertMessage(t, db, "msg_compaction", "ses_b1", now, `{"role":"assistant","summary":true,"agent":"compaction"}`)
 	insertPart(t, db, "part_compaction", "msg_compaction", "ses_b1", now, `{"type":"step-finish","tokens":{"input":999,"output":999,"reasoning":999}}`)
@@ -565,6 +658,90 @@ func TestLoadGlobalAt_BuildsTopProjectUsage(t *testing.T) {
 	expected := []usageMetric{{Name: normalizeProjectUsageKey(projectA), Amount: 275}, {Name: normalizeProjectUsageKey(projectB), Amount: 100}}
 	if !reflect.DeepEqual(topProjects, expected) {
 		t.Fatalf("expected top projects %v, got %v", expected, topProjects)
+	}
+	if math.Abs(report.TotalProjectCost-2.50) > 1e-9 {
+		t.Fatalf("expected 2.50 total project cost, got %.4f", report.TotalProjectCost)
+	}
+	if math.Abs(report.TopProjects[0].Cost-2.0) > 1e-9 {
+		t.Fatalf("expected project A cost 2.0, got %.4f", report.TopProjects[0].Cost)
+	}
+	if math.Abs(report.TopProjects[1].Cost-0.5) > 1e-9 {
+		t.Fatalf("expected project B cost 0.5, got %.4f", report.TopProjects[1].Cost)
+	}
+}
+
+func TestTopUsageAmountsWithCostsFromMaps_IncludesCostOnlyEntries(t *testing.T) {
+	items := topUsageAmountsWithCostsFromMaps(
+		map[string]int64{},
+		map[string]float64{"openai\x00gpt-5.4": 1.25},
+		0,
+	)
+
+	if len(items) != 1 {
+		t.Fatalf("expected one item, got %v", items)
+	}
+	if items[0].Name != "openai\x00gpt-5.4" {
+		t.Fatalf("expected cost-only entry name, got %q", items[0].Name)
+	}
+	if items[0].Amount != 0 {
+		t.Fatalf("expected zero tokens for cost-only entry, got %d", items[0].Amount)
+	}
+	if math.Abs(items[0].Cost-1.25) > 1e-9 {
+		t.Fatalf("expected cost 1.25, got %.4f", items[0].Cost)
+	}
+}
+
+func TestLoadGlobalAt_EstimatesProjectCostWhenStoredCostMissing(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	projectDir := filepath.Join(tmp, "work")
+	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
+	insertSession(t, db, "ses_work", projectDir)
+	insertMessage(t, db, "msg_work", "ses_work", now, `{"role":"assistant","providerID":"openai","modelID":"gpt-4o-mini"}`)
+	insertPart(t, db, "step_work", "msg_work", "ses_work", now, `{"type":"step-finish","tokens":{"input":1000,"output":500,"reasoning":0,"cache":{"read":200,"write":100}}}`)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"gpt-4o-mini":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000002,"cache_creation_input_token_cost":0.000003,"cache_read_input_token_cost":0.0000005}}`)
+	}))
+	defer server.Close()
+
+	previousResolver := defaultPricingResolver
+	defaultPricingResolver = newLiteLLMPricingResolver(server.URL, server.Client())
+	t.Cleanup(func() {
+		defaultPricingResolver = previousResolver
+	})
+
+	t.Setenv("OPENCODE_DB", dbPath)
+	report, err := loadGlobalAt(now)
+	if err != nil {
+		t.Fatalf("loadGlobalAt returned error: %v", err)
+	}
+
+	const expected = 0.0024
+	if math.Abs(report.TotalProjectCost-expected) > 1e-9 {
+		t.Fatalf("expected total project cost %.4f, got %.4f", expected, report.TotalProjectCost)
+	}
+	if len(report.TopProjects) != 1 {
+		t.Fatalf("expected one top project, got %v", report.TopProjects)
+	}
+	if math.Abs(report.TopProjects[0].Cost-expected) > 1e-9 {
+		t.Fatalf("expected top project cost %.4f, got %.4f", expected, report.TopProjects[0].Cost)
 	}
 }
 

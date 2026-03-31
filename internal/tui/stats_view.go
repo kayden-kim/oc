@@ -886,13 +886,13 @@ func (m Model) renderOverviewLines() []string {
 		"",
 		activitySectionHeader("Activity - Models", report.UniqueModelCount),
 	)
-	lines = append(lines, m.renderModelUsageLines(report.TopModels, report.TotalModelTokens)...)
+	lines = append(lines, m.renderModelUsageLines(report.TopModels, report.TotalModelTokens, report.TotalModelCost)...)
 	if !m.projectScope {
 		lines = append(lines,
 			"",
 			activitySectionHeader("Activity - Projects", report.UniqueProjectCount),
 		)
-		lines = append(lines, m.renderUsageLines("tokens", report.TopProjects, report.ThirtyDayTokens)...)
+		lines = append(lines, m.renderProjectUsageLines(report.TopProjects, report.ThirtyDayTokens, report.TotalProjectCost)...)
 	}
 	lines = append(lines,
 		"",
@@ -979,6 +979,59 @@ func (m Model) renderUsageLines(metricHeader string, items []stats.UsageCount, t
 	return renderStatsTable(columns, rows, m.statsTableMaxWidth())
 }
 
+func (m Model) renderProjectUsageLines(items []stats.UsageCount, total int64, totalCost float64) []string {
+	compactPathColumns := m.isNarrowLayout() && usageItemsLookLikePaths(items)
+	metricLabel := "tokens"
+	costLabel := "cost"
+	shareLabel := "share"
+	metricMinWidth := 7
+	costMinWidth := 6
+	shareMinWidth := 5
+	if compactPathColumns {
+		metricLabel = "tok"
+		costLabel = "$"
+		shareLabel = "%"
+		metricMinWidth = 3
+		costMinWidth = 4
+		shareMinWidth = 4
+	}
+	columns := []statsTableColumn{
+		{Header: "", MinWidth: 12, PathAware: compactPathColumns, Style: defaultTextStyle},
+		{Header: metricLabel, MinWidth: metricMinWidth, AlignRight: true, Style: statsValueTextStyle},
+		{Header: costLabel, MinWidth: costMinWidth, AlignRight: true, Style: statsValueTextStyle},
+		{Header: shareLabel, MinWidth: shareMinWidth, AlignRight: true, Style: statsValueTextStyle},
+	}
+	showTotal := total > 0 || totalCost > 0
+	if len(items) == 0 {
+		rows := []statsTableRow{{Cells: []string{"top 15", "--", "--", "--"}}}
+		if showTotal {
+			rows = append(rows, statsTableRow{Divider: true}, statsTableRow{Cells: []string{"Total", formatSummaryTokens(total), formatSummaryCurrency(totalCost), formatUsageShare(total, total)}})
+		}
+		return renderStatsTable(columns, rows, m.statsTableMaxWidth())
+	}
+	visibleItems := items
+	if len(visibleItems) > maxActivityItems {
+		visibleItems = visibleItems[:maxActivityItems]
+	}
+	showOthers := len(items) > maxActivityItems && (total > 0 || totalCost > 0)
+	othersMetric := total
+	othersCost := totalCost
+	rows := make([]statsTableRow, 0, len(visibleItems)+2)
+	for _, item := range visibleItems {
+		itemMetric := usageMetric(item)
+		othersMetric -= itemMetric
+		othersCost -= item.Cost
+		rows = append(rows, statsTableRow{Cells: []string{item.Name, formatSummaryTokens(itemMetric), formatSummaryCurrency(item.Cost), formatUsageShare(itemMetric, total)}})
+	}
+	if showOthers && (othersMetric > 0 || othersCost > 0) {
+		rows = append(rows, statsTableRow{Cells: []string{"others", formatSummaryTokens(othersMetric), formatSummaryCurrency(othersCost), formatUsageShare(othersMetric, total)}})
+	}
+	if showTotal {
+		rows = append(rows, statsTableRow{Divider: true}, statsTableRow{Cells: []string{"Total", formatSummaryTokens(total), formatSummaryCurrency(totalCost), formatUsageShare(total, total)}})
+	}
+	return renderStatsTable(columns, rows, m.statsTableMaxWidth())
+}
+
 func (m Model) renderAgentModelUsageLines(items []stats.UsageCount, total int64) []string {
 	metricLabel := "count"
 	shareLabel := "share"
@@ -1039,40 +1092,33 @@ func (m Model) renderAgentModelUsageLines(items []stats.UsageCount, total int64)
 	return renderStatsTable(columns, rows, m.statsTableMaxWidth())
 }
 
-func (m Model) renderModelUsageLines(items []stats.UsageCount, total int64) []string {
+func (m Model) renderModelUsageLines(items []stats.UsageCount, total int64, totalCost float64) []string {
 	metricLabel := "tokens"
+	costLabel := "cost"
 	shareLabel := "share"
 	metricMinWidth := 7
+	costMinWidth := 6
 	shareMinWidth := 5
 	if m.isNarrowLayout() {
 		metricLabel = "tok"
+		costLabel = "$"
 		shareLabel = "%"
 		metricMinWidth = 3
+		costMinWidth = 4
 		shareMinWidth = 4
-	}
-	shareCell := func(value int64, top int64) string {
-		share := formatUsageShare(value, total)
-		if m.isNarrowLayout() {
-			return share
-		}
-		return renderUsageBar(value, top, usageBarWidth) + " " + share
-	}
-	placeholderShare := func(value string) string {
-		if m.isNarrowLayout() {
-			return value
-		}
-		return strings.Repeat("·", usageBarWidth) + " " + value
 	}
 	columns := []statsTableColumn{
 		{Header: "", MinWidth: 18, Style: defaultTextStyle},
 		{Header: "provider", MinWidth: 10, Style: defaultTextStyle},
 		{Header: metricLabel, MinWidth: metricMinWidth, AlignRight: true, Style: statsValueTextStyle},
-		{Header: shareLabel, MinWidth: shareMinWidth, Style: statsValueTextStyle},
+		{Header: costLabel, MinWidth: costMinWidth, AlignRight: true, Style: statsValueTextStyle},
+		{Header: shareLabel, MinWidth: shareMinWidth, AlignRight: true, Style: statsValueTextStyle},
 	}
+	showTotal := total > 0 || totalCost > 0
 	if len(items) == 0 {
-		rows := []statsTableRow{{Cells: []string{"top 15", "--", "--", placeholderShare("--")}}}
-		if total > 0 {
-			rows = append(rows, statsTableRow{Divider: true}, statsTableRow{Cells: []string{"Total", "", formatSummaryTokens(total), placeholderShare("100%")}})
+		rows := []statsTableRow{{Cells: []string{"top 15", "--", "--", "--", "--"}}}
+		if showTotal {
+			rows = append(rows, statsTableRow{Divider: true}, statsTableRow{Cells: []string{"Total", "", formatSummaryTokens(total), formatSummaryCurrency(totalCost), formatUsageShare(total, total)}})
 		}
 		return renderStatsTable(columns, rows, m.statsTableMaxWidth())
 	}
@@ -1080,21 +1126,22 @@ func (m Model) renderModelUsageLines(items []stats.UsageCount, total int64) []st
 	if len(visibleItems) > maxActivityItems {
 		visibleItems = visibleItems[:maxActivityItems]
 	}
-	top := usageMetric(visibleItems[0])
-	showOthers := len(items) > maxActivityItems && total > 0
+	showOthers := len(items) > maxActivityItems && (total > 0 || totalCost > 0)
 	othersMetric := total
+	othersCost := totalCost
 	rows := make([]statsTableRow, 0, len(visibleItems)+2)
 	for _, item := range visibleItems {
 		provider, model := splitProviderModelUsageKey(item.Name)
 		itemMetric := usageMetric(item)
 		othersMetric -= itemMetric
-		rows = append(rows, statsTableRow{Cells: []string{model, provider, formatSummaryTokens(itemMetric), shareCell(itemMetric, top)}})
+		othersCost -= item.Cost
+		rows = append(rows, statsTableRow{Cells: []string{model, provider, formatSummaryTokens(itemMetric), formatSummaryCurrency(item.Cost), formatUsageShare(itemMetric, total)}})
 	}
-	if showOthers && othersMetric > 0 {
-		rows = append(rows, statsTableRow{Cells: []string{"others", "", formatSummaryTokens(othersMetric), shareCell(othersMetric, top)}})
+	if showOthers && (othersMetric > 0 || othersCost > 0) {
+		rows = append(rows, statsTableRow{Cells: []string{"others", "", formatSummaryTokens(othersMetric), formatSummaryCurrency(othersCost), formatUsageShare(othersMetric, total)}})
 	}
-	if total > 0 {
-		rows = append(rows, statsTableRow{Divider: true}, statsTableRow{Cells: []string{"Total", "", formatSummaryTokens(total), placeholderShare("100%")}})
+	if showTotal {
+		rows = append(rows, statsTableRow{Divider: true}, statsTableRow{Cells: []string{"Total", "", formatSummaryTokens(total), formatSummaryCurrency(totalCost), formatUsageShare(total, total)}})
 	}
 	return renderStatsTable(columns, rows, m.statsTableMaxWidth())
 }

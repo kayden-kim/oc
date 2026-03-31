@@ -1148,7 +1148,8 @@ func TestRenderOverviewLines_GroupsPostMetricsIntoSections(t *testing.T) {
 		MostEfficientDay:        stats.Day{Date: time.Now().AddDate(0, 0, -3), Cost: 0.42, Tokens: 25000},
 		Days:                    make([]stats.Day, 30),
 	}
-	report.TopProjects = []stats.UsageCount{{Name: "/tmp/work-a", Amount: 280000}, {Name: "/tmp/work-b", Amount: 140000}}
+	report.TopProjects = []stats.UsageCount{{Name: "/tmp/work-a", Amount: 280000, Cost: 4.20}, {Name: "/tmp/work-b", Amount: 140000, Cost: 2.10}}
+	report.TotalProjectCost = 6.30
 	setRankedUsageField(&report, "TopTools", []usageFixture{{"bash", 21}, {"read", 11}, {"edit", 8}, {"grep", 6}, {"write", 4}, {"glob", 2}})
 	setRankedUsageField(&report, "TopSkills", []usageFixture{{"writing-plans", 5}, {"test-driven-development", 2}})
 	setRankedUsageField(&report, "TopAgentModels", []usageFixture{{"explore\x00gpt-5.4", 4}, {"oracle\x00gpt-5.4", 2}, {"planner\x00claude-sonnet-4.5", 2}, {"review\x00gemini-2.5-pro", 1}, {"debug\x00o4-mini", 1}, {"legacy\x00claude-haiku-4.5", 1}})
@@ -1196,7 +1197,7 @@ func TestRenderOverviewLines_GroupsPostMetricsIntoSections(t *testing.T) {
 			t.Fatalf("expected activity summary snippet %q to be removed, got %q", snippet, content)
 		}
 	}
-	for _, snippet := range []string{"/tmp/work-a", "/tmp/work-b", "bash", "read", "write", "explore", "oracle", "debug", "gpt-5.4", "claude-haiku-4.5", "writing-plans", "test-driven-development", "provider", "Total", "100%", "50%", "67%", "36%"} {
+	for _, snippet := range []string{"/tmp/work-a", "/tmp/work-b", "$4.20", "$2.10", "$6.30", "bash", "read", "write", "explore", "oracle", "debug", "gpt-5.4", "claude-haiku-4.5", "writing-plans", "test-driven-development", "provider", "cost", "share", "Total", "100%", "50%", "36%"} {
 		if !strings.Contains(plainContent, snippet) {
 			t.Fatalf("expected ranked activity snippet %q, got %q", snippet, plainContent)
 		}
@@ -1342,6 +1343,7 @@ func TestRenderOverviewLines_IncludesModelActivitySection(t *testing.T) {
 		UniqueAgentCount:      3,
 		UniqueAgentModelCount: 11,
 		TotalModelTokens:      730,
+		TotalModelCost:        73.0,
 		UniqueModelCount:      12,
 		TotalSkillCalls:       0,
 		UniqueSkillCount:      0,
@@ -1352,17 +1354,17 @@ func TestRenderOverviewLines_IncludesModelActivitySection(t *testing.T) {
 			{Name: "planner\x00gemini-2.5-pro", Count: 1},
 		},
 		TopModels: []stats.UsageCount{
-			{Name: "openai\x00gpt-5.4", Amount: 120},
-			{Name: "anthropic\x00claude-sonnet-4.5", Amount: 100},
-			{Name: "google\x00gemini-2.5-pro", Amount: 90},
-			{Name: "openrouter\x00qwen/qwen3-coder", Amount: 75},
-			{Name: "azure\x00gpt-4.1", Amount: 65},
-			{Name: "bedrock\x00claude-3.7-sonnet", Amount: 55},
-			{Name: "vertex_ai\x00gemini-2.0-flash", Amount: 50},
-			{Name: "copilot\x00gpt-4o", Amount: 45},
-			{Name: "github_models\x00mistral-large", Amount: 40},
-			{Name: "openai\x00o4-mini", Amount: 35},
-			{Name: "anthropic\x00claude-haiku-4.5", Amount: 30},
+			{Name: "openai\x00gpt-5.4", Amount: 120, Cost: 12.0},
+			{Name: "anthropic\x00claude-sonnet-4.5", Amount: 100, Cost: 10.0},
+			{Name: "google\x00gemini-2.5-pro", Amount: 90, Cost: 9.0},
+			{Name: "openrouter\x00qwen/qwen3-coder", Amount: 75, Cost: 7.5},
+			{Name: "azure\x00gpt-4.1", Amount: 65, Cost: 6.5},
+			{Name: "bedrock\x00claude-3.7-sonnet", Amount: 55, Cost: 5.5},
+			{Name: "vertex_ai\x00gemini-2.0-flash", Amount: 50, Cost: 5.0},
+			{Name: "copilot\x00gpt-4o", Amount: 45, Cost: 4.5},
+			{Name: "github_models\x00mistral-large", Amount: 40, Cost: 4.0},
+			{Name: "openai\x00o4-mini", Amount: 35, Cost: 3.5},
+			{Name: "anthropic\x00claude-haiku-4.5", Amount: 30, Cost: 3.0},
 		},
 	}
 	for i := range report.Days {
@@ -1375,12 +1377,12 @@ func TestRenderOverviewLines_IncludesModelActivitySection(t *testing.T) {
 	plainContent := stripANSI(content)
 	plainModelSection := stripANSI(modelSection)
 
-	for _, snippet := range []string{"Activity - Models (12)", "730", "openai", "anthropic", "gpt-5.4", "claude-haiku-4.5", "Total", "100%", "16%"} {
+	for _, snippet := range []string{"Activity - Models (12)", "730", "openai", "anthropic", "gpt-5.4", "claude-haiku-4.5", "Total", "$12.00", "$3.00", "$73.00", "16%", "100%"} {
 		if !strings.Contains(plainContent, snippet) {
 			t.Fatalf("expected model activity snippet %q, got %q", snippet, plainContent)
 		}
 	}
-	for _, snippet := range []string{"provider", "tokens", "share"} {
+	for _, snippet := range []string{"provider", "tokens", "cost", "share"} {
 		if !strings.Contains(plainModelSection, snippet) {
 			t.Fatalf("expected model activity table header %q, got %q", snippet, plainModelSection)
 		}
@@ -1389,8 +1391,8 @@ func TestRenderOverviewLines_IncludesModelActivitySection(t *testing.T) {
 	if strings.Contains(headerLine, "model") {
 		t.Fatalf("expected blank model column header, got %q", plainModelSection)
 	}
-	if strings.Contains(plainModelSection, "bar") {
-		t.Fatalf("expected bar merged into share, got %q", plainModelSection)
+	if strings.Contains(plainModelSection, "████") || strings.Contains(plainModelSection, "····") {
+		t.Fatalf("expected share graph removed from model activity section, got %q", plainModelSection)
 	}
 	for _, snippet := range []string{"• tokens ", "• unique ", "• 1 gpt-5.4", "• 10 o4-mini"} {
 		if strings.Contains(modelSection, snippet) {
@@ -1416,8 +1418,10 @@ func TestRenderOverviewLines_OrdersActivitySectionsAsRequested(t *testing.T) {
 		TotalAgentModelCalls:  2,
 		TotalSkillCalls:       3,
 		TotalToolCalls:        4,
-		TopModels:             []stats.UsageCount{{Name: "openai\x00gpt-5.4", Amount: 100}},
-		TopProjects:           []stats.UsageCount{{Name: "/tmp/work", Amount: 100}},
+		TopModels:             []stats.UsageCount{{Name: "openai\x00gpt-5.4", Amount: 100, Cost: 1.25}},
+		TopProjects:           []stats.UsageCount{{Name: "/tmp/work", Amount: 100, Cost: 2.50}},
+		TotalModelCost:        1.25,
+		TotalProjectCost:      2.50,
 		TopAgentModels:        []stats.UsageCount{{Name: "explore\x00gpt-5.4", Count: 2}},
 		TopSkills:             []stats.UsageCount{{Name: "writing-plans", Count: 3}},
 		TopTools:              []stats.UsageCount{{Name: "bash", Count: 4}},
@@ -1450,8 +1454,9 @@ func TestRenderOverviewLines_OrdersActivitySectionsAsRequested(t *testing.T) {
 func TestRenderOverviewLines_HidesProjectActivityInProjectScope(t *testing.T) {
 	report := stats.Report{
 		UniqueProjectCount: 1,
-		TopProjects:        []stats.UsageCount{{Name: "/tmp/work", Amount: 100}},
+		TopProjects:        []stats.UsageCount{{Name: "/tmp/work", Amount: 100, Cost: 1.50}},
 		ThirtyDayTokens:    100,
+		TotalProjectCost:   1.50,
 		Days:               make([]stats.Day, 30),
 	}
 	for i := range report.Days {
@@ -1469,8 +1474,9 @@ func TestRenderOverviewLines_HidesProjectActivityInProjectScope(t *testing.T) {
 func TestRenderOverviewLines_ShortensProjectPathsInNarrowLayout(t *testing.T) {
 	report := stats.Report{
 		UniqueProjectCount: 1,
-		TopProjects:        []stats.UsageCount{{Name: "/Users/kayden/workspace/super-long-project-name", Amount: 100}},
+		TopProjects:        []stats.UsageCount{{Name: "/Users/kayden/workspace/super-long-project-name", Amount: 100, Cost: 1.50}},
 		ThirtyDayTokens:    100,
+		TotalProjectCost:   1.50,
 		Days:               make([]stats.Day, 30),
 	}
 	for i := range report.Days {
@@ -1485,7 +1491,7 @@ func TestRenderOverviewLines_ShortensProjectPathsInNarrowLayout(t *testing.T) {
 	if !strings.Contains(plainContent, "Activity - Projects") {
 		t.Fatalf("expected projects section, got %q", plainContent)
 	}
-	for _, snippet := range []string{"/Users", "..", "project-name"} {
+	for _, snippet := range []string{"/Users", "..", "t-name"} {
 		if !strings.Contains(plainContent, snippet) {
 			t.Fatalf("expected shortened project path snippet %q, got %q", snippet, plainContent)
 		}
@@ -1658,6 +1664,40 @@ func TestRenderUsageLines_FormatsModelAmountsCompactly(t *testing.T) {
 	}
 	if !strings.Contains(stripANSI(lines[4]), "1.5M") || !strings.Contains(stripANSI(lines[4]), "100%") {
 		t.Fatalf("expected compact model amount in total row, got %q", stripANSI(lines[4]))
+	}
+}
+
+func TestRenderProjectUsageLines_ShowsCostColumn(t *testing.T) {
+	lines := (Model{}).renderProjectUsageLines([]stats.UsageCount{{Name: "/tmp/work-a", Amount: 1_250_000, Cost: 12.34}}, 1_500_000, 15.67)
+
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 project usage lines, got %d", len(lines))
+	}
+	plain := stripANSI(strings.Join(lines, "\n"))
+	for _, snippet := range []string{"tokens", "cost", "share", "/tmp/work-a", "1.2M", "$12.34", "$15.67", "83%", "100%"} {
+		if !strings.Contains(plain, snippet) {
+			t.Fatalf("expected project usage snippet %q, got %q", snippet, plain)
+		}
+	}
+	if strings.Contains(plain, "████") || strings.Contains(plain, "····") {
+		t.Fatalf("expected project usage share graph removed, got %q", plain)
+	}
+}
+
+func TestRenderModelUsageLines_ShowsCostColumn(t *testing.T) {
+	lines := (Model{}).renderModelUsageLines([]stats.UsageCount{{Name: "openai\x00gpt-5.4", Amount: 1_250_000, Cost: 12.34}}, 1_500_000, 15.67)
+
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 model usage lines, got %d", len(lines))
+	}
+	plain := stripANSI(strings.Join(lines, "\n"))
+	for _, snippet := range []string{"provider", "tokens", "cost", "share", "openai", "gpt-5.4", "1.2M", "$12.34", "$15.67", "83%", "100%"} {
+		if !strings.Contains(plain, snippet) {
+			t.Fatalf("expected model usage snippet %q, got %q", snippet, plain)
+		}
+	}
+	if strings.Contains(plain, "████") || strings.Contains(plain, "····") {
+		t.Fatalf("expected model usage share graph removed, got %q", plain)
 	}
 }
 

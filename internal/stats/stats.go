@@ -39,6 +39,7 @@ type Day struct {
 	AgentCounts       map[string]int
 	AgentModelCounts  map[string]int
 	ModelCounts       map[string]int64
+	ModelCosts        map[string]float64
 	eventTimes        []int64
 	UniqueTools       map[string]struct{}
 	UniqueSkills      map[string]struct{}
@@ -51,6 +52,12 @@ type UsageCount struct {
 	Name   string
 	Count  int
 	Amount int64
+	Cost   float64
+}
+
+type projectUsage struct {
+	Tokens int64
+	Cost   float64
 }
 
 type Options struct {
@@ -85,6 +92,8 @@ type Report struct {
 	TodayTokens              int64
 	YesterdayTokens          int64
 	TotalModelTokens         int64
+	TotalModelCost           float64
+	TotalProjectCost         float64
 	TotalAgentModelCalls     int
 	TodaySessionMinutes      int
 	YesterdaySessionMinutes  int
@@ -182,6 +191,7 @@ type messageEvent struct {
 }
 
 type partEvent struct {
+	MessageID        string
 	CreatedAt        int64
 	Type             string
 	Tool             string
@@ -274,18 +284,46 @@ func loadAtWithOptions(now time.Time, dir string, options Options) (Report, erro
 
 	report := buildReport(days, now, options)
 	if dir == "" {
-		projectTotals, err := loadProjectTokenUsage(db, since)
+		projectTotals, err := loadProjectUsage(db, since)
 		if err != nil {
 			return Report{}, err
 		}
-		report.TopProjects = topUsageAmounts(projectTotals, unlimitedUsageItems)
+		report.TopProjects = topUsageAmountsWithCosts(projectTotals, unlimitedUsageItems)
+		for _, usage := range projectTotals {
+			report.TotalProjectCost += usage.Cost
+		}
 		report.UniqueProjectCount = len(projectTotals)
 	}
 
 	return report, nil
 }
 
-func loadProjectTokenUsage(db *sql.DB, since int64) (map[string]int64, error) {
+func loadProjectUsage(db *sql.DB, since int64) (map[string]projectUsage, error) {
+	tokenTotals, err := loadProjectTokenTotals(db, since)
+	if err != nil {
+		return nil, err
+	}
+	costTotals, err := loadProjectCostTotals(db, since)
+	if err != nil {
+		return nil, err
+	}
+
+	projectTotals := make(map[string]projectUsage, len(tokenTotals)+len(costTotals))
+	for key, tokens := range tokenTotals {
+		usage := projectTotals[key]
+		usage.Tokens = tokens
+		projectTotals[key] = usage
+	}
+	for key, cost := range costTotals {
+		usage := projectTotals[key]
+		usage.Cost = cost
+		projectTotals[key] = usage
+	}
+
+	return projectTotals, nil
+}
+
+func loadProjectTokenTotals(db *sql.DB, since int64) (map[string]int64, error) {
 	rows, err := db.Query(`
 		SELECT
 			CAST(COALESCE(s.directory, '') AS TEXT),
@@ -310,7 +348,7 @@ func loadProjectTokenUsage(db *sql.DB, since int64) (map[string]int64, error) {
 	}
 	defer rows.Close()
 
-	projectTotals := make(map[string]int64)
+	totals := make(map[string]int64)
 	for rows.Next() {
 		var directory string
 		var totalTokens int64
@@ -320,10 +358,89 @@ func loadProjectTokenUsage(db *sql.DB, since int64) (map[string]int64, error) {
 		if totalTokens <= 0 {
 			continue
 		}
-		projectTotals[normalizeProjectUsageKey(directory)] += totalTokens
+		totals[normalizeProjectUsageKey(directory)] = totalTokens
 	}
 
-	return projectTotals, rows.Err()
+	return totals, rows.Err()
+}
+
+func loadProjectCostTotals(db *sql.DB, since int64) (map[string]float64, error) {
+	rows, err := db.Query(`
+		SELECT
+			CAST(COALESCE(s.directory, '') AS TEXT),
+			p.message_id,
+			CAST(COALESCE(json_extract(m.data, '$.cost'), 0) AS REAL),
+			CAST(COALESCE(json_extract(p.data, '$.cost'), 0) AS REAL),
+			CAST(COALESCE(json_extract(p.data, '$.tokens.input'), 0) AS INTEGER),
+			CAST(COALESCE(json_extract(p.data, '$.tokens.output'), 0) AS INTEGER),
+			CAST(COALESCE(json_extract(p.data, '$.tokens.reasoning'), 0) AS INTEGER),
+			CAST(COALESCE(json_extract(p.data, '$.tokens.cache.read'), 0) AS INTEGER),
+			CAST(COALESCE(json_extract(p.data, '$.tokens.cache.write'), 0) AS INTEGER),
+			CAST(COALESCE(json_extract(m.data, '$.providerID'), '') AS TEXT),
+			CAST(COALESCE(json_extract(m.data, '$.modelID'), '') AS TEXT),
+			CAST(COALESCE(json_extract(m.data, '$.summary'), 0) AS INTEGER),
+			CAST(COALESCE(json_extract(m.data, '$.agent'), '') AS TEXT),
+			CAST(COALESCE(json_extract(p.data, '$.type'), '') AS TEXT)
+		FROM part p
+		LEFT JOIN message m ON m.id = p.message_id
+		LEFT JOIN session s ON s.id = p.session_id
+		WHERE p.time_created >= ?
+	`, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	totals := make(map[string]float64)
+	seenMessageCost := make(map[string]struct{})
+	for rows.Next() {
+		var directory string
+		var event partEvent
+		var summary int64
+		if err := rows.Scan(
+			&directory,
+			&event.MessageID,
+			&event.MessageCost,
+			&event.Cost,
+			&event.InputTokens,
+			&event.OutputTokens,
+			&event.ReasoningTokens,
+			&event.CacheReadTokens,
+			&event.CacheWriteTokens,
+			&event.ProviderID,
+			&event.ModelID,
+			&summary,
+			&event.MessageAgent,
+			&event.Type,
+		); err != nil {
+			return nil, err
+		}
+		if event.Type != "step-finish" || summary != 0 || strings.EqualFold(event.MessageAgent, "compaction") || event.Type == "compaction" {
+			continue
+		}
+
+		stepCost := 0.0
+		if event.MessageCost > 0 {
+			if _, ok := seenMessageCost[event.MessageID]; !ok {
+				seenMessageCost[event.MessageID] = struct{}{}
+				stepCost = event.MessageCost
+			}
+		} else if event.Cost > 0 {
+			stepCost = event.Cost
+		} else {
+			estimatedCost, err := estimatePartCost(event)
+			if err != nil {
+				return nil, fmt.Errorf("estimate project step-finish cost: %w", err)
+			}
+			stepCost = estimatedCost
+		}
+		if stepCost <= 0 {
+			continue
+		}
+		totals[normalizeProjectUsageKey(directory)] += stepCost
+	}
+
+	return totals, rows.Err()
 }
 
 func normalizeProjectUsageKey(directory string) string {
@@ -349,6 +466,7 @@ func buildEmptyDays(now time.Time) []Day {
 			AgentCounts:       map[string]int{},
 			AgentModelCounts:  map[string]int{},
 			ModelCounts:       map[string]int64{},
+			ModelCosts:        map[string]float64{},
 			eventTimes:        nil,
 			UniqueTools:       map[string]struct{}{},
 			UniqueSkills:      map[string]struct{}{},
@@ -420,6 +538,7 @@ func mergeMessageStats(db *sql.DB, dir string, since int64, loc *time.Location, 
 func mergePartStats(db *sql.DB, dir string, since int64, loc *time.Location, dayMap map[string]*Day) error {
 	query := `
 		SELECT
+			p.message_id,
 			p.time_created,
 			CAST(COALESCE(json_extract(p.data, '$.type'), '') AS TEXT),
 			CAST(COALESCE(json_extract(p.data, '$.tool'), '') AS TEXT),
@@ -458,11 +577,13 @@ func mergePartStats(db *sql.DB, dir string, since int64, loc *time.Location, day
 	}
 	defer rows.Close()
 
+	seenModelMessageCost := map[string]struct{}{}
 	for rows.Next() {
 		var event partEvent
 		var summary int64
 		var skillNameType string
 		if err := rows.Scan(
+			&event.MessageID,
 			&event.CreatedAt,
 			&event.Type,
 			&event.Tool,
@@ -513,14 +634,22 @@ func mergePartStats(db *sql.DB, dir string, since int64, loc *time.Location, day
 			}
 		case "step-finish":
 			day.StepFinishes++
-			if event.MessageCost <= 0 && event.Cost > 0 {
+			stepCost := 0.0
+			if event.MessageCost > 0 {
+				if _, ok := seenModelMessageCost[event.MessageID]; !ok {
+					seenModelMessageCost[event.MessageID] = struct{}{}
+					stepCost = event.MessageCost
+				}
+			} else if event.Cost > 0 {
 				day.Cost += event.Cost
-			} else if event.MessageCost <= 0 {
+				stepCost = event.Cost
+			} else {
 				estimatedCost, err := estimatePartCost(event)
 				if err != nil {
 					return fmt.Errorf("estimate step-finish cost: %w", err)
 				}
 				day.Cost += estimatedCost
+				stepCost = estimatedCost
 			}
 			stepTokens := event.InputTokens + event.OutputTokens + event.ReasoningTokens + event.CacheReadTokens + event.CacheWriteTokens
 			day.Tokens += stepTokens
@@ -531,6 +660,7 @@ func mergePartStats(db *sql.DB, dir string, since int64, loc *time.Location, day
 			modelName := strings.TrimSpace(event.ModelID)
 			if name != "" {
 				day.ModelCounts[name] += stepTokens
+				day.ModelCosts[name] += stepCost
 			}
 			agentName := strings.TrimSpace(event.Agent)
 			if agentName == "" {
@@ -794,7 +924,7 @@ func buildReport(days []Day, now time.Time, options Options) Report {
 		days = buildEmptyDays(now)
 	}
 
-	report := Report{Days: days, HighestBurnDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, AgentModelCounts: map[string]int{}, ModelCounts: map[string]int64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}, UniqueAgentModels: map[string]struct{}{}}, HighestCodeDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, AgentModelCounts: map[string]int{}, ModelCounts: map[string]int64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}, UniqueAgentModels: map[string]struct{}{}}, HighestChangedFilesDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, AgentModelCounts: map[string]int{}, ModelCounts: map[string]int64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}, UniqueAgentModels: map[string]struct{}{}}, LongestSessionDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, AgentModelCounts: map[string]int{}, ModelCounts: map[string]int64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}, UniqueAgentModels: map[string]struct{}{}}, MostEfficientDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, AgentModelCounts: map[string]int{}, ModelCounts: map[string]int64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}, UniqueAgentModels: map[string]struct{}{}}}
+	report := Report{Days: days, HighestBurnDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, AgentModelCounts: map[string]int{}, ModelCounts: map[string]int64{}, ModelCosts: map[string]float64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}, UniqueAgentModels: map[string]struct{}{}}, HighestCodeDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, AgentModelCounts: map[string]int{}, ModelCounts: map[string]int64{}, ModelCosts: map[string]float64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}, UniqueAgentModels: map[string]struct{}{}}, HighestChangedFilesDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, AgentModelCounts: map[string]int{}, ModelCounts: map[string]int64{}, ModelCosts: map[string]float64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}, UniqueAgentModels: map[string]struct{}{}}, LongestSessionDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, AgentModelCounts: map[string]int{}, ModelCounts: map[string]int64{}, ModelCosts: map[string]float64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}, UniqueAgentModels: map[string]struct{}{}}, MostEfficientDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, AgentModelCounts: map[string]int{}, ModelCounts: map[string]int64{}, ModelCosts: map[string]float64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}, UniqueAgentModels: map[string]struct{}{}}}
 	allTools := map[string]struct{}{}
 	allSkills := map[string]struct{}{}
 	allAgents := map[string]struct{}{}
@@ -804,6 +934,7 @@ func buildReport(days []Day, now time.Time, options Options) Report {
 	agentTotals := map[string]int{}
 	agentModelTotals := map[string]int{}
 	modelTotals := map[string]int64{}
+	modelCostTotals := map[string]float64{}
 	for i, day := range days {
 		day.SessionMinutes = computeSessionMinutes(day.eventTimes, options.SessionGapMinutes)
 		days[i] = day
@@ -850,6 +981,10 @@ func buildReport(days []Day, now time.Time, options Options) Report {
 			modelTotals[name] += amount
 			report.TotalModelTokens += amount
 		}
+		for name, cost := range day.ModelCosts {
+			modelCostTotals[name] += cost
+			report.TotalModelCost += cost
+		}
 		report.ThirtyDayCost += day.Cost
 		report.ThirtyDayTokens += day.Tokens
 		if i >= len(days)-7 {
@@ -885,7 +1020,7 @@ func buildReport(days []Day, now time.Time, options Options) Report {
 	report.TopSkills = topUsageCounts(skillTotals, unlimitedUsageItems)
 	report.TopAgents = topUsageCounts(agentTotals, unlimitedUsageItems)
 	report.TopAgentModels = topUsageCounts(agentModelTotals, unlimitedUsageItems)
-	report.TopModels = topUsageAmounts(modelTotals, unlimitedUsageItems)
+	report.TopModels = topUsageAmountsWithCostsFromMaps(modelTotals, modelCostTotals, unlimitedUsageItems)
 	report.CurrentStreak = currentStreak(days)
 	report.BestStreak = bestStreak(days)
 	report.CurrentHourlyStreakSlots = currentHourlyStreakSlots(days)
@@ -1129,6 +1264,63 @@ func topUsageAmounts(counts map[string]int64, limit int) []UsageCount {
 			continue
 		}
 		items = append(items, UsageCount{Name: name, Amount: amount})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Amount == items[j].Amount {
+			return items[i].Name < items[j].Name
+		}
+		return items[i].Amount > items[j].Amount
+	})
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return items
+}
+
+func topUsageAmountsWithCosts(counts map[string]projectUsage, limit int) []UsageCount {
+	if len(counts) == 0 {
+		return nil
+	}
+	items := make([]UsageCount, 0, len(counts))
+	for name, usage := range counts {
+		if usage.Tokens <= 0 && usage.Cost <= 0 {
+			continue
+		}
+		items = append(items, UsageCount{Name: name, Amount: usage.Tokens, Cost: usage.Cost})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Amount == items[j].Amount {
+			return items[i].Name < items[j].Name
+		}
+		return items[i].Amount > items[j].Amount
+	})
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return items
+}
+
+func topUsageAmountsWithCostsFromMaps(counts map[string]int64, costs map[string]float64, limit int) []UsageCount {
+	if len(counts) == 0 && len(costs) == 0 {
+		return nil
+	}
+	items := make([]UsageCount, 0, max(len(counts), len(costs)))
+	seen := make(map[string]struct{}, len(counts)+len(costs))
+	for name, amount := range counts {
+		if amount <= 0 && costs[name] <= 0 {
+			continue
+		}
+		items = append(items, UsageCount{Name: name, Amount: amount, Cost: costs[name]})
+		seen[name] = struct{}{}
+	}
+	for name, cost := range costs {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		if cost <= 0 {
+			continue
+		}
+		items = append(items, UsageCount{Name: name, Cost: cost})
 	}
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].Amount == items[j].Amount {
