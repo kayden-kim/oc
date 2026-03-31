@@ -67,24 +67,37 @@ type Model struct {
 	projectMonthlyUpdatedAt time.Time
 	loadGlobalWindow        func(string, time.Time, time.Time) (stats.WindowReport, error)
 	loadProjectWindow       func(string, time.Time, time.Time) (stats.WindowReport, error)
-	statsConfig             config.StatsConfig
-	projectScope            bool
-	cursor                  int
-	editCursor              int
-	sessionCursor           int
-	statsTab                int
-	selected                map[int]struct{}
-	cancelled               bool
-	confirmed               bool
-	edit                    bool
-	editMode                bool
-	sessionMode             bool
-	statsMode               bool
-	editTarget              string
-	width                   int
-	height                  int
-	sessionOffset           int
-	statsOffset             int
+	// Month-daily report caches (for month-list/day-detail view)
+	globalMonthDaily           stats.MonthDailyReport
+	projectMonthDaily          stats.MonthDailyReport
+	globalMonthDailyLoaded     bool
+	projectMonthDailyLoaded    bool
+	globalMonthDailyLoading    bool
+	projectMonthDailyLoading   bool
+	globalMonthDailyMonth      time.Time // Track which month is cached
+	projectMonthDailyMonth     time.Time // Track which month is cached
+	globalMonthDailyUpdatedAt  time.Time
+	projectMonthDailyUpdatedAt time.Time
+	loadGlobalMonthDaily       func(time.Time) (stats.MonthDailyReport, error)
+	loadProjectMonthDaily      func(time.Time) (stats.MonthDailyReport, error)
+	statsConfig                config.StatsConfig
+	projectScope               bool
+	cursor                     int
+	editCursor                 int
+	sessionCursor              int
+	statsTab                   int
+	selected                   map[int]struct{}
+	cancelled                  bool
+	confirmed                  bool
+	edit                       bool
+	editMode                   bool
+	sessionMode                bool
+	statsMode                  bool
+	editTarget                 string
+	width                      int
+	height                     int
+	sessionOffset              int
+	statsOffset                int
 }
 
 type statsLoadedMsg struct {
@@ -98,6 +111,13 @@ type windowReportLoadedMsg struct {
 	label   string
 	report  stats.WindowReport
 	err     error
+}
+
+type monthDailyReportLoadedMsg struct {
+	project    bool
+	monthStart time.Time
+	report     stats.MonthDailyReport
+	err        error
 }
 
 const sessionChromeHeight = 6
@@ -603,6 +623,14 @@ func (m Model) WithStatsLoaders(global func() (stats.Report, error), project fun
 	return m
 }
 
+func (m Model) WithMonthDailyLoaders(global func(time.Time) (stats.MonthDailyReport, error), project func(time.Time) (stats.MonthDailyReport, error)) Model {
+	m.loadGlobalMonthDaily = global
+	m.loadProjectMonthDaily = project
+	m.globalMonthDailyLoaded = false
+	m.projectMonthDailyLoaded = false
+	return m
+}
+
 func loadStatsCmd(project bool, loader func() (stats.Report, error)) tea.Cmd {
 	if loader == nil {
 		return nil
@@ -620,6 +648,16 @@ func loadWindowCmd(project bool, label string, loader func() (stats.WindowReport
 	return func() tea.Msg {
 		report, err := loader()
 		return windowReportLoadedMsg{project: project, label: label, report: report, err: err}
+	}
+}
+
+func loadMonthDailyCmd(project bool, monthStart time.Time, loader func(time.Time) (stats.MonthDailyReport, error)) tea.Cmd {
+	if loader == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		report, err := loader(monthStart)
+		return monthDailyReportLoadedMsg{project: project, monthStart: monthStart, report: report, err: err}
 	}
 }
 
