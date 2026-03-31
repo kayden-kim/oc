@@ -1548,3 +1548,407 @@ func TestHourlyStreakSlotsAcrossHalfHourWindows(t *testing.T) {
 		t.Fatalf("expected best hourly streak 3 slots, got %d", report.BestHourlyStreakSlots)
 	}
 }
+
+func TestDeriveFocusTag_Spike_HighestAndGreaterThan125Percent(t *testing.T) {
+	tokens := int64(1000)
+	cost := 10.0
+	allTokens := []int64{1000, 600, 400, 200}
+	allCosts := []float64{10.0, 8.0, 5.0, 2.0}
+
+	tag := deriveFocusTag(tokens, cost, allTokens, allCosts)
+	if tag != "spike" {
+		t.Errorf("expected spike, got %s", tag)
+	}
+}
+
+func TestDeriveFocusTag_Spike_HighestButNotEnough125Percent(t *testing.T) {
+	tokens := int64(1000)
+	cost := 10.0
+	allTokens := []int64{1000, 850, 400, 200} // 1000 < 850 * 1.25 = 1062.5
+	allCosts := []float64{10.0, 8.0, 5.0, 2.0}
+
+	tag := deriveFocusTag(tokens, cost, allTokens, allCosts)
+	if tag != "--" { // Not spike, not heavy enough, not quiet
+		t.Errorf("expected --, got %s", tag)
+	}
+}
+
+func TestDeriveFocusTag_Spike_NotHighest(t *testing.T) {
+	tokens := int64(600)
+	cost := 8.0
+	allTokens := []int64{1000, 600, 400, 200}
+	allCosts := []float64{10.0, 8.0, 5.0, 2.0}
+
+	tag := deriveFocusTag(tokens, cost, allTokens, allCosts)
+	if tag == "spike" {
+		t.Errorf("expected not spike, got %s", tag)
+	}
+}
+
+func TestDeriveFocusTag_Heavy_TokensAboveMedian(t *testing.T) {
+	tokens := int64(2000)
+	cost := 1.0
+	allTokens := []int64{500, 600, 700, 800, 900} // median = 700, 2000 >= 700*1.75
+	allCosts := []float64{1.0, 1.0, 1.0, 1.0, 1.0}
+
+	tag := deriveFocusTag(tokens, cost, allTokens, allCosts)
+	if tag != "heavy" {
+		t.Errorf("expected heavy, got %s", tag)
+	}
+}
+
+func TestDeriveFocusTag_Heavy_CostAboveMedian(t *testing.T) {
+	tokens := int64(500)
+	cost := 20.0
+	allTokens := []int64{500, 500, 500, 500, 500}
+	allCosts := []float64{2.0, 4.0, 6.0, 8.0, 10.0} // median = 6.0, 20 >= 6*1.75
+
+	tag := deriveFocusTag(tokens, cost, allTokens, allCosts)
+	if tag != "heavy" {
+		t.Errorf("expected heavy, got %s", tag)
+	}
+}
+
+func TestDeriveFocusTag_Quiet_BothTokensAndCostBelowMedian(t *testing.T) {
+	tokens := int64(100)
+	cost := 0.5
+	allTokens := []int64{500, 600, 700, 800, 900}   // median = 700, 100 < 700*0.25
+	allCosts := []float64{2.0, 4.0, 6.0, 8.0, 10.0} // median = 6.0, 0.5 < 6*0.25
+
+	tag := deriveFocusTag(tokens, cost, allTokens, allCosts)
+	if tag != "quiet" {
+		t.Errorf("expected quiet, got %s", tag)
+	}
+}
+
+func TestDeriveFocusTag_Quiet_OnlyTokensBelow(t *testing.T) {
+	tokens := int64(100)
+	cost := 5.0
+	allTokens := []int64{500, 600, 700, 800, 900}   // median = 700, 100 < 700*0.25
+	allCosts := []float64{2.0, 4.0, 6.0, 8.0, 10.0} // median = 6.0, 5 > 6*0.25
+
+	tag := deriveFocusTag(tokens, cost, allTokens, allCosts)
+	if tag == "quiet" {
+		t.Errorf("expected not quiet, got %s", tag)
+	}
+}
+
+func TestDeriveFocusTag_NoTag_ZeroActivity(t *testing.T) {
+	tokens := int64(0)
+	cost := 0.0
+	allTokens := []int64{500, 600, 700, 800, 900}
+	allCosts := []float64{2.0, 4.0, 6.0, 8.0, 10.0}
+
+	tag := deriveFocusTag(tokens, cost, allTokens, allCosts)
+	if tag != "--" {
+		t.Errorf("expected --, got %s", tag)
+	}
+}
+
+func TestDeriveFocusTag_SingleActiveDay(t *testing.T) {
+	tokens := int64(1000)
+	cost := 10.0
+	allTokens := []int64{1000}
+	allCosts := []float64{10.0}
+
+	tag := deriveFocusTag(tokens, cost, allTokens, allCosts)
+	if tag == "spike" {
+		t.Errorf("expected not spike for single day, got %s", tag)
+	}
+}
+
+func TestDeriveFocusTag_AllZeroExceptOne(t *testing.T) {
+	tokens := int64(500)
+	cost := 5.0
+	allTokens := []int64{500, 0, 0, 0, 0}
+	allCosts := []float64{5.0, 0, 0, 0, 0}
+
+	tag := deriveFocusTag(tokens, cost, allTokens, allCosts)
+	// Only one non-zero value, so no spike and medians are 500/5
+	// 500 is not >= 500*1.75, so not heavy
+	if tag != "--" {
+		t.Errorf("expected --, got %s", tag)
+	}
+}
+
+func TestCalculateMedian_OddLength(t *testing.T) {
+	values := []int64{1, 2, 3, 4, 5}
+	median := calculateMedian(values)
+	if median != 3.0 {
+		t.Errorf("expected 3.0, got %v", median)
+	}
+}
+
+func TestCalculateMedian_EvenLength(t *testing.T) {
+	values := []int64{1, 2, 3, 4}
+	median := calculateMedian(values)
+	if median != 2.5 {
+		t.Errorf("expected 2.5, got %v", median)
+	}
+}
+
+func TestCalculateMedian_Empty(t *testing.T) {
+	values := []int64{}
+	median := calculateMedian(values)
+	if median != 0 {
+		t.Errorf("expected 0, got %v", median)
+	}
+}
+
+func TestCalculateMedianFloat_OddLength(t *testing.T) {
+	values := []float64{1.0, 2.0, 3.0, 4.0, 5.0}
+	median := calculateMedianFloat(values)
+	if median != 3.0 {
+		t.Errorf("expected 3.0, got %v", median)
+	}
+}
+
+func TestCalculateMedianFloat_EvenLength(t *testing.T) {
+	values := []float64{1.0, 2.0, 3.0, 4.0}
+	median := calculateMedianFloat(values)
+	if median != 2.5 {
+		t.Errorf("expected 2.5, got %v", median)
+	}
+}
+
+func TestBuildMonthDailyReport_AggregatesDailyStats(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENCODE_DB", dbPath)
+
+	dir := filepath.Join(tmp, "work")
+	insertSession(t, db, "ses_work", dir)
+
+	// March 1, 2026: 2 messages, 1000 tokens, 10.0 cost
+	insertMessage(t, db, "msg_a", "ses_work", time.Date(2026, time.March, 1, 10, 0, 0, 0, time.Local), `{"role":"assistant"}`)
+	insertPart(t, db, "step_a", "msg_a", "ses_work", time.Date(2026, time.March, 1, 10, 0, 0, 0, time.Local), `{"type":"step-finish","tokens":{"input":500,"output":500}}`)
+
+	insertMessage(t, db, "msg_b", "ses_work", time.Date(2026, time.March, 1, 11, 0, 0, 0, time.Local), `{"role":"assistant"}`)
+	insertPart(t, db, "step_b", "msg_b", "ses_work", time.Date(2026, time.March, 1, 11, 0, 0, 0, time.Local), `{"type":"step-finish","tokens":{"input":500,"output":500},"cost":10.0}`)
+
+	// March 15, 2026: 1 message, 2000 tokens
+	insertMessage(t, db, "msg_c", "ses_work", time.Date(2026, time.March, 15, 14, 0, 0, 0, time.Local), `{"role":"assistant"}`)
+	insertPart(t, db, "step_c", "msg_c", "ses_work", time.Date(2026, time.March, 15, 14, 0, 0, 0, time.Local), `{"type":"step-finish","tokens":{"input":1000,"output":1000}}`)
+
+	monthStart := time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local)
+	report, err := buildMonthDailyReport(db, dir, monthStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if report.MonthStart.Month() != time.March {
+		t.Errorf("expected March, got %v", report.MonthStart.Month())
+	}
+
+	if report.ActiveDays != 2 {
+		t.Errorf("expected 2 active days, got %d", report.ActiveDays)
+	}
+
+	if report.TotalMessages != 3 {
+		t.Errorf("expected 3 total messages, got %d", report.TotalMessages)
+	}
+
+	if report.TotalTokens != 4000 {
+		t.Errorf("expected 4000 total tokens, got %d", report.TotalTokens)
+	}
+
+	if report.TotalSessions != 1 {
+		t.Errorf("expected 1 session, got %d", report.TotalSessions)
+	}
+
+	if len(report.Days) != 2 {
+		t.Errorf("expected 2 days in report, got %d", len(report.Days))
+	}
+
+	// Check first day (March 1)
+	if report.Days[0].Messages != 2 {
+		t.Errorf("expected 2 messages on day 0, got %d", report.Days[0].Messages)
+	}
+	if report.Days[0].Tokens != 2000 {
+		t.Errorf("expected 2000 tokens on day 0, got %d", report.Days[0].Tokens)
+	}
+
+	// Check second day (March 15)
+	if report.Days[1].Messages != 1 {
+		t.Errorf("expected 1 message on day 1, got %d", report.Days[1].Messages)
+	}
+	if report.Days[1].Tokens != 2000 {
+		t.Errorf("expected 2000 tokens on day 1, got %d", report.Days[1].Tokens)
+	}
+}
+
+func TestBuildMonthDailyReport_DeriveFocusTags(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENCODE_DB", dbPath)
+
+	dir := filepath.Join(tmp, "work")
+	insertSession(t, db, "ses_work", dir)
+
+	// Create spike day (highest with >= 125% rule)
+	insertMessage(t, db, "msg_spike", "ses_work", time.Date(2026, time.March, 1, 10, 0, 0, 0, time.Local), `{"role":"assistant"}`)
+	insertPart(t, db, "step_spike", "msg_spike", "ses_work", time.Date(2026, time.March, 1, 10, 0, 0, 0, time.Local), `{"type":"step-finish","tokens":{"input":5000,"output":5000}}`)
+
+	// Create medium day
+	insertMessage(t, db, "msg_med", "ses_work", time.Date(2026, time.March, 2, 10, 0, 0, 0, time.Local), `{"role":"assistant"}`)
+	insertPart(t, db, "step_med", "msg_med", "ses_work", time.Date(2026, time.March, 2, 10, 0, 0, 0, time.Local), `{"type":"step-finish","tokens":{"input":1000,"output":1000}}`)
+
+	// Create low day
+	insertMessage(t, db, "msg_low", "ses_work", time.Date(2026, time.March, 3, 10, 0, 0, 0, time.Local), `{"role":"assistant"}`)
+	insertPart(t, db, "step_low", "msg_low", "ses_work", time.Date(2026, time.March, 3, 10, 0, 0, 0, time.Local), `{"type":"step-finish","tokens":{"input":100,"output":100}}`)
+
+	monthStart := time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local)
+	report, err := buildMonthDailyReport(db, dir, monthStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(report.Days) != 3 {
+		t.Errorf("expected 3 days, got %d", len(report.Days))
+	}
+
+	// First day should be spike (10000 > (1000+100)*1.25 = 1375)
+	if report.Days[0].FocusTag != "spike" {
+		t.Errorf("expected spike on day 0, got %s", report.Days[0].FocusTag)
+	}
+
+	// Days should be sorted chronologically
+	if !report.Days[0].Date.Before(report.Days[1].Date) {
+		t.Errorf("days not sorted in chronological order")
+	}
+}
+
+func TestBuildMonthDailyReport_MonthBoundaries(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENCODE_DB", dbPath)
+
+	dir := filepath.Join(tmp, "work")
+	insertSession(t, db, "ses_work", dir)
+
+	// Add message on March 31
+	insertMessage(t, db, "msg_march", "ses_work", time.Date(2026, time.March, 31, 10, 0, 0, 0, time.Local), `{"role":"assistant"}`)
+	insertPart(t, db, "step_march", "msg_march", "ses_work", time.Date(2026, time.March, 31, 10, 0, 0, 0, time.Local), `{"type":"step-finish","tokens":{"input":100,"output":100}}`)
+
+	// Add message on April 1 (should NOT be included)
+	insertMessage(t, db, "msg_april", "ses_work", time.Date(2026, time.April, 1, 10, 0, 0, 0, time.Local), `{"role":"assistant"}`)
+	insertPart(t, db, "step_april", "msg_april", "ses_work", time.Date(2026, time.April, 1, 10, 0, 0, 0, time.Local), `{"type":"step-finish","tokens":{"input":100,"output":100}}`)
+
+	monthStart := time.Date(2026, time.March, 15, 0, 0, 0, 0, time.Local) // Arbitrary day in March
+	report, err := buildMonthDailyReport(db, dir, monthStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if report.MonthStart.Day() != 1 || report.MonthStart.Month() != time.March {
+		t.Errorf("expected normalized month start (March 1), got %v", report.MonthStart)
+	}
+
+	if report.TotalTokens != 200 {
+		t.Errorf("expected only March tokens (200), got %d", report.TotalTokens)
+	}
+
+	if len(report.Days) != 1 {
+		t.Errorf("expected only 1 day in March report, got %d", len(report.Days))
+	}
+}
+
+func TestBuildMonthDailyReport_ProjectScopeFiltering(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENCODE_DB", dbPath)
+
+	dir1 := filepath.Join(tmp, "work1")
+	dir2 := filepath.Join(tmp, "work2")
+
+	insertSession(t, db, "ses_work1", dir1)
+	insertSession(t, db, "ses_work2", dir2)
+
+	// Add data to both directories
+	insertMessage(t, db, "msg_1", "ses_work1", time.Date(2026, time.March, 1, 10, 0, 0, 0, time.Local), `{"role":"assistant"}`)
+	insertPart(t, db, "step_1", "msg_1", "ses_work1", time.Date(2026, time.March, 1, 10, 0, 0, 0, time.Local), `{"type":"step-finish","tokens":{"input":1000,"output":1000}}`)
+
+	insertMessage(t, db, "msg_2", "ses_work2", time.Date(2026, time.March, 1, 10, 0, 0, 0, time.Local), `{"role":"assistant"}`)
+	insertPart(t, db, "step_2", "msg_2", "ses_work2", time.Date(2026, time.March, 1, 10, 0, 0, 0, time.Local), `{"type":"step-finish","tokens":{"input":500,"output":500}}`)
+
+	// Load for dir1 only
+	monthStart := time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local)
+	report, err := buildMonthDailyReport(db, dir1, monthStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if report.TotalTokens != 2000 {
+		t.Errorf("expected 2000 tokens for dir1, got %d", report.TotalTokens)
+	}
+
+	if report.TotalSessions != 1 {
+		t.Errorf("expected 1 session for dir1, got %d", report.TotalSessions)
+	}
+
+	// Load for dir2 only
+	report2, err := buildMonthDailyReport(db, dir2, monthStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if report2.TotalTokens != 1000 {
+		t.Errorf("expected 1000 tokens for dir2, got %d", report2.TotalTokens)
+	}
+}

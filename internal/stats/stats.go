@@ -152,6 +152,33 @@ type SessionUsage struct {
 	Messages int
 }
 
+type DailySummary struct {
+	Date     time.Time
+	Messages int
+	Sessions int
+	Tokens   int64
+	Cost     float64
+	FocusTag string // "heavy", "spike", "quiet", or "--" for no tag
+}
+
+type MonthDailyReport struct {
+	MonthStart    time.Time
+	MonthEnd      time.Time
+	ActiveDays    int
+	TotalMessages int
+	TotalSessions int
+	TotalTokens   int64
+	TotalCost     float64
+	Days          []DailySummary
+}
+
+type DailyLoadKey struct {
+	Scope      string
+	MonthStart time.Time
+	Date       time.Time
+	Kind       string // "month" or "day"
+}
+
 type windowMessageRow struct {
 	MessageID string
 	SessionID string
@@ -1357,6 +1384,102 @@ func startOfMonth(t time.Time) time.Time {
 
 func dayKey(t time.Time) string {
 	return startOfDay(t).Format("2006-01-02")
+}
+
+func deriveFocusTag(tokens int64, cost float64, allTokens []int64, allCosts []float64) string {
+	// Focus tag precedence: spike (125% rule) > heavy (175% median) > quiet (25% median)
+	// Spike: highest in month AND >= 125% of second-highest (no ties)
+	// Heavy: tokens OR cost >= 175% of median
+	// Quiet: both tokens AND cost < 25% of median
+	// Returns "--" if no tag matches.
+
+	// Filter out zero/non-positive values
+	nonZeroTokens := make([]int64, 0, len(allTokens))
+	nonZeroCosts := make([]float64, 0, len(allCosts))
+	for _, t := range allTokens {
+		if t > 0 {
+			nonZeroTokens = append(nonZeroTokens, t)
+		}
+	}
+	for _, c := range allCosts {
+		if c > 0 {
+			nonZeroCosts = append(nonZeroCosts, c)
+		}
+	}
+
+	// Edge case: if this day has no activity, return "--"
+	if tokens <= 0 && cost <= 0 {
+		return "--"
+	}
+
+	// Check for spike: highest in month AND >= 125% of second-highest
+	// Collect non-zero tokens for spike comparison
+	spikeTokens := make([]int64, 0, len(allTokens))
+	for _, t := range allTokens {
+		if t > 0 {
+			spikeTokens = append(spikeTokens, t)
+		}
+	}
+
+	// Spike is based on tokens being the unique highest and >= 125% of next
+	if len(spikeTokens) > 0 {
+		sort.Slice(spikeTokens, func(i, j int) bool { return spikeTokens[i] > spikeTokens[j] })
+		if tokens == spikeTokens[0] && len(spikeTokens) > 1 {
+			// Check if current tokens is the unique highest and >= 125% of next
+			if float64(tokens) >= float64(spikeTokens[1])*1.25 {
+				return "spike"
+			}
+		}
+	}
+
+	// Calculate medians
+	medianTokens := calculateMedian(nonZeroTokens)
+	medianCost := calculateMedianFloat(nonZeroCosts)
+
+	// Check for heavy: tokens >= 175% of median OR cost >= 175% of median
+	if medianTokens > 0 && float64(tokens) >= medianTokens*1.75 {
+		return "heavy"
+	}
+	if medianCost > 0 && cost >= medianCost*1.75 {
+		return "heavy"
+	}
+
+	// Check for quiet: both tokens AND cost < 25% of median
+	quietTokens := medianTokens > 0 && float64(tokens) < medianTokens*0.25
+	quietCost := medianCost > 0 && cost < medianCost*0.25
+	if quietTokens && quietCost {
+		return "quiet"
+	}
+
+	return "--"
+}
+
+func calculateMedian(values []int64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	sorted := make([]int64, len(values))
+	copy(sorted, values)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+
+	if len(sorted)%2 == 0 {
+		return float64(sorted[len(sorted)/2-1]+sorted[len(sorted)/2]) / 2
+	}
+	return float64(sorted[len(sorted)/2])
+}
+
+func calculateMedianFloat(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	sorted := make([]float64, len(values))
+	copy(sorted, values)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+
+	if len(sorted)%2 == 0 {
+		return (sorted[len(sorted)/2-1] + sorted[len(sorted)/2]) / 2
+	}
+	return sorted[len(sorted)/2]
 }
 
 func unixTimestampToTime(value int64) time.Time {
