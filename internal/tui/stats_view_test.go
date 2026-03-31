@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
+	"github.com/kayden-kim/oc/internal/config"
 	"github.com/kayden-kim/oc/internal/stats"
 )
 
@@ -220,5 +221,155 @@ func TestFormatPerHourWithTop(t *testing.T) {
 	}
 	if got := formatCodeLinesPerHourWithTop(100, 0, days); got != "-- (--)" {
 		t.Fatalf("formatCodeLinesPerHourWithTop zero minutes = %q, want %q", got, "-- (--)")
+	}
+}
+
+func TestRenderMonthDailyLines_FormatsHeaderAndDays(t *testing.T) {
+	m := NewModel([]PluginItem{}, []EditChoice{}, []SessionItem{}, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, "v1.0", false)
+	m.width = 80
+	m.height = 24
+
+	report := stats.MonthDailyReport{
+		MonthStart:    time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local),
+		MonthEnd:      time.Date(2026, time.April, 1, 0, 0, 0, 0, time.Local),
+		ActiveDays:    3,
+		TotalMessages: 10,
+		TotalSessions: 2,
+		TotalTokens:   5000,
+		TotalCost:     15.5,
+		Days: []stats.DailySummary{
+			{Date: time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local), Messages: 2, Sessions: 1, Tokens: 1000, Cost: 3.0, FocusTag: "spike"},
+			{Date: time.Date(2026, time.March, 15, 0, 0, 0, 0, time.Local), Messages: 5, Sessions: 1, Tokens: 2500, Cost: 7.5, FocusTag: "heavy"},
+			{Date: time.Date(2026, time.March, 20, 0, 0, 0, 0, time.Local), Messages: 3, Sessions: 1, Tokens: 1500, Cost: 5.0, FocusTag: "--"},
+		},
+	}
+
+	lines := m.renderMonthDailyLines(report)
+
+	if len(lines) == 0 {
+		t.Fatalf("expected non-empty lines")
+	}
+
+	// Check that header contains month name
+	plainLines := make([]string, len(lines))
+	for i, line := range lines {
+		plainLines[i] = stripANSI(line)
+	}
+
+	if !strings.Contains(strings.Join(plainLines, " "), "March 2026") {
+		t.Fatalf("expected month name in header")
+	}
+
+	// Check that days are included
+	foundMar01 := false
+	foundMar15 := false
+	for _, line := range plainLines {
+		if strings.Contains(line, "Mar 01") {
+			foundMar01 = true
+		}
+		if strings.Contains(line, "Mar 15") {
+			foundMar15 = true
+		}
+	}
+
+	if !foundMar01 {
+		t.Fatalf("expected Mar 01 in output")
+	}
+	if !foundMar15 {
+		t.Fatalf("expected Mar 15 in output")
+	}
+
+	// Check that focus tags are present
+	if !strings.Contains(strings.Join(plainLines, " "), "spike") {
+		t.Fatalf("expected 'spike' focus tag in output")
+	}
+	if !strings.Contains(strings.Join(plainLines, " "), "heavy") {
+		t.Fatalf("expected 'heavy' focus tag in output")
+	}
+}
+
+func TestRenderMonthDailyLines_ResponsiveToNarrowLayout(t *testing.T) {
+	m := NewModel([]PluginItem{}, []EditChoice{}, []SessionItem{}, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, "v1.0", false)
+	m.width = 60 // Narrow layout
+	m.height = 24
+
+	report := stats.MonthDailyReport{
+		MonthStart:    time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local),
+		MonthEnd:      time.Date(2026, time.April, 1, 0, 0, 0, 0, time.Local),
+		ActiveDays:    2,
+		TotalMessages: 5,
+		TotalSessions: 1,
+		TotalTokens:   3000,
+		TotalCost:     10.0,
+		Days: []stats.DailySummary{
+			{Date: time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local), Messages: 2, Sessions: 1, Tokens: 1500, Cost: 5.0, FocusTag: "heavy"},
+			{Date: time.Date(2026, time.March, 15, 0, 0, 0, 0, time.Local), Messages: 3, Sessions: 1, Tokens: 1500, Cost: 5.0, FocusTag: "--"},
+		},
+	}
+
+	lines := m.renderMonthDailyLines(report)
+
+	// Check that all lines fit within width
+	for i, line := range lines {
+		plain := stripANSI(line)
+		width := lipgloss.Width(plain)
+		if width > m.layoutWidth() {
+			t.Fatalf("line %d exceeds layout width: %d > %d in %q", i, width, m.layoutWidth(), plain)
+		}
+	}
+}
+
+func TestMonthDailyColumnWidths_ResponsiveToLayout(t *testing.T) {
+	tests := []struct {
+		name           string
+		width          int
+		expectSessions bool
+	}{
+		{name: "wide layout (100 cols)", width: 100, expectSessions: true},  // 76 available → sessions included
+		{name: "medium layout (72 cols)", width: 72, expectSessions: false}, // 68 available → no sessions
+		{name: "narrow layout (60 cols)", width: 60, expectSessions: false}, // 56 available → compact
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel([]PluginItem{}, []EditChoice{}, []SessionItem{}, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, "v1.0", false)
+			m.width = tt.width
+			m.height = 24
+
+			layout := m.monthDailyColumnWidths()
+
+			if tt.expectSessions && layout.sessionsWidth == 0 {
+				t.Fatalf("expected sessions column in %s", tt.name)
+			}
+			if !tt.expectSessions && layout.sessionsWidth > 0 {
+				t.Fatalf("did not expect sessions column in %s", tt.name)
+			}
+
+			if layout.dateWidth <= 0 || layout.tokensWidth <= 0 || layout.costWidth <= 0 {
+				t.Fatalf("expected positive column widths in %s, got %+v", tt.name, layout)
+			}
+		})
+	}
+}
+
+func TestFocusTagStyle_ReturnsConsistentStyle(t *testing.T) {
+	m := NewModel([]PluginItem{}, []EditChoice{}, []SessionItem{}, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, "v1.0", false)
+
+	tests := []struct {
+		tag string
+	}{
+		{tag: "spike"},
+		{tag: "heavy"},
+		{tag: "quiet"},
+		{tag: "--"},
+	}
+
+	for _, tt := range tests {
+		style := m.focusTagStyle(tt.tag)
+		// Check that style rendering doesn't panic or return empty
+		rendered := style.Render("test")
+		if len(rendered) == 0 {
+			t.Fatalf("expected non-empty rendered output for tag %q", tt.tag)
+		}
 	}
 }

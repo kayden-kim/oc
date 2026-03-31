@@ -743,6 +743,16 @@ func (m Model) statsContentLines() []string {
 	case 0:
 		return m.renderOverviewLines()
 	case 1:
+		// Month-daily report (month-list view) - new design
+		report := m.currentMonthDaily()
+		if !report.MonthStart.IsZero() {
+			// Month-daily data available, render it
+			if m.currentMonthDailyLoading() && len(report.Days) == 0 {
+				return []string{"Loading month-daily stats..."}
+			}
+			return m.renderMonthDailyLines(report)
+		}
+		// Fallback to old window report rendering if month-daily isn't available
 		if m.currentWindowLoading() && m.currentWindowReport().Label == "" {
 			return []string{"Loading stats..."}
 		}
@@ -786,6 +796,20 @@ func (m Model) currentWindowLoading() bool {
 		return m.globalDailyLoading
 	}
 	return m.globalMonthlyLoading
+}
+
+func (m Model) currentMonthDaily() stats.MonthDailyReport {
+	if m.projectScope {
+		return m.projectMonthDaily
+	}
+	return m.globalMonthDaily
+}
+
+func (m Model) currentMonthDailyLoading() bool {
+	if m.projectScope {
+		return m.projectMonthDailyLoading
+	}
+	return m.globalMonthDailyLoading
 }
 
 func (m Model) renderStatsTabs() string {
@@ -1803,4 +1827,195 @@ func tableStringWithMaxWidth(headers []string, rows [][]string, rightAligned map
 		lines = append(lines, formatRow(row))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// renderMonthDailyLines renders month-list view with daily summaries and focus tags
+func (m Model) renderMonthDailyLines(report stats.MonthDailyReport) []string {
+	if report.MonthStart.IsZero() {
+		return []string{"No data"}
+	}
+
+	title := renderSubSectionHeader(
+		fmt.Sprintf("Daily Summary — %s", report.MonthStart.Format("January 2006")),
+		todaySectionTitleStyle,
+	)
+
+	if m.isNarrowLayout() {
+		return m.renderCompactMonthDailyLines(report)
+	}
+
+	lines := []string{title}
+
+	// Month header: summary stats
+	monthSummary := fmt.Sprintf(
+		"Active: %d | Messages: %d | Sessions: %d | Tokens: %s | Cost: %s",
+		report.ActiveDays,
+		report.TotalMessages,
+		report.TotalSessions,
+		formatSummaryTokens(report.TotalTokens),
+		formatSummaryCurrency(report.TotalCost),
+	)
+	lines = append(lines, renderSubSectionHeader(truncateDisplayWidth(monthSummary, m.statsTableMaxWidth()), habitSectionTitleStyle))
+	lines = append(lines, "")
+
+	// Column widths depend on layout
+	widthLayout := m.monthDailyColumnWidths()
+
+	// Header row
+	headerRow := m.formatMonthDailyHeaderRow(widthLayout)
+	lines = append(lines, headerRow)
+	lines = append(lines, "")
+
+	// Daily rows
+	for _, day := range report.Days {
+		row := m.formatMonthDailyRow(day, widthLayout)
+		lines = append(lines, row)
+	}
+
+	return lines
+}
+
+// renderCompactMonthDailyLines renders month-list for narrow terminals
+func (m Model) renderCompactMonthDailyLines(report stats.MonthDailyReport) []string {
+	if report.MonthStart.IsZero() {
+		return []string{"No data"}
+	}
+
+	clamp := func(text string) string {
+		return truncateDisplayWidth(text, m.layoutWidth())
+	}
+	bullet := func(text string) string {
+		return defaultTextStyle.Render("    ") + truncateDisplayWidth(text, max(0, m.layoutWidth()-4))
+	}
+
+	title := fmt.Sprintf("Daily Summary — %s", report.MonthStart.Format("January 2006"))
+	lines := []string{
+		clamp(renderSubSectionHeader(title, todaySectionTitleStyle)),
+		bullet(fmt.Sprintf("Days: %d | Messages: %d | Sessions: %d", report.ActiveDays, report.TotalMessages, report.TotalSessions)),
+		bullet(fmt.Sprintf("Tokens: %s | Cost: %s", formatSummaryTokens(report.TotalTokens), formatSummaryCurrency(report.TotalCost))),
+		"",
+	}
+
+	// Compact day rows
+	for _, day := range report.Days {
+		line := fmt.Sprintf("%s %s msgs=%d tokens=%s cost=%s tag=%s",
+			day.Date.Format("Jan 02"),
+			blankDash(""),
+			day.Messages,
+			formatCompactTokens(day.Tokens),
+			formatSummaryCurrency(day.Cost),
+			day.FocusTag,
+		)
+		lines = append(lines, bullet(line))
+	}
+
+	return lines
+}
+
+// monthDayColumnWidths returns column widths for month-daily table based on layout
+func (m Model) monthDailyColumnWidths() monthDailyLayout {
+	availWidth := m.statsTableMaxWidth()
+
+	// Column: date (12) | messages (8) | sessions (8) | tokens (12) | cost (10) | tag (8)
+	// Total min: 12 + 8 + 8 + 12 + 10 + 8 + separators = 66+
+	layout := monthDailyLayout{
+		dateWidth:     12,
+		messagesWidth: 8,
+		sessionsWidth: 8,
+		tokensWidth:   12,
+		costWidth:     10,
+		tagWidth:      8,
+	}
+
+	// Adjust for narrower layouts
+	if availWidth < 70 {
+		// 60-column layout: compact all
+		layout.dateWidth = 10
+		layout.messagesWidth = 6
+		layout.sessionsWidth = 0
+		layout.tokensWidth = 8
+		layout.costWidth = 8
+		layout.tagWidth = 6
+	} else if availWidth < 74 {
+		// 72-column layout: drop sessions
+		layout.dateWidth = 12
+		layout.messagesWidth = 8
+		layout.sessionsWidth = 0 // omitted
+		layout.tokensWidth = 10
+		layout.costWidth = 10
+		layout.tagWidth = 8
+	}
+
+	return layout
+}
+
+type monthDailyLayout struct {
+	dateWidth     int
+	messagesWidth int
+	sessionsWidth int
+	tokensWidth   int
+	costWidth     int
+	tagWidth      int
+}
+
+// formatMonthDailyHeaderRow formats the table header
+func (m Model) formatMonthDailyHeaderRow(layout monthDailyLayout) string {
+	parts := []string{}
+	parts = append(parts, renderPadded("Date", layout.dateWidth))
+	parts = append(parts, renderPadded("Msgs", layout.messagesWidth))
+	if layout.sessionsWidth > 0 {
+		parts = append(parts, renderPadded("Sessions", layout.sessionsWidth))
+	}
+	parts = append(parts, renderPadded("Tokens", layout.tokensWidth))
+	parts = append(parts, renderPadded("Cost", layout.costWidth))
+	parts = append(parts, renderPadded("Focus", layout.tagWidth))
+
+	return "| " + strings.Join(parts, " | ") + " |"
+}
+
+// formatMonthDailyRow formats a single daily summary row
+func (m Model) formatMonthDailyRow(day stats.DailySummary, layout monthDailyLayout) string {
+	tagStyle := m.focusTagStyle(day.FocusTag)
+
+	parts := []string{}
+	parts = append(parts, renderPadded(day.Date.Format("Jan 02"), layout.dateWidth))
+	parts = append(parts, renderPaddedRight(fmt.Sprintf("%d", day.Messages), layout.messagesWidth))
+	if layout.sessionsWidth > 0 {
+		parts = append(parts, renderPaddedRight(fmt.Sprintf("%d", day.Sessions), layout.sessionsWidth))
+	}
+	parts = append(parts, renderPaddedRight(formatCompactTokens(day.Tokens), layout.tokensWidth))
+	parts = append(parts, renderPaddedRight(formatSummaryCurrency(day.Cost), layout.costWidth))
+	parts = append(parts, tagStyle.Width(layout.tagWidth).Align(lipgloss.Center).Render(day.FocusTag))
+
+	return "| " + strings.Join(parts, " | ") + " |"
+}
+
+// focusTagStyle returns the appropriate style for a focus tag
+func (m Model) focusTagStyle(tag string) lipgloss.Style {
+	switch tag {
+	case "spike":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#FF9900")).Bold(true)
+	case "heavy":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Bold(false)
+	case "quiet":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#999999")).Bold(false)
+	default:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#555555")).Bold(false)
+	}
+}
+
+// Helper formatting functions
+func renderPadded(text string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	return text + strings.Repeat(" ", max(0, width-len(text)))
+}
+
+func renderPaddedRight(text string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	padding := max(0, width-lipgloss.Width(text))
+	return strings.Repeat(" ", padding) + text
 }
