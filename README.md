@@ -199,13 +199,15 @@ If `oh-my-opencode.json`, `oh-my-opencode.jsonc`, `oh-my-openagent.json`, or `oh
 
 | Key | Action |
 |-----|--------|
-| `↑` / `↓` or `j` / `k` | Scroll one line |
-| `PgUp` / `PgDn` | Scroll one visible page |
-| `Ctrl+U` / `Ctrl+D` | Scroll half page |
+| `↑` / `↓` or `j` / `k` | Move selection in list views, scroll in detail views |
+| `PgUp` / `PgDn` | Page selection in list views, scroll one visible page in detail views |
+| `Ctrl+U` / `Ctrl+D` | Half-page selection in list views, half-page scroll in detail views |
 | `Home` / `End` | Jump to top/bottom |
 | `←` / `→` or `h` / `l` | Switch stats tabs |
+| `Enter` | Open selected day/month detail from list views |
+| `Esc` | Back from detail view or return to launcher |
 | `g` | Toggle global/project scope |
-| `Tab` / `Esc` | Return to launcher |
+| `Tab` | Return to launcher |
 
 ## Building from source
 
