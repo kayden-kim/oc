@@ -87,6 +87,52 @@ func scriptedTUI(t *testing.T, responses ...tuiResponse) func([]tui.PluginItem, 
 	}
 }
 
+func setupConfigFiles(t *testing.T, tmp string, pluginContent string, ocContent string) string {
+	t.Helper()
+	configDir := filepath.Join(tmp, ".config", "opencode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "opencode.json")
+	if err := os.WriteFile(configPath, []byte(pluginContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if ocContent != "" {
+		ocConfigPath := filepath.Join(tmp, ".oc")
+		if err := os.WriteFile(ocConfigPath, []byte(ocContent), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return configPath
+}
+
+func captureOutput(t *testing.T, stderrOnly bool, fn func()) string {
+	t.Helper()
+	readPipe, writePipe, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create pipe: %v", err)
+	}
+	originalStdout := os.Stdout
+	originalStderr := os.Stderr
+	if !stderrOnly {
+		os.Stdout = writePipe
+	}
+	os.Stderr = writePipe
+	defer func() {
+		os.Stdout = originalStdout
+		os.Stderr = originalStderr
+	}()
+
+	fn()
+	writePipe.Close()
+	output, readErr := io.ReadAll(readPipe)
+	readPipe.Close()
+	if readErr != nil {
+		t.Fatalf("failed to read captured output: %v", readErr)
+	}
+	return string(output)
+}
+
 func (f *fakeEditor) Open(path string, configEditor string) error {
 	f.opened = true
 	f.path = path
@@ -96,23 +142,11 @@ func (f *fakeEditor) Open(path string, configEditor string) error {
 
 func TestRunWithDeps_FullHappyPath(t *testing.T) {
 	tmp := t.TempDir()
-	configDir := filepath.Join(tmp, ".config", "opencode")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	configPath := filepath.Join(configDir, "opencode.json")
 	initial := "{\n  \"plugin\": [\n    \"plugin-a\",\n    // \"plugin-b\",\n    \"plugin-c\"\n  ]\n}\n"
-	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	configPath := setupConfigFiles(t, tmp, initial, "allow_multiple_plugins = true\n")
 
 	r := &fakeRunner{}
 	calledTUI := 0
-	ocConfigPath := filepath.Join(tmp, ".oc")
-	if err := os.WriteFile(ocConfigPath, []byte("allow_multiple_plugins = true\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	err := RunWithDeps([]string{"--model", "gpt-5"}, RuntimeDeps{
 		NewRunner:    func() RunnerAPI { return r },
@@ -174,15 +208,7 @@ func TestRunWithDeps_FullHappyPath(t *testing.T) {
 
 func TestRunWithDeps_RefreshesFromManualSelectionToLatestSessionAcrossLoop(t *testing.T) {
 	tmp := t.TempDir()
-	configDir := filepath.Join(tmp, ".config", "opencode")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	configPath := filepath.Join(configDir, "opencode.json")
-	if err := os.WriteFile(configPath, []byte("{\n  \"plugin\": [\n    \"plugin-a\"\n  ]\n}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	setupConfigFiles(t, tmp, "{\n  \"plugin\": [\n    \"plugin-a\"\n  ]\n}\n", "")
 
 	r := &fakeRunner{}
 	call := 0
@@ -256,15 +282,7 @@ func TestRefreshSelectedSession_UsesCurrentProjectPath(t *testing.T) {
 
 func TestRunWithDeps_UserProvidedSessionFlagWins(t *testing.T) {
 	tmp := t.TempDir()
-	configDir := filepath.Join(tmp, ".config", "opencode")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	configPath := filepath.Join(configDir, "opencode.json")
-	if err := os.WriteFile(configPath, []byte("{\n  \"plugin\": [\n    \"plugin-a\"\n  ]\n}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	setupConfigFiles(t, tmp, "{\n  \"plugin\": [\n    \"plugin-a\"\n  ]\n}\n", "")
 
 	r := &fakeRunner{}
 	err := RunWithDeps([]string{"--session", "ses_manual"}, RuntimeDeps{
@@ -430,57 +448,32 @@ func TestRunWithDeps_DefaultsAllowMultiplePluginsToFalse(t *testing.T) {
 
 func TestRunWithDeps_DoesNotPrintPreLaunchText(t *testing.T) {
 	tmp := t.TempDir()
-	configDir := filepath.Join(tmp, ".config", "opencode")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	configPath := filepath.Join(configDir, "opencode.json")
 	initial := "{\n  \"plugin\": [\n    \"plugin-a\"\n  ]\n}\n"
-	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	setupConfigFiles(t, tmp, initial, "")
 
 	r := &fakeRunner{}
-	readPipe, writePipe, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("failed to create pipe: %v", err)
-	}
-	originalStdout := os.Stdout
-	originalStderr := os.Stderr
-	os.Stdout = writePipe
-	os.Stderr = writePipe
-	defer func() {
-		os.Stdout = originalStdout
-		os.Stderr = originalStderr
-	}()
-
-	err = RunWithDeps(nil, RuntimeDeps{
-		NewRunner:         func() RunnerAPI { return r },
-		UserHomeDir:       func() (string, error) { return tmp, nil },
-		ReadFile:          os.ReadFile,
-		LoadOcConfig:      config.LoadOcConfig,
-		ParsePlugins:      config.ParsePlugins,
-		FilterByWhitelist: DefaultDeps("test").FilterByWhitelist,
-		RunTUI: scriptedTUI(t,
-			tuiResponse{selections: map[string]bool{"plugin-a": true}},
-			tuiResponse{cancelled: true},
-		),
-		ApplySelections: config.ApplySelections,
-		WriteConfigFile: config.WriteConfigFile,
-		OpenEditor:      func(string, string) error { return nil },
+	err := error(nil)
+	outputStr := captureOutput(t, false, func() {
+		err = RunWithDeps(nil, RuntimeDeps{
+			NewRunner:         func() RunnerAPI { return r },
+			UserHomeDir:       func() (string, error) { return tmp, nil },
+			ReadFile:          os.ReadFile,
+			LoadOcConfig:      config.LoadOcConfig,
+			ParsePlugins:      config.ParsePlugins,
+			FilterByWhitelist: DefaultDeps("test").FilterByWhitelist,
+			RunTUI: scriptedTUI(t,
+				tuiResponse{selections: map[string]bool{"plugin-a": true}},
+				tuiResponse{cancelled: true},
+			),
+			ApplySelections: config.ApplySelections,
+			WriteConfigFile: config.WriteConfigFile,
+			OpenEditor:      func(string, string) error { return nil },
+		})
 	})
-	writePipe.Close()
-	output, readErr := io.ReadAll(readPipe)
-	readPipe.Close()
-	if readErr != nil {
-		t.Fatalf("failed to read captured output: %v", readErr)
-	}
 	if err != nil {
 		t.Fatalf("RunWithDeps returned error: %v", err)
 	}
 
-	outputStr := string(output)
 	for _, unwanted := range []string{"Selected plugins:", "Port selection:", "Using port", "Launching opencode without --port flag."} {
 		if strings.Contains(outputStr, unwanted) {
 			t.Fatalf("expected no direct pre-launch output %q, got %q", unwanted, outputStr)
@@ -1257,16 +1250,6 @@ func TestLoadIterationState_ProjectParseErrorFallsBackToUserOnly(t *testing.T) {
 	userConfig := []byte("{\n  \"plugin\": [\n    \"plugin-a\",\n    // \"plugin-b\"\n  ]\n}\n")
 	badProjectConfig := []byte("{\n  \"plugin\": [\n")
 
-	readPipe, writePipe, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("failed to create stderr pipe: %v", err)
-	}
-	originalStderr := os.Stderr
-	os.Stderr = writePipe
-	defer func() {
-		os.Stderr = originalStderr
-	}()
-
 	deps := RuntimeDeps{
 		Getwd: func() (string, error) { return cwd, nil },
 		ListSessions: func(string) ([]tui.SessionItem, error) {
@@ -1290,16 +1273,13 @@ func TestLoadIterationState_ProjectParseErrorFallsBackToUserOnly(t *testing.T) {
 		FilterByWhitelist: DefaultDeps("test").FilterByWhitelist,
 	}
 
-	state, loadErr := loadIterationState(nil, deps, paths, tui.SessionItem{})
+	var state iterationState
+	var loadErr error
+	stderrOutput := captureOutput(t, true, func() {
+		state, loadErr = loadIterationState(nil, deps, paths, tui.SessionItem{})
+	})
 	if loadErr != nil {
 		t.Fatalf("loadIterationState returned error: %v", loadErr)
-	}
-
-	writePipe.Close()
-	stderrOutput, readErr := io.ReadAll(readPipe)
-	readPipe.Close()
-	if readErr != nil {
-		t.Fatalf("failed to read stderr output: %v", readErr)
 	}
 
 	if state.projectSource != nil {
@@ -1709,20 +1689,7 @@ func baseDepsWithPort(tmp string, r *fakeRunner) RuntimeDeps {
 
 func setupPortTestFiles(t *testing.T, tmp string, pluginContent string, ocContent string) {
 	t.Helper()
-	configDir := filepath.Join(tmp, ".config", "opencode")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	configPath := filepath.Join(configDir, "opencode.json")
-	if err := os.WriteFile(configPath, []byte(pluginContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if ocContent != "" {
-		ocConfigPath := filepath.Join(tmp, ".oc")
-		if err := os.WriteFile(ocConfigPath, []byte(ocContent), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
+	setupConfigFiles(t, tmp, pluginContent, ocContent)
 }
 
 func newLoopbackServer(t *testing.T, handler http.Handler) *httptest.Server {
@@ -2311,16 +2278,6 @@ func TestRunWithDeps_LogsToastFailureWithoutBreakingLaunch(t *testing.T) {
 	done := make(chan struct{})
 	const serverPort = "51234"
 
-	readPipe, writePipe, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("failed to create stderr pipe: %v", err)
-	}
-	originalStderr := os.Stderr
-	os.Stderr = writePipe
-	defer func() {
-		os.Stderr = originalStderr
-	}()
-
 	r := &fakeRunner{}
 	deps := baseDepsWithPort(tmp, r)
 	deps.SendToast = func(_ context.Context, port int, plugins []string) error {
@@ -2338,7 +2295,10 @@ func TestRunWithDeps_LogsToastFailureWithoutBreakingLaunch(t *testing.T) {
 		tuiResponse{cancelled: true},
 	)
 
-	err = RunWithDeps([]string{"--model", "gpt-5"}, deps)
+	var err error
+	output := captureOutput(t, true, func() {
+		err = RunWithDeps([]string{"--model", "gpt-5"}, deps)
+	})
 	if err != nil {
 		t.Fatalf("RunWithDeps returned error: %v", err)
 	}
@@ -2349,15 +2309,8 @@ func TestRunWithDeps_LogsToastFailureWithoutBreakingLaunch(t *testing.T) {
 		t.Fatal("expected SendToast to be invoked")
 	}
 	time.Sleep(50 * time.Millisecond)
-	writePipe.Close()
-	output, readErr := io.ReadAll(readPipe)
-	readPipe.Close()
-	if readErr != nil {
-		t.Fatalf("failed to read captured stderr: %v", readErr)
-	}
-
-	if !strings.Contains(string(output), "oc: error: show-toast failed on port") {
-		t.Fatalf("expected show-toast error log, got %q", string(output))
+	if !strings.Contains(output, "oc: error: show-toast failed on port") {
+		t.Fatalf("expected show-toast error log, got %q", output)
 	}
 }
 

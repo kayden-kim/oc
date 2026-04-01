@@ -7,7 +7,7 @@
 | Task | Location | Notes |
 |------|----------|-------|
 | Start here | `cmd/oc/main.go` | thin entrypoint only |
-| Change runtime behavior | `internal/app/app.go` | orchestration, sessions, config IO, launch loop |
+| Change runtime behavior | `internal/app/app.go`, `internal/app/app_*.go` | orchestration loop plus deps/state/launch helpers |
 | Verify entrypoint changes | `cmd/oc/main_test.go` | version, exit-code mapping, generic error printing |
 
 ## LOCAL CONVENTIONS

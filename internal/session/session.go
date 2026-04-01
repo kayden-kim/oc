@@ -3,7 +3,6 @@ package session
 import (
 	"database/sql"
 	"encoding/json"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -11,9 +10,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kayden-kim/oc/internal/tui"
+	"github.com/kayden-kim/oc/internal/opencodedb"
 	_ "modernc.org/sqlite"
 )
+
+type SessionItem struct {
+	ID        string
+	Title     string
+	UpdatedAt time.Time
+}
 
 type sessionRow struct {
 	ID        string `json:"id"`
@@ -22,7 +27,7 @@ type sessionRow struct {
 	Directory string `json:"directory"`
 }
 
-func List(dir string) ([]tui.SessionItem, error) {
+func List(dir string) ([]SessionItem, error) {
 	items, err := listSessionsDB(dir)
 	if err == nil {
 		return items, nil
@@ -31,13 +36,13 @@ func List(dir string) ([]tui.SessionItem, error) {
 	return listSessionsCLI(dir)
 }
 
-func listSessionsDB(dir string) ([]tui.SessionItem, error) {
-	dbPath, err := opencodeDBPath()
+func listSessionsDB(dir string) ([]SessionItem, error) {
+	dbPath, err := opencodedb.DBPath()
 	if err != nil {
 		return nil, err
 	}
 
-	db, err := sql.Open("sqlite", sqliteDSN(dbPath))
+	db, err := sql.Open("sqlite", opencodedb.SQLiteDSN(dbPath))
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +59,7 @@ func listSessionsDB(dir string) ([]tui.SessionItem, error) {
 	}
 	defer rows.Close()
 
-	var result []tui.SessionItem
+	var result []SessionItem
 	for rows.Next() {
 		var row sessionRow
 		if err := rows.Scan(&row.ID, &row.Title, &row.Updated, &row.Directory); err != nil {
@@ -63,7 +68,7 @@ func listSessionsDB(dir string) ([]tui.SessionItem, error) {
 		if !sameDir(row.Directory, dir) {
 			continue
 		}
-		result = append(result, tui.SessionItem{ID: row.ID, Title: row.Title, UpdatedAt: unixTimestampToTime(row.Updated)})
+		result = append(result, SessionItem{ID: row.ID, Title: row.Title, UpdatedAt: opencodedb.UnixTimestampToTime(row.Updated)})
 	}
 
 	if err := rows.Err(); err != nil {
@@ -73,7 +78,7 @@ func listSessionsDB(dir string) ([]tui.SessionItem, error) {
 	return result, nil
 }
 
-func listSessionsCLI(dir string) ([]tui.SessionItem, error) {
+func listSessionsCLI(dir string) ([]SessionItem, error) {
 	cmd := exec.Command("opencode", "session", "list", "--format", "json")
 	out, err := cmd.Output()
 	if err != nil {
@@ -89,106 +94,20 @@ func listSessionsCLI(dir string) ([]tui.SessionItem, error) {
 		return rows[i].Updated > rows[j].Updated
 	})
 
-	var result []tui.SessionItem
+	var result []SessionItem
 	for _, row := range rows {
 		if !sameDir(row.Directory, dir) {
 			continue
 		}
-		result = append(result, tui.SessionItem{ID: row.ID, Title: row.Title, UpdatedAt: unixTimestampToTime(row.Updated)})
+		result = append(result, SessionItem{ID: row.ID, Title: row.Title, UpdatedAt: opencodedb.UnixTimestampToTime(row.Updated)})
 	}
 
 	return result, nil
 }
 
-func sqliteDSN(path string) string {
-	path = filepath.ToSlash(path)
-	if runtime.GOOS == "windows" && !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	return "file:" + path + "?mode=ro&_pragma=busy_timeout(5000)"
-}
-
-func opencodeDBPath() (string, error) {
-	if name := os.Getenv("OPENCODE_DB"); name != "" {
-		if filepath.IsAbs(name) {
-			if _, err := os.Stat(name); err == nil {
-				return name, nil
-			} else {
-				return "", err
-			}
-		}
-
-		root, err := opencodeDataDir()
-		if err != nil {
-			return "", err
-		}
-		path := filepath.Join(root, name)
-		if _, err := os.Stat(path); err == nil {
-			return path, nil
-		} else {
-			return "", err
-		}
-	}
-
-	root, err := opencodeDataDir()
-	if err != nil {
-		return "", err
-	}
-
-	path := filepath.Join(root, "opencode.db")
-	if _, err := os.Stat(path); err == nil {
-		return path, nil
-	}
-
-	paths, err := filepath.Glob(filepath.Join(root, "opencode-*.db"))
-	if err != nil {
-		return "", err
-	}
-	if len(paths) == 0 {
-		return "", os.ErrNotExist
-	}
-
-	sort.SliceStable(paths, func(i, j int) bool {
-		left, leftErr := os.Stat(paths[i])
-		right, rightErr := os.Stat(paths[j])
-		if leftErr != nil || rightErr != nil {
-			return paths[i] < paths[j]
-		}
-		return left.ModTime().After(right.ModTime())
-	})
-
-	return paths[0], nil
-}
-
-func opencodeDataDir() (string, error) {
-	if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
-		return filepath.Join(dir, "opencode"), nil
-	}
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-
-	return filepath.Join(home, ".local", "share", "opencode"), nil
-}
-
-func unixTimestampToTime(value int64) time.Time {
-	switch {
-	case value >= 1_000_000_000_000_000_000 || value <= -1_000_000_000_000_000_000:
-		return time.Unix(0, value).Local()
-	case value >= 1_000_000_000_000_000 || value <= -1_000_000_000_000_000:
-		return time.UnixMicro(value).Local()
-	case value >= 1_000_000_000_000 || value <= -1_000_000_000_000:
-		return time.UnixMilli(value).Local()
-	default:
-		return time.Unix(value, 0).Local()
-	}
-}
-
-func Latest(items []tui.SessionItem) tui.SessionItem {
+func Latest(items []SessionItem) SessionItem {
 	if len(items) == 0 {
-		return tui.SessionItem{}
+		return SessionItem{}
 	}
 	return items[0]
 }

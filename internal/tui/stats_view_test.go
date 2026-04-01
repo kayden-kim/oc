@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -11,12 +10,6 @@ import (
 	"github.com/kayden-kim/oc/internal/config"
 	"github.com/kayden-kim/oc/internal/stats"
 )
-
-var ansiRegexp = regexp.MustCompile(`\x1b\[[0-9;]*m`)
-
-func stripANSI(value string) string {
-	return ansiRegexp.ReplaceAllString(value, "")
-}
 
 func TestRenderStatsTable_RespectsMaxWidth(t *testing.T) {
 	lines := renderStatsTable(
@@ -109,7 +102,7 @@ func TestStatsTableColumnWidths_PrefersExpandableColumnsForRemainingWidth(t *tes
 }
 
 func TestMonthDailyColumns_PutsSessionsBeforeMessages(t *testing.T) {
-	m := NewModel([]PluginItem{}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, "v1.0", false)
+	m := newStatsTestModel()
 	m.width = 100
 	columns := m.monthDailyColumns()
 
@@ -136,7 +129,7 @@ func TestWindowModelColumns_UsesReasonHeaderAndExpandableNameColumn(t *testing.T
 }
 
 func TestRenderMetricsLines_PutSessionsBeforeMessages(t *testing.T) {
-	m := NewModel([]PluginItem{}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, "v1.0", false)
+	m := newStatsTestModel()
 	m.width = 100
 	m.dailySelectedDate = time.Date(2026, time.March, 2, 0, 0, 0, 0, time.Local)
 	m.monthlySelectedMonth = time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local)
@@ -314,7 +307,7 @@ func TestFormatPerHourWithTop(t *testing.T) {
 }
 
 func TestRenderMonthDailyLines_FormatsHeaderAndDays(t *testing.T) {
-	m := NewModel([]PluginItem{}, []EditChoice{}, []SessionItem{}, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, "v1.0", false)
+	m := newStatsTestModel()
 	m.width = 80
 	m.height = 24
 
@@ -434,7 +427,7 @@ func TestRenderMonthDailyDayLabel_UsesStrongerRedForSelectedSunday(t *testing.T)
 }
 
 func TestRenderMonthDailyWeekdayHeader_UsesStrongerRedForSelectedSunday(t *testing.T) {
-	m := NewModel([]PluginItem{}, []EditChoice{}, []SessionItem{}, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, "v1.0", false)
+	m := newStatsTestModel()
 	m.dailySelectedDate = time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local)
 	header := m.renderMonthDailyWeekdayHeader()
 	if !strings.Contains(header, selectedSundayTextStyle.Render("Su")) {
@@ -443,7 +436,7 @@ func TestRenderMonthDailyWeekdayHeader_UsesStrongerRedForSelectedSunday(t *testi
 }
 
 func TestRenderMonthDailyHeatmapCell_UsesOrangeForSelectedDate(t *testing.T) {
-	m := NewModel([]PluginItem{}, []EditChoice{}, []SessionItem{}, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, "v1.0", false)
+	m := newStatsTestModel()
 	selectedCell := m.renderMonthDailyHeatmapCell(3, true)
 	normalCell := m.renderMonthDailyHeatmapCell(3, false)
 	if selectedCell == normalCell {
@@ -468,7 +461,7 @@ func TestMonthDailyBestStreak_ComputesBestContiguousActiveRun(t *testing.T) {
 }
 
 func TestRenderMonthDailyHeatmapCell_UsesTwoCharacterWidth(t *testing.T) {
-	m := NewModel([]PluginItem{}, []EditChoice{}, []SessionItem{}, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, "v1.0", false)
+	m := newStatsTestModel()
 	cell := stripANSI(m.renderMonthDailyHeatmapCell(3, false))
 	if lipgloss.Width(cell) != 2 {
 		t.Fatalf("expected heatmap cell width 2, got %d in %q", lipgloss.Width(cell), cell)
@@ -479,7 +472,8 @@ func TestRenderMonthDailyHeatmapCell_UsesTwoCharacterWidth(t *testing.T) {
 }
 
 func TestRenderMonthDailyLines_UsesTokenBasedHeatmapNotCost(t *testing.T) {
-	m := NewModel([]PluginItem{}, []EditChoice{}, []SessionItem{}, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{MediumTokens: 1000, HighTokens: 5000}, "v1.0", false)
+	m := newStatsTestModel()
+	m.statsConfig = config.NormalizeStatsConfig(config.StatsConfig{MediumTokens: 1000, HighTokens: 5000})
 	m.width = 80
 	m.height = 24
 
@@ -508,7 +502,7 @@ func TestRenderMonthDailyLines_UsesTokenBasedHeatmapNotCost(t *testing.T) {
 }
 
 func TestRenderDailyDetailLines_UsesRequestedDetailLayout(t *testing.T) {
-	m := NewModel([]PluginItem{}, []EditChoice{}, []SessionItem{}, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, "v1.0", false)
+	m := newStatsTestModel()
 	m.width = 100
 	m.height = 30
 	m.dailySelectedDate = time.Date(2026, time.March, 24, 0, 0, 0, 0, time.Local)
@@ -582,7 +576,7 @@ func TestRenderDailyDetailLines_UsesRequestedDetailLayout(t *testing.T) {
 }
 
 func TestRenderDailyDetailLines_OmitsProjectsInProjectScope(t *testing.T) {
-	m := NewModel([]PluginItem{}, []EditChoice{}, []SessionItem{}, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, "v1.0", false)
+	m := newStatsTestModel()
 	m.width = 100
 	m.height = 30
 	m.projectScope = true
@@ -607,7 +601,7 @@ func TestRenderDailyDetailLines_OmitsProjectsInProjectScope(t *testing.T) {
 }
 
 func TestRenderMonthDailyLines_ResponsiveToNarrowLayout(t *testing.T) {
-	m := NewModel([]PluginItem{}, []EditChoice{}, []SessionItem{}, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, "v1.0", false)
+	m := newStatsTestModel()
 	m.width = 60 // Narrow layout
 	m.height = 24
 
@@ -671,7 +665,7 @@ func TestMonthDailyColumnWidths_ResponsiveToLayout(t *testing.T) {
 }
 
 func TestRenderYearMonthlyLines_FormatsNumericGridAndMetrics(t *testing.T) {
-	m := NewModel([]PluginItem{}, []EditChoice{}, []SessionItem{}, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, "v1.0", false)
+	m := newStatsTestModel()
 	m.width = 100
 	m.height = 30
 	m.statsTab = 2
@@ -724,7 +718,7 @@ func TestRenderYearMonthlyLines_FormatsNumericGridAndMetrics(t *testing.T) {
 }
 
 func TestRenderCompactYearMonthlyLines_UsesActiveCurrentTotalMonthFormat(t *testing.T) {
-	m := NewModel([]PluginItem{}, []EditChoice{}, []SessionItem{}, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, "v1.0", false)
+	m := newStatsTestModel()
 	m.width = 60
 	m.height = 24
 	m.statsTab = 2
@@ -830,7 +824,7 @@ func TestRenderYearMonthlyDetailLines_AppendsSelectedMonthDetail(t *testing.T) {
 }
 
 func TestRenderYearMonthlyDetailLines_LoadingHidesHeaderMeta(t *testing.T) {
-	m := NewModel([]PluginItem{}, []EditChoice{}, []SessionItem{}, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, "v1.0", false)
+	m := newStatsTestModel()
 	m.width = 100
 	m.height = 30
 	m.statsTab = 2
@@ -846,7 +840,7 @@ func TestRenderYearMonthlyDetailLines_LoadingHidesHeaderMeta(t *testing.T) {
 }
 
 func TestRenderYearMonthlyDetailLines_ShowsProjectsBeforeModelsInProjectScope(t *testing.T) {
-	m := NewModel([]PluginItem{}, []EditChoice{}, []SessionItem{}, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, "v1.0", false)
+	m := newStatsTestModel()
 	m.width = 100
 	m.height = 30
 	m.statsTab = 2
@@ -885,7 +879,7 @@ func TestWindowModelDisplayName_UsesProviderAbbreviationPrefix(t *testing.T) {
 }
 
 func TestRenderDailyDetailHourlyLines_ShiftsGraphLeftByFourSpaces(t *testing.T) {
-	m := NewModel([]PluginItem{}, []EditChoice{}, []SessionItem{}, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, "v1.0", false)
+	m := newStatsTestModel()
 	report := stats.WindowReport{}
 	axis := stripANSI(m.renderDailyDetailAxisLine())
 	spark := stripANSI(m.renderDailyDetailSparkline(report))

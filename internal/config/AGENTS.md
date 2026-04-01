@@ -10,6 +10,7 @@
 | Plugin array discovery | `internal/config/jsonc_parser.go` | active vs commented entries tracked by line |
 | Selection rewrite and atomic write | `internal/config/jsonc_writer.go` | comment toggling plus temp-file rename |
 | Data carried across layers | `internal/config/types.go` | `Plugin` stores line metadata |
+| Stats config defaults/normalization | `internal/config/stats_defaults.go` | launcher stats thresholds and scope defaults |
 | Behavior proof | `internal/config/toml_config_test.go` | precedence and default coverage |
 | JSONC invariants | `internal/config/jsonc_parser_test.go` | parsing edge cases |
 | Write safety | `internal/config/jsonc_writer_test.go` | trailing newline and atomic-write coverage |
@@ -17,6 +18,7 @@
 ## LOCAL CONVENTIONS
 - `LoadOcConfig` returns `(nil, nil)` when `~/.oc` does not exist.
 - `[oc]` table values override duplicated top-level TOML keys.
+- Stats defaults are normalized here, not in `tui`; keep launcher config semantics in this package.
 - Plugin toggling is line-based: `Plugin.LineIndex` and `Plugin.OriginalLine` are part of the contract.
 - Parser recognizes both active entries and `// "plugin"` commented entries.
 - Writer preserves original line endings and trailing newline state.

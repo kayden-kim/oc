@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kayden-kim/oc/internal/tui"
+	"github.com/kayden-kim/oc/internal/opencodedb"
 	_ "modernc.org/sqlite"
 )
 
@@ -72,7 +72,7 @@ func TestListSessionsDB_ReadsMatchingRootSessions(t *testing.T) {
 
 func TestOpencodeDBPath_ReturnsErrorForMissingOverride(t *testing.T) {
 	t.Setenv("OPENCODE_DB", filepath.Join(t.TempDir(), "missing.db"))
-	_, err := opencodeDBPath()
+	_, err := opencodedb.DBPath()
 	if err == nil {
 		t.Fatal("expected missing override DB to return error")
 	}
@@ -84,7 +84,7 @@ func TestOpencodeDataDir_DefaultsByPlatform(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_DATA_HOME", "")
 
-	dir, err := opencodeDataDir()
+	dir, err := opencodedb.DataDir()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestOpencodeDataDir_UsesXDGDataHomeOverride(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_DATA_HOME", xdg)
 
-	dir, err := opencodeDataDir()
+	dir, err := opencodedb.DataDir()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestUnixTimestampToTime(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := unixTimestampToTime(tt.input)
+			got := opencodedb.UnixTimestampToTime(tt.input)
 			if !got.Equal(tt.want) {
 				t.Fatalf("expected %v, got %v", tt.want, got)
 			}
@@ -137,11 +137,11 @@ func TestUnixTimestampToTime(t *testing.T) {
 }
 
 func TestLatest(t *testing.T) {
-	if got := Latest(nil); got != (tui.SessionItem{}) {
+	if got := Latest(nil); got != (SessionItem{}) {
 		t.Fatalf("expected zero session for empty input, got %+v", got)
 	}
 
-	items := []tui.SessionItem{{ID: "ses_latest", Title: "Latest"}, {ID: "ses_older", Title: "Older"}}
+	items := []SessionItem{{ID: "ses_latest", Title: "Latest"}, {ID: "ses_older", Title: "Older"}}
 	if got := Latest(items); got != items[0] {
 		t.Fatalf("expected %+v, got %+v", items[0], got)
 	}
@@ -163,7 +163,7 @@ func TestSameDir(t *testing.T) {
 
 func TestSQLiteDSN(t *testing.T) {
 	path := filepath.Join("tmp", "opencode.db")
-	got := sqliteDSN(path)
+	got := opencodedb.SQLiteDSN(path)
 	if !strings.HasPrefix(got, "file:") {
 		t.Fatalf("expected file DSN, got %q", got)
 	}

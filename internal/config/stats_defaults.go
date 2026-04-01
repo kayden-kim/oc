@@ -1,6 +1,4 @@
-package tui
-
-import "github.com/kayden-kim/oc/internal/config"
+package config
 
 const (
 	DefaultActivityMediumTokens int64 = 1_000_000
@@ -9,7 +7,7 @@ const (
 	DefaultStatsScope                 = "global"
 )
 
-func NormalizeStatsConfig(cfg config.StatsConfig) config.StatsConfig {
+func NormalizeStatsConfig(cfg StatsConfig) StatsConfig {
 	if cfg.MediumTokens <= 0 {
 		cfg.MediumTokens = DefaultActivityMediumTokens
 	}

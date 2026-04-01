@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kayden-kim/oc/internal/opencodedb"
 	_ "modernc.org/sqlite"
 )
 
@@ -316,7 +317,7 @@ func loadForDirAtWithOptions(dir string, now time.Time, options Options) (Report
 
 func loadAtWithOptions(now time.Time, dir string, options Options) (Report, error) {
 	options = normalizeOptions(options)
-	dbPath, err := opencodeDBPath()
+	dbPath, err := opencodedb.DBPath()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return buildReport(nil, now, options), nil
@@ -324,7 +325,7 @@ func loadAtWithOptions(now time.Time, dir string, options Options) (Report, erro
 		return Report{}, err
 	}
 
-	db, err := sql.Open("sqlite", sqliteDSN(dbPath))
+	db, err := sql.Open("sqlite", opencodedb.SQLiteDSN(dbPath))
 	if err != nil {
 		return Report{}, err
 	}
@@ -594,7 +595,7 @@ func mergeMessageStats(db *sql.DB, dir string, since int64, loc *time.Location, 
 		if event.Role != "assistant" {
 			continue
 		}
-		day := dayMap[dayKey(unixTimestampToTime(event.CreatedAt).In(loc))]
+		day := dayMap[dayKey(opencodedb.UnixTimestampToTime(event.CreatedAt).In(loc))]
 		if day == nil {
 			continue
 		}
@@ -689,7 +690,7 @@ func mergePartStats(db *sql.DB, dir string, since int64, loc *time.Location, day
 		if event.Summary || strings.EqualFold(event.MessageAgent, "compaction") || event.Type == "compaction" {
 			continue
 		}
-		day := dayMap[dayKey(unixTimestampToTime(event.CreatedAt).In(loc))]
+		day := dayMap[dayKey(opencodedb.UnixTimestampToTime(event.CreatedAt).In(loc))]
 		if day == nil {
 			continue
 		}
@@ -730,7 +731,7 @@ func mergePartStats(db *sql.DB, dir string, since int64, loc *time.Location, day
 			stepTokens := event.InputTokens + event.OutputTokens + event.ReasoningTokens + event.CacheReadTokens + event.CacheWriteTokens
 			day.Tokens += stepTokens
 			day.ReasoningTokens += event.ReasoningTokens
-			st := unixTimestampToTime(event.CreatedAt).In(loc)
+			st := opencodedb.UnixTimestampToTime(event.CreatedAt).In(loc)
 			day.SlotTokens[st.Hour()*2+st.Minute()/30] += stepTokens
 			name := modelLabel(event.ProviderID, event.ModelID)
 			modelName := strings.TrimSpace(event.ModelID)
@@ -789,7 +790,7 @@ func mergeSessionCodeStats(db *sql.DB, dir string, since int64, loc *time.Locati
 		if err := rows.Scan(&updatedAt, &additions, &deletions); err != nil {
 			return err
 		}
-		day := dayMap[dayKey(unixTimestampToTime(updatedAt).In(loc))]
+		day := dayMap[dayKey(opencodedb.UnixTimestampToTime(updatedAt).In(loc))]
 		if day == nil {
 			continue
 		}
@@ -839,7 +840,7 @@ func mergePartFileStats(db *sql.DB, dir string, since int64, loc *time.Location,
 		if summary != 0 || strings.EqualFold(messageAgent, "compaction") {
 			continue
 		}
-		bucketKey := dayKey(unixTimestampToTime(createdAt).In(loc))
+		bucketKey := dayKey(opencodedb.UnixTimestampToTime(createdAt).In(loc))
 		day := dayMap[bucketKey]
 		if day == nil {
 			continue
@@ -1531,19 +1532,6 @@ func calculateMedianFloat(values []float64) float64 {
 	return sorted[len(sorted)/2]
 }
 
-func unixTimestampToTime(value int64) time.Time {
-	switch {
-	case value >= 1_000_000_000_000_000_000 || value <= -1_000_000_000_000_000_000:
-		return time.Unix(0, value).Local()
-	case value >= 1_000_000_000_000_000 || value <= -1_000_000_000_000_000:
-		return time.UnixMicro(value).Local()
-	case value >= 1_000_000_000_000 || value <= -1_000_000_000_000:
-		return time.UnixMilli(value).Local()
-	default:
-		return time.Unix(value, 0).Local()
-	}
-}
-
 func scopedDirectoryClause() string {
 	if runtime.GOOS == "windows" {
 		return "replace(lower(s.directory), '\\', '/') = replace(lower(?), '\\', '/')"
@@ -1553,71 +1541,4 @@ func scopedDirectoryClause() string {
 
 func scopedDirectoryArg(dir string) string {
 	return filepath.Clean(dir)
-}
-
-func sqliteDSN(path string) string {
-	path = filepath.ToSlash(path)
-	if runtime.GOOS == "windows" && !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	return "file:" + path + "?mode=ro&_pragma=busy_timeout(5000)"
-}
-
-func opencodeDBPath() (string, error) {
-	if name := os.Getenv("OPENCODE_DB"); name != "" {
-		if filepath.IsAbs(name) {
-			if _, err := os.Stat(name); err == nil {
-				return name, nil
-			} else {
-				return "", err
-			}
-		}
-
-		root, err := opencodeDataDir()
-		if err != nil {
-			return "", err
-		}
-		path := filepath.Join(root, name)
-		if _, err := os.Stat(path); err == nil {
-			return path, nil
-		} else {
-			return "", err
-		}
-	}
-
-	root, err := opencodeDataDir()
-	if err != nil {
-		return "", err
-	}
-	path := filepath.Join(root, "opencode.db")
-	if _, err := os.Stat(path); err == nil {
-		return path, nil
-	}
-	paths, err := filepath.Glob(filepath.Join(root, "opencode-*.db"))
-	if err != nil {
-		return "", err
-	}
-	if len(paths) == 0 {
-		return "", os.ErrNotExist
-	}
-	sort.SliceStable(paths, func(i, j int) bool {
-		left, leftErr := os.Stat(paths[i])
-		right, rightErr := os.Stat(paths[j])
-		if leftErr != nil || rightErr != nil {
-			return paths[i] < paths[j]
-		}
-		return left.ModTime().After(right.ModTime())
-	})
-	return paths[0], nil
-}
-
-func opencodeDataDir() (string, error) {
-	if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
-		return filepath.Join(dir, "opencode"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".local", "share", "opencode"), nil
 }

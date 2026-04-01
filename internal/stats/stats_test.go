@@ -19,7 +19,19 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func TestLoadForDirAt_AggregatesGlobalStatsAndFiltersSynthetic(t *testing.T) {
+const defaultStatsTestSchema = `
+	CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+	CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+`
+
+func openStatsTestDB(t *testing.T) (*sql.DB, string) {
+	t.Helper()
+	return openStatsTestDBWithSchema(t, defaultStatsTestSchema)
+}
+
+func openStatsTestDBWithSchema(t *testing.T, schema string) (*sql.DB, string) {
+	t.Helper()
 	tmp := t.TempDir()
 	dbPath := filepath.Join(tmp, "opencode.db")
 	db, err := sql.Open("sqlite", dbPath)
@@ -27,15 +39,15 @@ func TestLoadForDirAt_AggregatesGlobalStatsAndFiltersSynthetic(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
+	if _, err := db.Exec(schema); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("OPENCODE_DB", dbPath)
+	return db, tmp
+}
+
+func TestLoadForDirAt_AggregatesGlobalStatsAndFiltersSynthetic(t *testing.T) {
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	otherDir := filepath.Join(tmp, "other")
@@ -60,7 +72,6 @@ func TestLoadForDirAt_AggregatesGlobalStatsAndFiltersSynthetic(t *testing.T) {
 	insertMessage(t, db, "msg_other", "ses_other", now, `{"role":"assistant","cost":42}`)
 	insertPart(t, db, "part_other", "msg_other", "ses_other", now, `{"type":"step-finish","tokens":{"input":100,"output":100,"reasoning":100}}`)
 
-	t.Setenv("OPENCODE_DB", dbPath)
 	report, err := loadGlobalAt(now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
@@ -108,22 +119,8 @@ func TestLoadForDirAt_AggregatesGlobalStatsAndFiltersSynthetic(t *testing.T) {
 }
 
 func TestLoadForDirAt_Uses30DaySumsForWeeklyTotals(t *testing.T) {
+	db, _ := openStatsTestDB(t)
 	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	dir := filepath.Join(tmp, "work")
 	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
@@ -135,7 +132,6 @@ func TestLoadForDirAt_Uses30DaySumsForWeeklyTotals(t *testing.T) {
 	insertMessage(t, db, "msg_today", "ses_work", now, `{"role":"assistant","cost":3.00}`)
 	insertPart(t, db, "step_today", "msg_today", "ses_work", now, `{"type":"step-finish","tokens":{"input":40,"output":30,"reasoning":20}}`)
 
-	t.Setenv("OPENCODE_DB", dbPath)
 	report, err := loadForDirAt(dir, now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
@@ -150,22 +146,8 @@ func TestLoadForDirAt_Uses30DaySumsForWeeklyTotals(t *testing.T) {
 }
 
 func TestLoadForDirAt_CountsDelegatedAgentMessages(t *testing.T) {
+	db, _ := openStatsTestDB(t)
 	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	dir := filepath.Join(tmp, "work")
 	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
@@ -191,7 +173,6 @@ func TestLoadForDirAt_CountsDelegatedAgentMessages(t *testing.T) {
 	insertMessage(t, db, "msg_part_subtask", "ses_work", now, `{"role":"assistant","cost":0.10}`)
 	insertPart(t, db, "part_subtask", "msg_part_subtask", "ses_work", now, `{"type":"subtask","agent":"legacy-subtask"}`)
 
-	t.Setenv("OPENCODE_DB", dbPath)
 	report, err := loadForDirAt(dir, now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
@@ -212,22 +193,7 @@ func TestLoadForDirAt_CountsDelegatedAgentMessages(t *testing.T) {
 }
 
 func TestLoadForDirAt_BuildsTopToolUsage(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
@@ -243,7 +209,6 @@ func TestLoadForDirAt_BuildsTopToolUsage(t *testing.T) {
 		}
 	}
 
-	t.Setenv("OPENCODE_DB", dbPath)
 	report, err := loadForDirAt(dir, now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
@@ -260,22 +225,7 @@ func TestLoadForDirAt_BuildsTopToolUsage(t *testing.T) {
 }
 
 func TestLoadForDirAt_BuildsTopSkillUsage(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
@@ -295,7 +245,6 @@ func TestLoadForDirAt_BuildsTopSkillUsage(t *testing.T) {
 		insertPart(t, db, fmt.Sprintf("skill_%d", i), "msg_skills", "ses_work", now, data)
 	}
 
-	t.Setenv("OPENCODE_DB", dbPath)
 	report, err := loadForDirAt(dir, now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
@@ -315,22 +264,7 @@ func TestLoadForDirAt_BuildsTopSkillUsage(t *testing.T) {
 }
 
 func TestLoadForDirAt_BuildsTopAgentUsage(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
@@ -344,7 +278,6 @@ func TestLoadForDirAt_BuildsTopAgentUsage(t *testing.T) {
 	insertMessage(t, db, "msg_legacy_subtask", "ses_work", now, `{"role":"assistant"}`)
 	insertPart(t, db, "part_legacy_subtask", "msg_legacy_subtask", "ses_work", now, `{"type":"subtask","agent":"legacy-subtask"}`)
 
-	t.Setenv("OPENCODE_DB", dbPath)
 	report, err := loadForDirAt(dir, now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
@@ -358,22 +291,7 @@ func TestLoadForDirAt_BuildsTopAgentUsage(t *testing.T) {
 }
 
 func TestLoadForDirAt_BuildsTopAgentModelUsage(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
@@ -399,7 +317,6 @@ func TestLoadForDirAt_BuildsTopAgentModelUsage(t *testing.T) {
 	insertMessage(t, db, "msg_no_agent", "ses_work", now, `{"role":"assistant","providerID":"openai","modelID":"gpt-5.4"}`)
 	insertPart(t, db, "part_no_agent", "msg_no_agent", "ses_work", now, `{"type":"step-finish","tokens":{"input":5,"output":5}}`)
 
-	t.Setenv("OPENCODE_DB", dbPath)
 	report, err := loadForDirAt(dir, now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
@@ -419,22 +336,7 @@ func TestLoadForDirAt_BuildsTopAgentModelUsage(t *testing.T) {
 }
 
 func TestLoadForDirAt_BuildsTopModelUsage(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
@@ -481,7 +383,6 @@ func TestLoadForDirAt_BuildsTopModelUsage(t *testing.T) {
 	insertMessage(t, db, "msg_missing_model", "ses_work", now, `{"role":"assistant","providerID":"openai"}`)
 	insertPart(t, db, "part_missing_model", "msg_missing_model", "ses_work", now, `{"type":"step-finish","tokens":{"input":999,"output":999,"reasoning":999}}`)
 
-	t.Setenv("OPENCODE_DB", dbPath)
 	report, err := loadForDirAt(dir, now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
@@ -527,22 +428,7 @@ func TestLoadForDirAt_BuildsTopModelUsage(t *testing.T) {
 }
 
 func TestLoadForDirAt_DoesNotDoubleCountModelCostWhenMessageCostExistsAcrossMultipleSteps(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
@@ -551,7 +437,6 @@ func TestLoadForDirAt_DoesNotDoubleCountModelCostWhenMessageCostExistsAcrossMult
 	insertPart(t, db, "part_work_1", "msg_work", "ses_work", now, `{"type":"step-finish","tokens":{"input":50,"output":25,"reasoning":5}}`)
 	insertPart(t, db, "part_work_2", "msg_work", "ses_work", now, `{"type":"step-finish","tokens":{"input":20,"output":10,"reasoning":0}}`)
 
-	t.Setenv("OPENCODE_DB", dbPath)
 	report, err := loadForDirAt(dir, now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
@@ -572,22 +457,7 @@ func TestLoadForDirAt_DoesNotDoubleCountModelCostWhenMessageCostExistsAcrossMult
 }
 
 func TestLoadForDirAt_CountsMessageCostInDailyTotalsOnceAcrossMultipleSteps(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
@@ -596,7 +466,6 @@ func TestLoadForDirAt_CountsMessageCostInDailyTotalsOnceAcrossMultipleSteps(t *t
 	insertPart(t, db, "part_work_1", "msg_work", "ses_work", now, `{"type":"step-finish","tokens":{"input":50,"output":25,"reasoning":5}}`)
 	insertPart(t, db, "part_work_2", "msg_work", "ses_work", now, `{"type":"step-finish","tokens":{"input":20,"output":10,"reasoning":0}}`)
 
-	t.Setenv("OPENCODE_DB", dbPath)
 	report, err := loadForDirAt(dir, now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
@@ -611,22 +480,7 @@ func TestLoadForDirAt_CountsMessageCostInDailyTotalsOnceAcrossMultipleSteps(t *t
 }
 
 func TestLoadGlobalAt_BuildsTopProjectUsage(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, tmp := openStatsTestDB(t)
 
 	projectA := filepath.Join(tmp, "work-a")
 	projectB := filepath.Join(tmp, "work-b")
@@ -645,7 +499,6 @@ func TestLoadGlobalAt_BuildsTopProjectUsage(t *testing.T) {
 	insertMessage(t, db, "msg_compaction", "ses_b1", now, `{"role":"assistant","summary":true,"agent":"compaction"}`)
 	insertPart(t, db, "part_compaction", "msg_compaction", "ses_b1", now, `{"type":"step-finish","tokens":{"input":999,"output":999,"reasoning":999}}`)
 
-	t.Setenv("OPENCODE_DB", dbPath)
 	report, err := loadGlobalAt(now)
 	if err != nil {
 		t.Fatalf("loadGlobalAt returned error: %v", err)
@@ -692,22 +545,7 @@ func TestTopUsageAmountsWithCostsFromMaps_IncludesCostOnlyEntries(t *testing.T) 
 }
 
 func TestLoadGlobalAt_EstimatesProjectCostWhenStoredCostMissing(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, tmp := openStatsTestDB(t)
 
 	projectDir := filepath.Join(tmp, "work")
 	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
@@ -727,7 +565,6 @@ func TestLoadGlobalAt_EstimatesProjectCostWhenStoredCostMissing(t *testing.T) {
 		defaultPricingResolver = previousResolver
 	})
 
-	t.Setenv("OPENCODE_DB", dbPath)
 	report, err := loadGlobalAt(now)
 	if err != nil {
 		t.Fatalf("loadGlobalAt returned error: %v", err)
@@ -746,22 +583,7 @@ func TestLoadGlobalAt_EstimatesProjectCostWhenStoredCostMissing(t *testing.T) {
 }
 
 func TestLoadForDirAt_DoesNotAggregateTopProjectsInProjectScope(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
@@ -769,7 +591,6 @@ func TestLoadForDirAt_DoesNotAggregateTopProjectsInProjectScope(t *testing.T) {
 	insertMessage(t, db, "msg_work", "ses_work", now, `{"role":"assistant"}`)
 	insertPart(t, db, "part_work", "msg_work", "ses_work", now, `{"type":"step-finish","tokens":{"input":10,"output":10,"reasoning":5}}`)
 
-	t.Setenv("OPENCODE_DB", dbPath)
 	report, err := loadForDirAt(dir, now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
@@ -820,22 +641,7 @@ func TestTopUsageAmounts_AllowsUnlimitedWhenLimitIsZero(t *testing.T) {
 }
 
 func TestLoadForDirAt_ComputesSessionizedHoursFromEventGaps(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	now := time.Date(2026, time.March, 27, 18, 0, 0, 0, time.Local)
@@ -853,7 +659,6 @@ func TestLoadForDirAt_ComputesSessionizedHoursFromEventGaps(t *testing.T) {
 	insertMessage(t, db, "msg_today_b", "ses_work", time.Date(2026, time.March, 27, 10, 40, 0, 0, time.Local), `{"role":"assistant"}`)
 	insertPart(t, db, "today_part_c", "msg_today_b", "ses_work", time.Date(2026, time.March, 27, 10, 50, 0, 0, time.Local), `{"type":"tool","tool":"bash"}`)
 
-	t.Setenv("OPENCODE_DB", dbPath)
 	report, err := loadForDirAtWithOptions(dir, now, Options{SessionGapMinutes: 15})
 	if err != nil {
 		t.Fatalf("loadForDirAtWithOptions returned error: %v", err)
@@ -877,15 +682,7 @@ func TestLoadForDirAt_ComputesSessionizedHoursFromEventGaps(t *testing.T) {
 }
 
 func TestLoadForDirAt_AggregatesCodeLinesFromSessionSummaries(t *testing.T) {
-	ntmp := t.TempDir()
-	dbPath := filepath.Join(ntmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
+	db, ntmp := openStatsTestDBWithSchema(t, `
 		CREATE TABLE session (
 			id TEXT PRIMARY KEY,
 			title TEXT NOT NULL DEFAULT '',
@@ -898,9 +695,6 @@ func TestLoadForDirAt_AggregatesCodeLinesFromSessionSummaries(t *testing.T) {
 		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
 		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
 	`)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	dir := filepath.Join(ntmp, "work")
 	otherDir := filepath.Join(ntmp, "other")
@@ -921,7 +715,6 @@ func TestLoadForDirAt_AggregatesCodeLinesFromSessionSummaries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Setenv("OPENCODE_DB", dbPath)
 	report, err := loadForDirAt(dir, now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
@@ -951,22 +744,7 @@ func TestLoadForDirAt_AggregatesCodeLinesFromSessionSummaries(t *testing.T) {
 }
 
 func TestLoadForDirAt_AggregatesChangedFilesFromPartSignals(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	otherDir := filepath.Join(tmp, "other")
@@ -993,7 +771,6 @@ func TestLoadForDirAt_AggregatesChangedFilesFromPartSignals(t *testing.T) {
 	insertMessage(t, db, "msg_other", "ses_other", now, `{"role":"assistant"}`)
 	insertPart(t, db, "patch_other", "msg_other", "ses_other", now, `{"type":"patch","files":["other/project.go"]}`)
 
-	t.Setenv("OPENCODE_DB", dbPath)
 	report, err := loadForDirAt(dir, now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
@@ -1023,22 +800,7 @@ func TestLoadForDirAt_AggregatesChangedFilesFromPartSignals(t *testing.T) {
 }
 
 func TestLoadForDirAt_UsesStepFinishCostWhenMessageCostMissing(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
@@ -1046,7 +808,6 @@ func TestLoadForDirAt_UsesStepFinishCostWhenMessageCostMissing(t *testing.T) {
 	insertMessage(t, db, "msg_today", "ses_work", now, `{"role":"assistant"}`)
 	insertPart(t, db, "step_today", "msg_today", "ses_work", now, `{"type":"step-finish","cost":2.25,"tokens":{"input":20,"output":10,"reasoning":5}}`)
 
-	t.Setenv("OPENCODE_DB", dbPath)
 	report, err := loadForDirAt(dir, now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
@@ -1057,22 +818,7 @@ func TestLoadForDirAt_UsesStepFinishCostWhenMessageCostMissing(t *testing.T) {
 }
 
 func TestLoadForDirAt_DoesNotDoubleCountStepFinishCostWhenMessageCostExists(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
@@ -1080,7 +826,6 @@ func TestLoadForDirAt_DoesNotDoubleCountStepFinishCostWhenMessageCostExists(t *t
 	insertMessage(t, db, "msg_today", "ses_work", now, `{"role":"assistant","cost":1.84}`)
 	insertPart(t, db, "step_today", "msg_today", "ses_work", now, `{"type":"step-finish","cost":2.25,"tokens":{"input":20,"output":10,"reasoning":5}}`)
 
-	t.Setenv("OPENCODE_DB", dbPath)
 	report, err := loadForDirAt(dir, now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
@@ -1091,22 +836,7 @@ func TestLoadForDirAt_DoesNotDoubleCountStepFinishCostWhenMessageCostExists(t *t
 }
 
 func TestLoadForDirAt_ComputesLiteLLMCostWhenStoredCostsMissing(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
@@ -1126,7 +856,6 @@ func TestLoadForDirAt_ComputesLiteLLMCostWhenStoredCostsMissing(t *testing.T) {
 		defaultPricingResolver = previousResolver
 	})
 
-	t.Setenv("OPENCODE_DB", dbPath)
 	report, err := loadForDirAt(dir, now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
@@ -1366,22 +1095,7 @@ func insertPart(t *testing.T, db *sql.DB, id string, messageID string, sessionID
 }
 
 func TestSlotTokensBucketing(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("OPENCODE_DB", dbPath)
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	insertSession(t, db, "ses_work", dir)
@@ -1430,22 +1144,7 @@ func TestSlotTokensBucketing(t *testing.T) {
 }
 
 func TestRolling24hSlotAssembly(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("OPENCODE_DB", dbPath)
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	insertSession(t, db, "ses_work", dir)
@@ -1500,22 +1199,7 @@ func TestRolling24hSlotAssembly(t *testing.T) {
 }
 
 func TestHourlyStreakSlotsAcrossHalfHourWindows(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("OPENCODE_DB", dbPath)
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	insertSession(t, db, "ses_work", dir)
@@ -1712,23 +1396,7 @@ func TestCalculateMedianFloat_EvenLength(t *testing.T) {
 }
 
 func TestBuildMonthDailyReport_AggregatesDailyStats(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("OPENCODE_DB", dbPath)
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	insertSession(t, db, "ses_work", dir)
@@ -1801,23 +1469,7 @@ func TestBuildMonthDailyReport_AggregatesDailyStats(t *testing.T) {
 }
 
 func TestBuildMonthDailyReport_DeriveFocusTags(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("OPENCODE_DB", dbPath)
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	insertSession(t, db, "ses_work", dir)
@@ -1863,23 +1515,7 @@ func TestBuildMonthDailyReport_DeriveFocusTags(t *testing.T) {
 }
 
 func TestBuildMonthDailyReport_MonthBoundaries(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("OPENCODE_DB", dbPath)
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	insertSession(t, db, "ses_work", dir)
@@ -1921,23 +1557,7 @@ func TestBuildMonthDailyReport_MonthBoundaries(t *testing.T) {
 }
 
 func TestBuildMonthDailyReport_ProjectScopeFiltering(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("OPENCODE_DB", dbPath)
+	db, tmp := openStatsTestDB(t)
 
 	dir1 := filepath.Join(tmp, "work1")
 	dir2 := filepath.Join(tmp, "work2")
@@ -1979,22 +1599,7 @@ func TestBuildMonthDailyReport_ProjectScopeFiltering(t *testing.T) {
 }
 
 func TestBuildMonthDailyReport_CurrentMonthExcludesFutureDates(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	insertSession(t, db, "ses_work", dir)
@@ -2019,22 +1624,7 @@ func TestBuildMonthDailyReport_CurrentMonthExcludesFutureDates(t *testing.T) {
 }
 
 func TestBuildMonthDailyReport_CurrentMonthSkipsFutureRowsWithinSameMonth(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	insertSession(t, db, "ses_work", dir)
@@ -2059,23 +1649,7 @@ func TestBuildMonthDailyReport_CurrentMonthSkipsFutureRowsWithinSameMonth(t *tes
 }
 
 func TestBuildMonthDailyReport_KeepsDayAndMonthCostConsistent(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("OPENCODE_DB", dbPath)
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	insertSession(t, db, "ses_work", dir)
@@ -2107,23 +1681,7 @@ func TestBuildMonthDailyReport_KeepsDayAndMonthCostConsistent(t *testing.T) {
 }
 
 func TestBuildYearMonthlyReport_AggregatesTwelveMonths(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("OPENCODE_DB", dbPath)
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	insertSession(t, db, "ses_work", dir)
@@ -2157,22 +1715,12 @@ func TestBuildYearMonthlyReport_AggregatesTwelveMonths(t *testing.T) {
 }
 
 func TestBuildWindowReport_PopulatesDailyDetailHourlyAndAllSessions(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
+	db, _ := openStatsTestDBWithSchema(t, `
 		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL, summary_additions INTEGER NOT NULL DEFAULT 0, summary_deletions INTEGER NOT NULL DEFAULT 0);
 		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
 		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
 	`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	tmp := t.TempDir()
 
 	dir := filepath.Join(tmp, "work")
 	insertSession(t, db, "ses_a", dir)
@@ -2220,22 +1768,8 @@ func TestBuildWindowReport_PopulatesDailyDetailHourlyAndAllSessions(t *testing.T
 }
 
 func TestBuildWindowReport_PopulatesDailyDetailActivityTables(t *testing.T) {
+	db, _ := openStatsTestDB(t)
 	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	dirA := filepath.Join(tmp, "work-a")
 	dirB := filepath.Join(tmp, "work-b")
@@ -2271,22 +1805,7 @@ func TestBuildWindowReport_PopulatesDailyDetailActivityTables(t *testing.T) {
 }
 
 func TestBuildWindowReport_PreservesProviderModelKeyInModels(t *testing.T) {
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "opencode.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
-		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, tmp := openStatsTestDB(t)
 
 	dir := filepath.Join(tmp, "work")
 	insertSession(t, db, "ses_a", dir)

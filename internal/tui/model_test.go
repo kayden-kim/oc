@@ -153,16 +153,6 @@ func openMonthlyStatsViewWithHeight(t *testing.T, height int) Model {
 	return model
 }
 
-func maxRenderedLineWidth(content string) int {
-	maxWidth := 0
-	for _, line := range strings.Split(content, "\n") {
-		if width := lipgloss.Width(stripANSI(line)); width > maxWidth {
-			maxWidth = width
-		}
-	}
-	return maxWidth
-}
-
 func TestNewModel_InitialState(t *testing.T) {
 	items := []PluginItem{
 		{Name: "plugin-a", InitiallyEnabled: true},
@@ -1086,7 +1076,7 @@ func TestView_SessionModeRendersUnboxedSessionRow(t *testing.T) {
 	updatedModel, _ := model.Update(mockKeyMsg("s"))
 	view := updatedModel.(Model).View().Content
 	rowLine := strings.Split(view, "\n")[5]
-	expected := stylePluginRow("> "+sessionLine(session), true, true)
+	expected := stylePluginRow("> "+selectedSessionSummary(session, maxLayoutWidth), true, true)
 
 	if rowLine != expected {
 		t.Fatalf("expected unboxed session row %q, got %q", expected, rowLine)
@@ -1432,7 +1422,7 @@ func TestRenderOverviewLines_GroupsPostMetricsIntoSections(t *testing.T) {
 			t.Fatalf("expected hours snippet %q, got %q", snippet, content)
 		}
 	}
-	if strings.Count(content, metricsDividerLine()) < 2 {
+	if strings.Count(content, statsTableDividerLine(statsTableMaxWidth)) < 2 {
 		t.Fatalf("expected header and section divider lines in overview, got %q", content)
 	}
 	if !strings.Contains(content, renderSubSectionHeader("Metrics", todaySectionTitleStyle)) {
@@ -1509,7 +1499,7 @@ func TestRenderOverviewLines_KeepsTrendsAsCompactList(t *testing.T) {
 	if strings.Contains(trendsSection, defaultTextStyle.Render("• cost ")+statsValueTextStyle.Render(" ")) {
 		t.Fatalf("expected cost trend to stay single-line, got %q", trendsSection)
 	}
-	if strings.Contains(trendsSection, renderTwoColumns("• tokens ", "", 28, "• cost ", "", 28)) || strings.Contains(trendsSection, renderTwoColumns("• hours ", "", 28, "• lines ", "", 28)) {
+	if strings.Contains(trendsSection, renderColumn("• tokens ", "", 28)+renderColumn("• cost ", "", 28)) || strings.Contains(trendsSection, renderColumn("• hours ", "", 28)+renderColumn("• lines ", "", 28)) {
 		t.Fatalf("expected trends to avoid two-column paired rows, got %q", trendsSection)
 	}
 	if strings.Contains(trendsSection, defaultTextStyle.Render("• cost ")+statsValueTextStyle.Render(renderValueTrend(report.Days, func(day stats.Day) float64 { return day.Cost }))) {

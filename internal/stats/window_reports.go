@@ -6,14 +6,16 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/kayden-kim/oc/internal/opencodedb"
 )
 
 func LoadWindowReport(dir string, label string, start time.Time, end time.Time) (WindowReport, error) {
-	dbPath, err := opencodeDBPath()
+	dbPath, err := opencodedb.DBPath()
 	if err != nil {
 		return WindowReport{}, err
 	}
-	db, err := sql.Open("sqlite", sqliteDSN(dbPath))
+	db, err := sql.Open("sqlite", opencodedb.SQLiteDSN(dbPath))
 	if err != nil {
 		return WindowReport{}, err
 	}
@@ -105,7 +107,7 @@ func buildWindowReport(db *sql.DB, dir string, label string, start time.Time, en
 		model.TotalTokens += totalTokens
 		report.Tokens += totalTokens
 		session.Tokens += totalTokens
-		stamp := unixTimestampToTime(row.CreatedAt).In(loc)
+		stamp := opencodedb.UnixTimestampToTime(row.CreatedAt).In(loc)
 		report.HalfHourSlots[stamp.Hour()*2+stamp.Minute()/30] += totalTokens
 		agentName := strings.TrimSpace(row.Agent)
 		if agentName == "" {
@@ -424,11 +426,11 @@ func collectSortedSessions(m map[string]*SessionUsage) []SessionUsage {
 }
 
 func LoadMonthDailyReport(dir string, monthStart time.Time) (MonthDailyReport, error) {
-	dbPath, err := opencodeDBPath()
+	dbPath, err := opencodedb.DBPath()
 	if err != nil {
 		return MonthDailyReport{}, err
 	}
-	db, err := sql.Open("sqlite", sqliteDSN(dbPath))
+	db, err := sql.Open("sqlite", opencodedb.SQLiteDSN(dbPath))
 	if err != nil {
 		return MonthDailyReport{}, err
 	}
@@ -437,11 +439,11 @@ func LoadMonthDailyReport(dir string, monthStart time.Time) (MonthDailyReport, e
 }
 
 func LoadYearMonthlyReport(dir string, endMonth time.Time) (YearMonthlyReport, error) {
-	dbPath, err := opencodeDBPath()
+	dbPath, err := opencodedb.DBPath()
 	if err != nil {
 		return YearMonthlyReport{}, err
 	}
-	db, err := sql.Open("sqlite", sqliteDSN(dbPath))
+	db, err := sql.Open("sqlite", opencodedb.SQLiteDSN(dbPath))
 	if err != nil {
 		return YearMonthlyReport{}, err
 	}
@@ -558,7 +560,7 @@ func buildMonthDailyReport(db *sql.DB, dir string, monthStart time.Time) (MonthD
 			continue
 		}
 
-		date := startOfDay(unixTimestampToTime(row.CreatedAt))
+		date := startOfDay(opencodedb.UnixTimestampToTime(row.CreatedAt))
 		if date.Before(monthStart) || !date.Before(visibleEnd) {
 			continue
 		}
@@ -584,7 +586,7 @@ func buildMonthDailyReport(db *sql.DB, dir string, monthStart time.Time) (MonthD
 		}
 
 		seenSessions[row.SessionID] = struct{}{}
-		date := startOfDay(unixTimestampToTime(row.CreatedAt))
+		date := startOfDay(opencodedb.UnixTimestampToTime(row.CreatedAt))
 		if date.Before(monthStart) || !date.Before(visibleEnd) {
 			continue
 		}

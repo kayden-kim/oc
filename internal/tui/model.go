@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/kayden-kim/oc/internal/config"
+	"github.com/kayden-kim/oc/internal/session"
 	"github.com/kayden-kim/oc/internal/stats"
 )
 
@@ -25,20 +26,9 @@ type EditChoice struct {
 	Path  string
 }
 
-type SessionItem struct {
-	ID        string
-	Title     string
-	UpdatedAt time.Time
-}
+type SessionItem = session.SessionItem
 
-// Model holds the state of the multi-select TUI
-type Model struct {
-	plugins                     []PluginItem
-	editChoices                 []EditChoice
-	version                     string
-	allowMultiplePlugins        bool
-	sessions                    []SessionItem
-	session                     SessionItem
+type statsState struct {
 	globalStats                 stats.Report
 	projectStats                stats.Report
 	globalStatsLoaded           bool
@@ -77,48 +67,58 @@ type Model struct {
 	loadProjectWindow           func(string, time.Time, time.Time) (stats.WindowReport, error)
 	loadGlobalYearMonthly       func(time.Time) (stats.YearMonthlyReport, error)
 	loadProjectYearMonthly      func(time.Time) (stats.YearMonthlyReport, error)
-	// Month-daily report caches (for month-list/day-detail view)
-	globalMonthDaily           stats.MonthDailyReport
-	projectMonthDaily          stats.MonthDailyReport
-	globalMonthDailyLoaded     bool
-	projectMonthDailyLoaded    bool
-	globalMonthDailyLoading    bool
-	projectMonthDailyLoading   bool
-	globalMonthDailyMonth      time.Time // Track which month is cached
-	projectMonthDailyMonth     time.Time // Track which month is cached
-	globalMonthDailyUpdatedAt  time.Time
-	projectMonthDailyUpdatedAt time.Time
-	loadGlobalMonthDaily       func(time.Time) (stats.MonthDailyReport, error)
-	loadProjectMonthDaily      func(time.Time) (stats.MonthDailyReport, error)
-	statsConfig                config.StatsConfig
-	projectScope               bool
-	cursor                     int
-	editCursor                 int
-	sessionCursor              int
-	statsTab                   int
-	selected                   map[int]struct{}
-	cancelled                  bool
-	confirmed                  bool
-	edit                       bool
-	editMode                   bool
-	sessionMode                bool
-	statsMode                  bool
-	dailyDetailMode            bool
-	monthlyDetailMode          bool
-	editTarget                 string
-	width                      int
-	height                     int
-	sessionOffset              int
-	statsOffset                int
-	dailyMonthAnchor           time.Time
-	dailySelectedDate          time.Time
-	dailyListOffset            int
-	dailyDetailOffset          int
-	monthlySelectedMonth       time.Time
-	monthlyListOffset          int
-	monthlyDetailOffset        int
-	globalDailyDate            time.Time
-	projectDailyDate           time.Time
+	globalMonthDaily            stats.MonthDailyReport
+	projectMonthDaily           stats.MonthDailyReport
+	globalMonthDailyLoaded      bool
+	projectMonthDailyLoaded     bool
+	globalMonthDailyLoading     bool
+	projectMonthDailyLoading    bool
+	globalMonthDailyMonth       time.Time
+	projectMonthDailyMonth      time.Time
+	globalMonthDailyUpdatedAt   time.Time
+	projectMonthDailyUpdatedAt  time.Time
+	loadGlobalMonthDaily        func(time.Time) (stats.MonthDailyReport, error)
+	loadProjectMonthDaily       func(time.Time) (stats.MonthDailyReport, error)
+	statsConfig                 config.StatsConfig
+	projectScope                bool
+	statsTab                    int
+	statsMode                   bool
+	dailyDetailMode             bool
+	monthlyDetailMode           bool
+	statsOffset                 int
+	dailyMonthAnchor            time.Time
+	dailySelectedDate           time.Time
+	dailyListOffset             int
+	dailyDetailOffset           int
+	monthlySelectedMonth        time.Time
+	monthlyListOffset           int
+	monthlyDetailOffset         int
+	globalDailyDate             time.Time
+	projectDailyDate            time.Time
+}
+
+// Model holds the state of the multi-select TUI
+type Model struct {
+	plugins              []PluginItem
+	editChoices          []EditChoice
+	version              string
+	allowMultiplePlugins bool
+	sessions             []SessionItem
+	session              SessionItem
+	statsState
+	cursor        int
+	editCursor    int
+	sessionCursor int
+	selected      map[int]struct{}
+	cancelled     bool
+	confirmed     bool
+	edit          bool
+	editMode      bool
+	sessionMode   bool
+	editTarget    string
+	width         int
+	height        int
+	sessionOffset int
 }
 
 type statsLoadedMsg struct {
@@ -165,7 +165,6 @@ var (
 	statsValueTextStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#CCCCCC"))
 	cursorStyle             = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Bold(true)
 	cursorSelectedStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Bold(true)
-	helpKeyStyle            = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Bold(true)
 	helpBgKeyStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Background(lipgloss.Color("#191919")).Bold(true)
 	helpBgTextStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("#7A7A7A")).Background(lipgloss.Color("#191919"))
 	helpBarStyle            = lipgloss.NewStyle().Foreground(lipgloss.Color("#191919"))
@@ -326,10 +325,7 @@ func sessionTimestampPrefix(updatedAt time.Time, now time.Time) string {
 	nowYear, nowMonth, nowDay := localNow.Date()
 
 	if updatedYear == nowYear && updatedMonth == nowMonth && updatedDay == nowDay {
-		elapsed := localNow.Sub(localUpdated)
-		if elapsed < 0 {
-			elapsed = 0
-		}
+		elapsed := max(localNow.Sub(localUpdated), 0)
 
 		switch {
 		case elapsed < time.Minute:
@@ -342,20 +338,6 @@ func sessionTimestampPrefix(updatedAt time.Time, now time.Time) string {
 	}
 
 	return "[" + localUpdated.Format("2006-01-02 15:04") + "] "
-}
-
-func sessionLine(session SessionItem) string {
-	if session.ID == "" {
-		return "Start without session"
-	}
-
-	prefix := sessionTimestampPrefix(session.UpdatedAt, time.Now())
-
-	if session.Title == "" {
-		return prefix + session.ID
-	}
-
-	return prefix + session.Title + " (" + session.ID + ")"
 }
 
 func (m Model) sessionAt(cursor int) SessionItem {
@@ -372,11 +354,7 @@ func (m Model) availableSessionRows() int {
 	}
 
 	rows := m.height - sessionChromeHeight
-	if rows < 0 {
-		return 0
-	}
-
-	return rows
+	return max(rows, 0)
 }
 
 func pageStep(visibleRows int) int {
@@ -405,24 +383,6 @@ func clampCursor(cursor int, total int) int {
 		return total - 1
 	}
 	return cursor
-}
-
-func scrollBy(offset int, delta int, total int, visibleRows int) int {
-	if total <= 0 {
-		return 0
-	}
-	if visibleRows <= 0 || visibleRows >= total {
-		return 0
-	}
-	maxOffset := total - visibleRows
-	offset += delta
-	if offset < 0 {
-		return 0
-	}
-	if offset > maxOffset {
-		return maxOffset
-	}
-	return offset
 }
 
 func jumpTarget(target scrollTarget, total int, visibleRows int) int {
@@ -489,18 +449,12 @@ func (m Model) visibleSessionRange() (int, int) {
 	}
 
 	start := m.sessionOffset
-	if start < 0 {
-		start = 0
-	}
+	start = max(start, 0)
 	maxOffset := totalRows - visibleRows
-	if start > maxOffset {
-		start = maxOffset
-	}
+	start = min(start, maxOffset)
 
 	end := start + visibleRows
-	if end > totalRows {
-		end = totalRows
-	}
+	end = min(end, totalRows)
 
 	return start, end
 }
@@ -510,10 +464,7 @@ func (m Model) availableStatsRows() int {
 		return 1000
 	}
 	rows := m.height - m.statsChromeHeight()
-	if rows < 0 {
-		return 0
-	}
-	return rows
+	return max(rows, 0)
 }
 
 func (m Model) statsChromeHeight() int {
@@ -532,17 +483,11 @@ func (m Model) visibleStatsRange(total int) (int, int) {
 		return 0, total
 	}
 	start := m.statsOffset
-	if start < 0 {
-		start = 0
-	}
+	start = max(start, 0)
 	maxOffset := total - visibleRows
-	if start > maxOffset {
-		start = maxOffset
-	}
+	start = min(start, maxOffset)
 	end := start + visibleRows
-	if end > total {
-		end = total
-	}
+	end = min(end, total)
 	return start, end
 }
 
@@ -558,12 +503,7 @@ func (m *Model) scrollStats(delta int, total int) {
 	}
 	maxOffset := total - visibleRows
 	m.statsOffset += delta
-	if m.statsOffset < 0 {
-		m.statsOffset = 0
-	}
-	if m.statsOffset > maxOffset {
-		m.statsOffset = maxOffset
-	}
+	m.statsOffset = min(max(m.statsOffset, 0), maxOffset)
 }
 
 func (m *Model) moveSessionCursor(delta int) {
@@ -646,6 +586,7 @@ func NewModel(items []PluginItem, editChoices []EditChoice, sessions []SessionIt
 	}
 
 	now := time.Now()
+	normalizedStatsConfig := config.NormalizeStatsConfig(statsConfig)
 	return Model{
 		plugins:              items,
 		editChoices:          editChoices,
@@ -653,20 +594,22 @@ func NewModel(items []PluginItem, editChoices []EditChoice, sessions []SessionIt
 		allowMultiplePlugins: allowMultiplePlugins,
 		sessions:             append([]SessionItem(nil), sessions...),
 		session:              session,
-		globalStats:          globalStats,
-		projectStats:         projectStats,
-		globalStatsLoaded:    true,
-		projectStatsLoaded:   true,
-		statsConfig:          NormalizeStatsConfig(statsConfig),
-		projectScope:         NormalizeStatsConfig(statsConfig).DefaultScope == "project",
-		cursor:               0,
-		editCursor:           0,
-		sessionCursor:        sessionCursor,
-		selected:             selected,
-		confirmed:            confirmed,
-		dailyMonthAnchor:     statsMonthStart(now),
-		dailySelectedDate:    startOfStatsDay(now),
-		monthlySelectedMonth: statsMonthStart(now),
+		statsState: statsState{
+			globalStats:          globalStats,
+			projectStats:         projectStats,
+			globalStatsLoaded:    true,
+			projectStatsLoaded:   true,
+			statsConfig:          normalizedStatsConfig,
+			projectScope:         normalizedStatsConfig.DefaultScope == "project",
+			dailyMonthAnchor:     statsMonthStart(now),
+			dailySelectedDate:    startOfStatsDay(now),
+			monthlySelectedMonth: statsMonthStart(now),
+		},
+		cursor:        0,
+		editCursor:    0,
+		sessionCursor: sessionCursor,
+		selected:      selected,
+		confirmed:     confirmed,
 	}
 }
 
@@ -709,10 +652,6 @@ func loadStatsCmd(project bool, loader func() (stats.Report, error)) tea.Cmd {
 		report, err := loader()
 		return statsLoadedMsg{project: project, report: report, err: err}
 	}
-}
-
-func loadWindowCmd(project bool, label string, loader func() (stats.WindowReport, error)) tea.Cmd {
-	return loadWindowCmdWithRange(project, label, time.Time{}, time.Time{}, loader)
 }
 
 func loadWindowCmdWithRange(project bool, label string, start, end time.Time, loader func() (stats.WindowReport, error)) tea.Cmd {
@@ -798,13 +737,6 @@ func (m Model) currentDailyDate() time.Time {
 		return month
 	}
 	return startOfStatsDay(time.Now())
-}
-
-func (m Model) currentDailyReportDate(project bool) time.Time {
-	if project {
-		return startOfStatsDay(m.projectDailyDate)
-	}
-	return startOfStatsDay(m.globalDailyDate)
 }
 
 func (m Model) currentMonthlySelection() time.Time {
@@ -949,9 +881,7 @@ func (m *Model) moveMonthlySelection(delta int) {
 		return
 	}
 	idx := m.monthlySelectionIndex()
-	if idx < 0 {
-		idx = 0
-	}
+	idx = max(idx, 0)
 	idx = clampCursor(idx+delta, len(rows))
 	m.monthlySelectedMonth = statsMonthStart(rows[idx].MonthStart)
 	m.ensureMonthlySelectionVisible()
@@ -1104,9 +1034,7 @@ func (m *Model) moveDailySelection(delta int) {
 		return
 	}
 	idx := m.dailySelectionIndex()
-	if idx < 0 {
-		idx = 0
-	}
+	idx = max(idx, 0)
 	idx = clampCursor(idx+delta, len(rows))
 	m.dailySelectedDate = startOfStatsDay(rows[idx].Date)
 	m.ensureDailySelectionVisible()
@@ -1811,7 +1739,11 @@ func (m Model) View() tea.View {
 	}
 
 	if m.editMode {
-		s := m.renderTopBadge() + "\n\n" + renderSectionHeader("📂 Choose config to edit", m.layoutWidth()) + "\n\n"
+		var sb strings.Builder
+		sb.WriteString(m.renderTopBadge())
+		sb.WriteString("\n\n")
+		sb.WriteString(renderSectionHeader("📂 Choose config to edit", m.layoutWidth()))
+		sb.WriteString("\n\n")
 
 		for i, choice := range m.editChoices {
 			cursor := "  "
@@ -1823,16 +1755,22 @@ func (m Model) View() tea.View {
 			line := truncateDisplayWidth(fmt.Sprintf("%s%s", cursor, choice.Label), m.layoutWidth())
 			line = stylePluginRow(line, focused, false)
 
-			s += line + "\n"
+			sb.WriteString(line)
+			sb.WriteByte('\n')
 		}
 
-		s += "\n" + renderEditHelpLine(m.layoutWidth())
+		sb.WriteByte('\n')
+		sb.WriteString(renderEditHelpLine(m.layoutWidth()))
 
-		return tea.NewView(s)
+		return tea.NewView(sb.String())
 	}
 
 	if m.sessionMode {
-		s := m.renderTopBadge() + "\n\n" + renderSectionHeader("🕘 Choose session", m.layoutWidth()) + "\n\n"
+		var sb strings.Builder
+		sb.WriteString(m.renderTopBadge())
+		sb.WriteString("\n\n")
+		sb.WriteString(renderSectionHeader("🕘 Choose session", m.layoutWidth()))
+		sb.WriteString("\n\n")
 		start, end := m.visibleSessionRange()
 
 		for i := start; i < end; i++ {
@@ -1849,12 +1787,14 @@ func (m Model) View() tea.View {
 			line := fmt.Sprintf("%s%s", cursor, rowText)
 			line = truncateDisplayWidth(line, m.layoutWidth())
 			line = stylePluginRow(line, focused, m.sessionAt(i).ID == m.session.ID)
-			s += line + "\n"
+			sb.WriteString(line)
+			sb.WriteByte('\n')
 		}
 
-		s += "\n" + renderSessionHelpLine(m.layoutWidth())
+		sb.WriteByte('\n')
+		sb.WriteString(renderSessionHelpLine(m.layoutWidth()))
 
-		return tea.NewView(s)
+		return tea.NewView(sb.String())
 	}
 
 	if m.statsMode {
@@ -1862,7 +1802,11 @@ func (m Model) View() tea.View {
 	}
 
 	sections := []string{m.renderLauncherTodaySummary(), renderSectionHeader("📋 Choose plugins", m.layoutWidth())}
-	s := m.renderTopBadge() + "\n\n" + strings.Join(filterNonEmpty(sections), "\n\n") + "\n\n"
+	var sb strings.Builder
+	sb.WriteString(m.renderTopBadge())
+	sb.WriteString("\n\n")
+	sb.WriteString(strings.Join(filterNonEmpty(sections), "\n\n"))
+	sb.WriteString("\n\n")
 
 	for i, p := range m.plugins {
 		cursor := "  "
@@ -1889,16 +1833,19 @@ func (m Model) View() tea.View {
 		}
 		line = stylePluginRow(line, focused, selected)
 
-		s += line + "\n"
+		sb.WriteString(line)
+		sb.WriteByte('\n')
 	}
 	if len(m.plugins) == 0 {
 		hint := dimmedLabelStyle.Render("Press enter to launch opencode")
-		s += lipgloss.PlaceHorizontal(m.layoutWidth(), lipgloss.Center, hint) + "\n"
+		sb.WriteString(lipgloss.PlaceHorizontal(m.layoutWidth(), lipgloss.Center, hint))
+		sb.WriteByte('\n')
 	}
 
-	s += "\n" + renderHelpLine(m.layoutWidth())
+	sb.WriteByte('\n')
+	sb.WriteString(renderHelpLine(m.layoutWidth()))
 
-	return tea.NewView(s)
+	return tea.NewView(sb.String())
 }
 
 // Selections returns a map of plugin names to their selection state
