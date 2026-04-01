@@ -25,8 +25,18 @@ func buildWindowReport(db *sql.DB, dir string, label string, start time.Time, en
 	report := WindowReport{Label: label, Start: start, End: end}
 	sessionAgg := map[string]*SessionUsage{}
 	modelAgg := map[string]*ModelUsage{}
+	projectAgg := map[string]projectUsage{}
+	agentAgg := map[string]int{}
+	agentModelAgg := map[string]int{}
+	skillAgg := map[string]int{}
+	toolAgg := map[string]int{}
 	seenMessageCost := map[string]struct{}{}
 	seenSessions := map[string]struct{}{}
+	eventTimes := make([]int64, 0)
+	loc := start.Location()
+	if loc == nil {
+		loc = time.Local
+	}
 
 	messageRows, err := loadWindowMessages(db, dir, start, end)
 	if err != nil {
@@ -38,7 +48,12 @@ func buildWindowReport(db *sql.DB, dir string, label string, start time.Time, en
 		}
 		report.Messages++
 		report.Cost += row.Cost
+		if row.Agent != "" {
+			report.TotalSubtasks++
+			agentAgg[row.Agent]++
+		}
 		seenSessions[row.SessionID] = struct{}{}
+		eventTimes = append(eventTimes, row.CreatedAt)
 		session := ensureSessionUsage(sessionAgg, row.SessionID, row.Title)
 		session.Messages++
 		session.Cost += row.Cost
@@ -53,12 +68,29 @@ func buildWindowReport(db *sql.DB, dir string, label string, start time.Time, en
 			continue
 		}
 		seenSessions[row.SessionID] = struct{}{}
+		eventTimes = append(eventTimes, row.CreatedAt)
 		session := ensureSessionUsage(sessionAgg, row.SessionID, row.Title)
+		if row.Type == "tool" {
+			report.TotalToolCalls++
+			if row.Tool != "" {
+				toolAgg[row.Tool]++
+			}
+			if row.Tool == "skill" {
+				report.TotalSkillCalls++
+				if row.SkillName != "" {
+					skillAgg[row.SkillName]++
+				}
+			}
+		}
 		if row.Type != "step-finish" {
 			continue
 		}
 
-		model := ensureModelUsage(modelAgg, row.ModelID)
+		modelKey := modelLabel(row.ProviderID, row.ModelID)
+		if strings.TrimSpace(modelKey) == "" {
+			modelKey = row.ModelID
+		}
+		model := ensureModelUsage(modelAgg, modelKey)
 		model.InputTokens += row.InputTokens
 		model.OutputTokens += row.OutputTokens
 		model.CacheReadTokens += row.CacheReadTokens
@@ -68,11 +100,34 @@ func buildWindowReport(db *sql.DB, dir string, label string, start time.Time, en
 		model.TotalTokens += totalTokens
 		report.Tokens += totalTokens
 		session.Tokens += totalTokens
+		stamp := unixTimestampToTime(row.CreatedAt).In(loc)
+		report.HalfHourSlots[stamp.Hour()*2+stamp.Minute()/30] += totalTokens
+		agentName := strings.TrimSpace(row.Agent)
+		if agentName == "" {
+			agentName = strings.TrimSpace(row.MessageAgent)
+		}
+		modelName := strings.TrimSpace(row.ModelID)
+		if agentName != "" && modelName != "" && !strings.EqualFold(agentName, "compaction") {
+			agentModelAgg[agentModelUsageKey(agentName, modelName)]++
+			report.TotalAgentModelCalls++
+		}
+		projectKey := normalizeProjectUsageKey(row.Directory)
+		if projectKey != "" {
+			usage := projectAgg[projectKey]
+			usage.Tokens += totalTokens
+			projectAgg[projectKey] = usage
+		}
 
 		if row.MessageCost > 0 {
 			if _, ok := seenMessageCost[row.MessageID]; !ok {
 				seenMessageCost[row.MessageID] = struct{}{}
 				model.Cost += row.MessageCost
+				projectKey := normalizeProjectUsageKey(row.Directory)
+				if projectKey != "" {
+					usage := projectAgg[projectKey]
+					usage.Cost += row.MessageCost
+					projectAgg[projectKey] = usage
+				}
 			}
 			continue
 		}
@@ -97,20 +152,37 @@ func buildWindowReport(db *sql.DB, dir string, label string, start time.Time, en
 		report.Cost += cost
 		model.Cost += cost
 		session.Cost += cost
+		projectKey = normalizeProjectUsageKey(row.Directory)
+		if projectKey != "" {
+			usage := projectAgg[projectKey]
+			usage.Cost += cost
+			projectAgg[projectKey] = usage
+		}
 	}
 
 	report.Sessions = len(seenSessions)
 	report.Models = collectSortedModels(modelAgg)
-	report.TopSessions = collectSortedSessions(sessionAgg)
+	report.AllSessions = collectSortedSessions(sessionAgg)
+	report.TopSessions = append([]SessionUsage(nil), report.AllSessions...)
 	if len(report.TopSessions) > 8 {
 		report.TopSessions = report.TopSessions[:8]
 	}
+	report.TopProjects = topUsageAmountsWithCosts(projectAgg, unlimitedUsageItems)
+	report.TopAgents = topUsageCounts(agentAgg, unlimitedUsageItems)
+	report.TopAgentModels = topUsageCounts(agentModelAgg, unlimitedUsageItems)
+	report.TopSkills = topUsageCounts(skillAgg, unlimitedUsageItems)
+	report.TopTools = topUsageCounts(toolAgg, unlimitedUsageItems)
+	report.UniqueProjectCount = len(projectAgg)
+	for _, usage := range projectAgg {
+		report.TotalProjectCost += usage.Cost
+	}
+	report.ActiveMinutes = computeSessionMinutes(eventTimes, defaultSessionGapMinutes)
 	return report, nil
 }
 
 func loadWindowMessages(db *sql.DB, dir string, start, end time.Time) ([]windowMessageRow, error) {
 	query := `
-		SELECT m.id, m.session_id, CAST(COALESCE(s.title, '') AS TEXT), m.time_created,
+		SELECT m.id, m.session_id, CAST(COALESCE(s.title, '') AS TEXT), CAST(COALESCE(s.directory, '') AS TEXT), m.time_created,
 		       CAST(COALESCE(json_extract(m.data, '$.role'), '') AS TEXT),
 		       CAST(COALESCE(json_extract(m.data, '$.cost'), 0) AS REAL),
 		       CAST(COALESCE(json_extract(m.data, '$.summary'), 0) AS INTEGER),
@@ -133,7 +205,7 @@ func loadWindowMessages(db *sql.DB, dir string, start, end time.Time) ([]windowM
 	for rows.Next() {
 		var row windowMessageRow
 		var summary int64
-		if err := rows.Scan(&row.MessageID, &row.SessionID, &row.Title, &row.CreatedAt, &row.Role, &row.Cost, &summary, &row.Agent); err != nil {
+		if err := rows.Scan(&row.MessageID, &row.SessionID, &row.Title, &row.Directory, &row.CreatedAt, &row.Role, &row.Cost, &summary, &row.Agent); err != nil {
 			return nil, err
 		}
 		row.Summary = summary != 0
@@ -144,8 +216,12 @@ func loadWindowMessages(db *sql.DB, dir string, start, end time.Time) ([]windowM
 
 func loadWindowParts(db *sql.DB, dir string, start, end time.Time) ([]windowPartRow, error) {
 	query := `
-		SELECT p.message_id, p.session_id, CAST(COALESCE(s.title, '') AS TEXT), p.time_created,
+		SELECT p.message_id, p.session_id, CAST(COALESCE(s.title, '') AS TEXT), CAST(COALESCE(s.directory, '') AS TEXT), p.time_created,
 		       CAST(COALESCE(json_extract(p.data, '$.type'), '') AS TEXT),
+		       CAST(COALESCE(json_extract(p.data, '$.tool'), '') AS TEXT),
+		       CAST(COALESCE(json_type(p.data, '$.state.input.name'), '') AS TEXT),
+		       CAST(COALESCE(json_extract(p.data, '$.state.input.name'), '') AS TEXT),
+		       CAST(COALESCE(json_extract(p.data, '$.agent'), '') AS TEXT),
 		       CAST(COALESCE(json_extract(m.data, '$.providerID'), '') AS TEXT),
 		       CAST(COALESCE(json_extract(m.data, '$.modelID'), '') AS TEXT),
 		       CAST(COALESCE(json_extract(p.data, '$.cost'), 0) AS REAL),
@@ -176,8 +252,14 @@ func loadWindowParts(db *sql.DB, dir string, start, end time.Time) ([]windowPart
 	for rows.Next() {
 		var row windowPartRow
 		var summary int64
-		if err := rows.Scan(&row.MessageID, &row.SessionID, &row.Title, &row.CreatedAt, &row.Type, &row.ProviderID, &row.ModelID, &row.Cost, &row.MessageCost, &row.InputTokens, &row.OutputTokens, &row.ReasoningTokens, &row.CacheReadTokens, &row.CacheWriteTokens, &summary, &row.MessageAgent); err != nil {
+		var skillNameType string
+		if err := rows.Scan(&row.MessageID, &row.SessionID, &row.Title, &row.Directory, &row.CreatedAt, &row.Type, &row.Tool, &skillNameType, &row.SkillName, &row.Agent, &row.ProviderID, &row.ModelID, &row.Cost, &row.MessageCost, &row.InputTokens, &row.OutputTokens, &row.ReasoningTokens, &row.CacheReadTokens, &row.CacheWriteTokens, &summary, &row.MessageAgent); err != nil {
 			return nil, err
+		}
+		if skillNameType != "text" {
+			row.SkillName = ""
+		} else {
+			row.SkillName = strings.TrimSpace(row.SkillName)
 		}
 		row.Summary = summary != 0
 		result = append(result, row)
@@ -251,10 +333,101 @@ func LoadMonthDailyReport(dir string, monthStart time.Time) (MonthDailyReport, e
 	return buildMonthDailyReport(db, dir, monthStart)
 }
 
+func LoadYearMonthlyReport(dir string, endMonth time.Time) (YearMonthlyReport, error) {
+	dbPath, err := opencodeDBPath()
+	if err != nil {
+		return YearMonthlyReport{}, err
+	}
+	db, err := sql.Open("sqlite", sqliteDSN(dbPath))
+	if err != nil {
+		return YearMonthlyReport{}, err
+	}
+	defer db.Close()
+	return buildYearMonthlyReport(db, dir, endMonth)
+}
+
+func buildYearMonthlyReport(db *sql.DB, dir string, endMonth time.Time) (YearMonthlyReport, error) {
+	endMonth = startOfMonth(endMonth)
+	if endMonth.IsZero() {
+		endMonth = startOfMonth(time.Now())
+	}
+	startMonth := endMonth.AddDate(0, -11, 0)
+	report := YearMonthlyReport{
+		Start:  startMonth,
+		End:    endMonth.AddDate(0, 1, 0),
+		Months: make([]MonthlySummary, 0, 12),
+	}
+	for month := startMonth; !month.After(endMonth); month = month.AddDate(0, 1, 0) {
+		monthReport, err := buildMonthDailyReport(db, dir, month)
+		if err != nil {
+			return YearMonthlyReport{}, fmt.Errorf("build year monthly report %s: %w", month.Format("2006-01"), err)
+		}
+		summary := MonthlySummary{
+			MonthStart:    monthReport.MonthStart,
+			MonthEnd:      monthReport.MonthEnd,
+			ActiveDays:    monthReport.ActiveDays,
+			TotalMessages: monthReport.TotalMessages,
+			TotalSessions: monthReport.TotalSessions,
+			TotalTokens:   monthReport.TotalTokens,
+			TotalCost:     monthReport.TotalCost,
+		}
+		report.Months = append(report.Months, summary)
+		report.TotalMessages += summary.TotalMessages
+		report.TotalSessions += summary.TotalSessions
+		report.TotalTokens += summary.TotalTokens
+		report.TotalCost += summary.TotalCost
+		if isYearMonthlyActive(summary) {
+			report.ActiveMonths++
+		}
+	}
+	report.CurrentStreak = currentMonthlyStreak(report.Months)
+	report.BestStreak = bestMonthlyStreak(report.Months)
+	return report, nil
+}
+
+func isYearMonthlyActive(month MonthlySummary) bool {
+	return month.TotalMessages > 0 || month.TotalSessions > 0 || month.TotalTokens > 0 || month.TotalCost > 0
+}
+
+func currentMonthlyStreak(months []MonthlySummary) int {
+	current := 0
+	for i := len(months) - 1; i >= 0; i-- {
+		if !isYearMonthlyActive(months[i]) {
+			break
+		}
+		current++
+	}
+	return current
+}
+
+func bestMonthlyStreak(months []MonthlySummary) int {
+	best := 0
+	current := 0
+	for _, month := range months {
+		if isYearMonthlyActive(month) {
+			current++
+			if current > best {
+				best = current
+			}
+			continue
+		}
+		current = 0
+	}
+	return best
+}
+
 func buildMonthDailyReport(db *sql.DB, dir string, monthStart time.Time) (MonthDailyReport, error) {
-	// Normalize monthStart to beginning of month
 	monthStart = startOfMonth(monthStart)
 	monthEnd := monthStart.AddDate(0, 1, 0)
+	visibleEnd := monthEnd
+	today := startOfDay(time.Now())
+	currentMonth := startOfMonth(today)
+	if monthStart.Equal(currentMonth) {
+		tomorrow := today.AddDate(0, 0, 1)
+		if tomorrow.Before(visibleEnd) {
+			visibleEnd = tomorrow
+		}
+	}
 
 	report := MonthDailyReport{
 		MonthStart: monthStart,
@@ -262,10 +435,14 @@ func buildMonthDailyReport(db *sql.DB, dir string, monthStart time.Time) (MonthD
 		Days:       []DailySummary{},
 	}
 
-	// Map to accumulate daily stats
 	dayMap := make(map[string]*DailySummary)
+	daySessions := make(map[string]map[string]struct{})
+	for date := monthStart; date.Before(visibleEnd); date = date.AddDate(0, 0, 1) {
+		key := dayKey(date)
+		dayMap[key] = &DailySummary{Date: date, FocusTag: "--"}
+		daySessions[key] = make(map[string]struct{})
+	}
 
-	// Load all messages and parts for the month
 	messageRows, err := loadWindowMessages(db, dir, monthStart, monthEnd)
 	if err != nil {
 		return MonthDailyReport{}, err
@@ -273,21 +450,22 @@ func buildMonthDailyReport(db *sql.DB, dir string, monthStart time.Time) (MonthD
 
 	seenSessions := make(map[string]struct{})
 
-	// Process messages
 	for _, row := range messageRows {
 		if row.Summary || strings.EqualFold(row.Agent, "compaction") || row.Role != "assistant" {
 			continue
 		}
 
 		date := startOfDay(unixTimestampToTime(row.CreatedAt))
-		key := dayKey(date)
-		if _, ok := dayMap[key]; !ok {
-			dayMap[key] = &DailySummary{Date: date, FocusTag: "--"}
+		if date.Before(monthStart) || !date.Before(visibleEnd) {
+			continue
 		}
+		key := dayKey(date)
 
 		dayMap[key].Messages++
 		dayMap[key].Cost += row.Cost
+		report.TotalCost += row.Cost
 		seenSessions[row.SessionID] = struct{}{}
+		daySessions[key][row.SessionID] = struct{}{}
 	}
 
 	partRows, err := loadWindowParts(db, dir, monthStart, monthEnd)
@@ -295,7 +473,6 @@ func buildMonthDailyReport(db *sql.DB, dir string, monthStart time.Time) (MonthD
 		return MonthDailyReport{}, err
 	}
 
-	// Process parts (tokens and cost)
 	seenMessageCost := make(map[string]struct{})
 
 	for _, row := range partRows {
@@ -305,27 +482,22 @@ func buildMonthDailyReport(db *sql.DB, dir string, monthStart time.Time) (MonthD
 
 		seenSessions[row.SessionID] = struct{}{}
 		date := startOfDay(unixTimestampToTime(row.CreatedAt))
-		key := dayKey(date)
-		if _, ok := dayMap[key]; !ok {
-			dayMap[key] = &DailySummary{Date: date, FocusTag: "--"}
+		if date.Before(monthStart) || !date.Before(visibleEnd) {
+			continue
 		}
+		key := dayKey(date)
+		daySessions[key][row.SessionID] = struct{}{}
 
 		if row.Type != "step-finish" {
 			continue
 		}
 
-		// Accumulate tokens
 		totalTokens := row.InputTokens + row.OutputTokens + row.CacheReadTokens + row.CacheWriteTokens + row.ReasoningTokens
 		dayMap[key].Tokens += totalTokens
 		report.TotalTokens += totalTokens
 
-		// Handle cost accounting
 		if row.MessageCost > 0 {
-			if _, ok := seenMessageCost[row.MessageID]; !ok {
-				seenMessageCost[row.MessageID] = struct{}{}
-				dayMap[key].Cost += row.MessageCost
-				report.TotalCost += row.MessageCost
-			}
+			seenMessageCost[row.MessageID] = struct{}{}
 			continue
 		}
 
@@ -350,12 +522,12 @@ func buildMonthDailyReport(db *sql.DB, dir string, monthStart time.Time) (MonthD
 		report.TotalCost += cost
 	}
 
-	// Collect and sort daily summaries
 	days := make([]DailySummary, 0, len(dayMap))
 	allTokens := make([]int64, 0, len(dayMap))
 	allCosts := make([]float64, 0, len(dayMap))
 
-	for _, day := range dayMap {
+	for key, day := range dayMap {
+		day.Sessions = len(daySessions[key])
 		if day.Messages > 0 || day.Tokens > 0 || day.Cost > 0 {
 			report.ActiveDays++
 		}
@@ -369,17 +541,14 @@ func buildMonthDailyReport(db *sql.DB, dir string, monthStart time.Time) (MonthD
 		}
 	}
 
-	// Sort by date
 	sort.Slice(days, func(i, j int) bool {
-		return days[i].Date.Before(days[j].Date)
+		return days[i].Date.After(days[j].Date)
 	})
 
-	// Derive focus tags for each day
 	for i := range days {
 		days[i].FocusTag = deriveFocusTag(days[i].Tokens, days[i].Cost, allTokens, allCosts)
 	}
 
-	// Count unique sessions
 	report.TotalSessions = len(seenSessions)
 
 	report.Days = days

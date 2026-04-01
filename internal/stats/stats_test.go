@@ -1770,24 +1770,33 @@ func TestBuildMonthDailyReport_AggregatesDailyStats(t *testing.T) {
 		t.Errorf("expected 1 session, got %d", report.TotalSessions)
 	}
 
-	if len(report.Days) != 2 {
-		t.Errorf("expected 2 days in report, got %d", len(report.Days))
+	if len(report.Days) != 31 {
+		t.Errorf("expected 31 days in report, got %d", len(report.Days))
 	}
 
-	// Check first day (March 1)
-	if report.Days[0].Messages != 2 {
-		t.Errorf("expected 2 messages on day 0, got %d", report.Days[0].Messages)
-	}
-	if report.Days[0].Tokens != 2000 {
-		t.Errorf("expected 2000 tokens on day 0, got %d", report.Days[0].Tokens)
+	if report.Days[0].Date.Day() != 31 || report.Days[len(report.Days)-1].Date.Day() != 1 {
+		t.Errorf("expected newest-first day ordering, got first=%v last=%v", report.Days[0].Date, report.Days[len(report.Days)-1].Date)
 	}
 
-	// Check second day (March 15)
-	if report.Days[1].Messages != 1 {
-		t.Errorf("expected 1 message on day 1, got %d", report.Days[1].Messages)
+	var march1, march15 *DailySummary
+	for i := range report.Days {
+		day := &report.Days[i]
+		switch day.Date.Day() {
+		case 1:
+			march1 = day
+		case 15:
+			march15 = day
+		}
 	}
-	if report.Days[1].Tokens != 2000 {
-		t.Errorf("expected 2000 tokens on day 1, got %d", report.Days[1].Tokens)
+
+	if march1 == nil || march15 == nil {
+		t.Fatalf("expected populated summaries for March 1 and March 15, got %v", report.Days)
+	}
+	if march1.Messages != 2 || march1.Tokens != 2000 || march1.Sessions != 1 {
+		t.Errorf("expected March 1 summary {messages:2 tokens:2000 sessions:1}, got %+v", *march1)
+	}
+	if march15.Messages != 1 || march15.Tokens != 2000 || march15.Sessions != 1 {
+		t.Errorf("expected March 15 summary {messages:1 tokens:2000 sessions:1}, got %+v", *march15)
 	}
 }
 
@@ -1831,18 +1840,25 @@ func TestBuildMonthDailyReport_DeriveFocusTags(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(report.Days) != 3 {
-		t.Errorf("expected 3 days, got %d", len(report.Days))
+	if len(report.Days) != 31 {
+		t.Errorf("expected 31 days, got %d", len(report.Days))
 	}
 
-	// First day should be spike (10000 > (1000+100)*1.25 = 1375)
-	if report.Days[0].FocusTag != "spike" {
-		t.Errorf("expected spike on day 0, got %s", report.Days[0].FocusTag)
+	var march1 *DailySummary
+	for i := range report.Days {
+		if report.Days[i].Date.Day() == 1 {
+			march1 = &report.Days[i]
+			break
+		}
 	}
-
-	// Days should be sorted chronologically
-	if !report.Days[0].Date.Before(report.Days[1].Date) {
-		t.Errorf("days not sorted in chronological order")
+	if march1 == nil {
+		t.Fatalf("expected March 1 summary in month report")
+	}
+	if march1.FocusTag != "spike" {
+		t.Errorf("expected spike on March 1, got %s", march1.FocusTag)
+	}
+	if !report.Days[0].Date.After(report.Days[len(report.Days)-1].Date) {
+		t.Errorf("days not sorted in reverse chronological order")
 	}
 }
 
@@ -1890,8 +1906,17 @@ func TestBuildMonthDailyReport_MonthBoundaries(t *testing.T) {
 		t.Errorf("expected only March tokens (200), got %d", report.TotalTokens)
 	}
 
-	if len(report.Days) != 1 {
-		t.Errorf("expected only 1 day in March report, got %d", len(report.Days))
+	if len(report.Days) != 31 {
+		t.Errorf("expected all 31 days in March report, got %d", len(report.Days))
+	}
+	activeDays := 0
+	for _, day := range report.Days {
+		if day.Messages > 0 || day.Tokens > 0 || day.Cost > 0 {
+			activeDays++
+		}
+	}
+	if activeDays != 1 {
+		t.Errorf("expected only 1 active day in March report, got %d", activeDays)
 	}
 }
 
@@ -1950,5 +1975,320 @@ func TestBuildMonthDailyReport_ProjectScopeFiltering(t *testing.T) {
 
 	if report2.TotalTokens != 1000 {
 		t.Errorf("expected 1000 tokens for dir2, got %d", report2.TotalTokens)
+	}
+}
+
+func TestBuildMonthDailyReport_CurrentMonthExcludesFutureDates(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := filepath.Join(tmp, "work")
+	insertSession(t, db, "ses_work", dir)
+	today := time.Now().In(time.Local)
+	todayStart := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, time.Local)
+	insertMessage(t, db, "msg_today", "ses_work", todayStart.Add(10*time.Hour), `{"role":"assistant"}`)
+	insertPart(t, db, "step_today", "msg_today", "ses_work", todayStart.Add(10*time.Hour), `{"type":"step-finish","tokens":{"input":100,"output":200}}`)
+
+	report, err := buildMonthDailyReport(db, dir, time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.Local))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(report.Days) != today.Day() {
+		t.Fatalf("expected current-month report to include days only through today (%d), got %d", today.Day(), len(report.Days))
+	}
+	for _, day := range report.Days {
+		if day.Date.After(todayStart) {
+			t.Fatalf("expected no future dates in current-month report, got %v", day.Date)
+		}
+	}
+}
+
+func TestBuildMonthDailyReport_CurrentMonthSkipsFutureRowsWithinSameMonth(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := filepath.Join(tmp, "work")
+	insertSession(t, db, "ses_work", dir)
+	today := time.Now().In(time.Local)
+	todayStart := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, time.Local)
+	future := todayStart.AddDate(0, 0, 2).Add(9 * time.Hour)
+	insertMessage(t, db, "msg_future", "ses_work", future, `{"role":"assistant","cost":5.0}`)
+	insertPart(t, db, "step_future", "msg_future", "ses_work", future, `{"type":"step-finish","tokens":{"input":100,"output":200},"cost":1.0}`)
+
+	report, err := buildMonthDailyReport(db, dir, time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.Local))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, day := range report.Days {
+		if day.Date.After(todayStart) {
+			t.Fatalf("expected future same-month rows to be ignored, got %v", day.Date)
+		}
+	}
+	if report.TotalMessages != 0 || report.TotalTokens != 0 || report.TotalCost != 0 {
+		t.Fatalf("expected future rows not to affect totals, got messages=%d tokens=%d cost=%v", report.TotalMessages, report.TotalTokens, report.TotalCost)
+	}
+}
+
+func TestBuildMonthDailyReport_KeepsDayAndMonthCostConsistent(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENCODE_DB", dbPath)
+
+	dir := filepath.Join(tmp, "work")
+	insertSession(t, db, "ses_work", dir)
+	stamp := time.Date(2026, time.March, 1, 10, 0, 0, 0, time.Local)
+	insertMessage(t, db, "msg_a", "ses_work", stamp, `{"role":"assistant","cost":5.0}`)
+	insertPart(t, db, "step_a", "msg_a", "ses_work", stamp, `{"type":"step-finish","cost":1.0,"tokens":{"input":100,"output":100}}`)
+
+	report, err := buildMonthDailyReport(db, dir, time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if report.TotalCost != 5.0 {
+		t.Fatalf("expected month total cost 5.0 from message-level cost, got %v", report.TotalCost)
+	}
+	var march1 *DailySummary
+	for i := range report.Days {
+		if report.Days[i].Date.Day() == 1 {
+			march1 = &report.Days[i]
+			break
+		}
+	}
+	if march1 == nil {
+		t.Fatal("expected march 1 summary")
+	}
+	if march1.Cost != report.TotalCost {
+		t.Fatalf("expected day cost %v to match report total cost %v", march1.Cost, report.TotalCost)
+	}
+}
+
+func TestBuildYearMonthlyReport_AggregatesTwelveMonths(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENCODE_DB", dbPath)
+
+	dir := filepath.Join(tmp, "work")
+	insertSession(t, db, "ses_work", dir)
+	for i := 0; i < 12; i++ {
+		stamp := time.Date(2025, time.April, 1, 10, 0, 0, 0, time.Local).AddDate(0, i, 0)
+		msgID := fmt.Sprintf("msg_%02d", i)
+		stepID := fmt.Sprintf("step_%02d", i)
+		insertMessage(t, db, msgID, "ses_work", stamp, `{"role":"assistant"}`)
+		insertPart(t, db, stepID, msgID, "ses_work", stamp, fmt.Sprintf(`{"type":"step-finish","cost":%.1f,"tokens":{"input":%d,"output":%d}}`, float64(i+1), 100*(i+1), 50*(i+1)))
+	}
+
+	report, err := buildYearMonthlyReport(db, dir, time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Months) != 12 {
+		t.Fatalf("expected 12 months, got %d", len(report.Months))
+	}
+	if !report.Start.Equal(time.Date(2025, time.April, 1, 0, 0, 0, 0, time.Local)) {
+		t.Fatalf("expected start 2025-04, got %v", report.Start)
+	}
+	if !report.End.Equal(time.Date(2026, time.April, 1, 0, 0, 0, 0, time.Local)) {
+		t.Fatalf("expected end 2026-04, got %v", report.End)
+	}
+	if report.ActiveMonths != 12 {
+		t.Fatalf("expected 12 active months, got %d", report.ActiveMonths)
+	}
+	if report.CurrentStreak != 12 || report.BestStreak != 12 {
+		t.Fatalf("expected full active streaks, got current=%d best=%d", report.CurrentStreak, report.BestStreak)
+	}
+}
+
+func TestBuildWindowReport_PopulatesDailyDetailHourlyAndAllSessions(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := filepath.Join(tmp, "work")
+	insertSession(t, db, "ses_a", dir)
+	insertSession(t, db, "ses_b", dir)
+	start := time.Date(2026, time.March, 24, 0, 0, 0, 0, time.Local)
+	insertMessage(t, db, "msg_a", "ses_a", start.Add(9*time.Hour), `{"role":"assistant"}`)
+	insertPart(t, db, "part_a", "msg_a", "ses_a", start.Add(9*time.Hour), `{"type":"step-finish","tokens":{"input":1000,"output":500}}`)
+	insertMessage(t, db, "msg_a2", "ses_a", start.Add(9*time.Hour+10*time.Minute), `{"role":"assistant"}`)
+	insertPart(t, db, "part_a2", "msg_a2", "ses_a", start.Add(9*time.Hour+10*time.Minute), `{"type":"step-finish","tokens":{"input":500,"output":500}}`)
+	insertMessage(t, db, "msg_b", "ses_b", start.Add(11*time.Hour+30*time.Minute), `{"role":"assistant"}`)
+	insertPart(t, db, "part_b", "msg_b", "ses_b", start.Add(11*time.Hour+30*time.Minute), `{"type":"step-finish","tokens":{"input":2000,"output":1000}}`)
+
+	report, err := buildWindowReport(db, dir, "Daily", start, start.Add(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.AllSessions) != 2 {
+		t.Fatalf("expected all sessions populated, got %+v", report.AllSessions)
+	}
+	if len(report.TopTools) != 0 || len(report.TopSkills) != 0 || len(report.TopAgents) != 0 || len(report.TopProjects) != 1 {
+		t.Fatalf("expected day-scoped activity aggregates, got tools=%v skills=%v agents=%v projects=%v", report.TopTools, report.TopSkills, report.TopAgents, report.TopProjects)
+	}
+	if report.HalfHourSlots[18] != 2500 {
+		t.Fatalf("expected 09:00 half-hour slot bucket to include both 09:00 and 09:10 events, got %d", report.HalfHourSlots[18])
+	}
+	if report.HalfHourSlots[23] != 3000 {
+		t.Fatalf("expected 11:30 half-hour slot to be populated, got %d", report.HalfHourSlots[23])
+	}
+	if report.ActiveMinutes <= 0 {
+		t.Fatalf("expected active minutes to be computed, got %d", report.ActiveMinutes)
+	}
+}
+
+func TestBuildWindowReport_PopulatesDailyDetailActivityTables(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dirA := filepath.Join(tmp, "work-a")
+	dirB := filepath.Join(tmp, "work-b")
+	insertSession(t, db, "ses_a", dirA)
+	insertSession(t, db, "ses_b", dirB)
+	start := time.Date(2026, time.March, 24, 0, 0, 0, 0, time.Local)
+	insertMessage(t, db, "msg_agent", "ses_a", start.Add(9*time.Hour), `{"role":"assistant","agent":"explore","modelID":"gpt-5.4"}`)
+	insertPart(t, db, "part_tool", "msg_agent", "ses_a", start.Add(9*time.Hour+5*time.Minute), `{"type":"tool","tool":"bash"}`)
+	insertPart(t, db, "part_skill", "msg_agent", "ses_a", start.Add(9*time.Hour+10*time.Minute), `{"type":"tool","tool":"skill","state":{"input":{"name":"writing-plans"}}}`)
+	insertPart(t, db, "part_step_a", "msg_agent", "ses_a", start.Add(9*time.Hour+15*time.Minute), `{"type":"step-finish","tokens":{"input":1000,"output":500},"cost":1.5}`)
+	insertMessage(t, db, "msg_b", "ses_b", start.Add(11*time.Hour), `{"role":"assistant","agent":"explore","modelID":"gpt-5.4"}`)
+	insertPart(t, db, "part_step_b", "msg_b", "ses_b", start.Add(11*time.Hour), `{"type":"step-finish","tokens":{"input":2000,"output":1000},"cost":2.0}`)
+
+	report, err := buildWindowReport(db, "", "Daily", start, start.Add(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.TopProjects) != 2 || report.TotalProjectCost <= 0 {
+		t.Fatalf("expected project activity aggregated, got %+v totalCost=%v", report.TopProjects, report.TotalProjectCost)
+	}
+	if len(report.TopAgents) != 1 || report.TopAgents[0].Name != "explore" || report.TotalSubtasks != 2 {
+		t.Fatalf("expected agent activity aggregated, got %+v total=%d", report.TopAgents, report.TotalSubtasks)
+	}
+	if len(report.TopAgentModels) != 1 || report.TopAgentModels[0].Name != "explore\x00gpt-5.4" || report.TotalAgentModelCalls != 2 {
+		t.Fatalf("expected agent-model activity aggregated, got %+v total=%d", report.TopAgentModels, report.TotalAgentModelCalls)
+	}
+	if len(report.TopSkills) != 1 || report.TopSkills[0].Name != "writing-plans" || report.TotalSkillCalls != 1 {
+		t.Fatalf("expected skill activity aggregated, got %+v total=%d", report.TopSkills, report.TotalSkillCalls)
+	}
+	if len(report.TopTools) != 2 || report.TotalToolCalls != 2 {
+		t.Fatalf("expected tool activity aggregated, got %+v total=%d", report.TopTools, report.TotalToolCalls)
+	}
+}
+
+func TestBuildWindowReport_PreservesProviderModelKeyInModels(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := filepath.Join(tmp, "work")
+	insertSession(t, db, "ses_a", dir)
+	start := time.Date(2026, time.March, 24, 0, 0, 0, 0, time.Local)
+	insertMessage(t, db, "msg_model", "ses_a", start.Add(9*time.Hour), `{"role":"assistant","providerID":"openai","modelID":"gpt-5.4"}`)
+	insertPart(t, db, "part_model", "msg_model", "ses_a", start.Add(9*time.Hour), `{"type":"step-finish","tokens":{"input":1000,"output":500},"cost":1.5}`)
+
+	report, err := buildWindowReport(db, dir, "Daily", start, start.Add(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Models) != 1 {
+		t.Fatalf("expected one model usage row, got %+v", report.Models)
+	}
+	if report.Models[0].Model != "openai\x00gpt-5.4" {
+		t.Fatalf("expected provider/model key preserved, got %q", report.Models[0].Model)
 	}
 }

@@ -28,27 +28,31 @@ type RunnerAPI interface {
 }
 
 type RuntimeDeps struct {
-	Version           string
-	NewRunner         func() RunnerAPI
-	UserHomeDir       func() (string, error)
-	ReadFile          func(string) ([]byte, error)
-	LoadOcConfig      func(string) (*config.OcConfig, error)
-	ParsePlugins      func([]byte) ([]config.Plugin, string, error)
-	FilterByWhitelist func([]config.Plugin, []string) ([]config.Plugin, []config.Plugin)
-	Getwd             func() (string, error)
-	ListSessions      func(string) ([]tui.SessionItem, error)
-	LoadGlobalStats   func(config.StatsConfig) (stats.Report, error)
-	LoadProjectStats  func(string, config.StatsConfig) (stats.Report, error)
-	LoadGlobalWindow  func(string, time.Time, time.Time) (stats.WindowReport, error)
-	LoadProjectWindow func(string, string, time.Time, time.Time) (stats.WindowReport, error)
-	RunTUI            func([]tui.PluginItem, []tui.EditChoice, []tui.SessionItem, tui.SessionItem, stats.Report, stats.Report, config.StatsConfig, string, bool) (map[string]bool, bool, string, []string, tui.SessionItem, error)
-	ApplySelections   func([]byte, map[string]bool) ([]byte, error)
-	WriteConfigFile   func(string, []byte) error
-	OpenEditor        func(string, string) error
-	ParsePortRange    func(string) (int, int, error)
-	SelectPort        func(minPort, maxPort int, checkAvailable func(int) bool, logFn func(attempt, port int, available bool)) port.SelectResult
-	IsPortAvailable   func(int) bool
-	SendToast         func(context.Context, int, []string) error
+	Version                string
+	NewRunner              func() RunnerAPI
+	UserHomeDir            func() (string, error)
+	ReadFile               func(string) ([]byte, error)
+	LoadOcConfig           func(string) (*config.OcConfig, error)
+	ParsePlugins           func([]byte) ([]config.Plugin, string, error)
+	FilterByWhitelist      func([]config.Plugin, []string) ([]config.Plugin, []config.Plugin)
+	Getwd                  func() (string, error)
+	ListSessions           func(string) ([]tui.SessionItem, error)
+	LoadGlobalStats        func(config.StatsConfig) (stats.Report, error)
+	LoadProjectStats       func(string, config.StatsConfig) (stats.Report, error)
+	LoadGlobalWindow       func(string, time.Time, time.Time) (stats.WindowReport, error)
+	LoadProjectWindow      func(string, string, time.Time, time.Time) (stats.WindowReport, error)
+	LoadGlobalYearMonthly  func(time.Time) (stats.YearMonthlyReport, error)
+	LoadProjectYearMonthly func(string, time.Time) (stats.YearMonthlyReport, error)
+	LoadGlobalMonthDaily   func(time.Time) (stats.MonthDailyReport, error)
+	LoadProjectMonthDaily  func(string, time.Time) (stats.MonthDailyReport, error)
+	RunTUI                 func([]tui.PluginItem, []tui.EditChoice, []tui.SessionItem, tui.SessionItem, stats.Report, stats.Report, config.StatsConfig, string, bool) (map[string]bool, bool, string, []string, tui.SessionItem, error)
+	ApplySelections        func([]byte, map[string]bool) ([]byte, error)
+	WriteConfigFile        func(string, []byte) error
+	OpenEditor             func(string, string) error
+	ParsePortRange         func(string) (int, int, error)
+	SelectPort             func(minPort, maxPort int, checkAvailable func(int) bool, logFn func(attempt, port int, available bool)) port.SelectResult
+	IsPortAvailable        func(int) bool
+	SendToast              func(context.Context, int, []string) error
 }
 
 type runtimePaths struct {
@@ -111,6 +115,18 @@ func DefaultDeps(version string) RuntimeDeps {
 		LoadProjectWindow: func(dir string, label string, start, end time.Time) (stats.WindowReport, error) {
 			return stats.LoadWindowReport(dir, label, start, end)
 		},
+		LoadGlobalYearMonthly: func(endMonth time.Time) (stats.YearMonthlyReport, error) {
+			return stats.LoadYearMonthlyReport("", endMonth)
+		},
+		LoadProjectYearMonthly: func(dir string, endMonth time.Time) (stats.YearMonthlyReport, error) {
+			return stats.LoadYearMonthlyReport(dir, endMonth)
+		},
+		LoadGlobalMonthDaily: func(monthStart time.Time) (stats.MonthDailyReport, error) {
+			return stats.LoadMonthDailyReport("", monthStart)
+		},
+		LoadProjectMonthDaily: func(dir string, monthStart time.Time) (stats.MonthDailyReport, error) {
+			return stats.LoadMonthDailyReport(dir, monthStart)
+		},
 		ApplySelections: config.ApplySelections,
 		WriteConfigFile: config.WriteConfigFile,
 		OpenEditor:      editor.OpenWithConfig,
@@ -140,6 +156,26 @@ func DefaultDeps(version string) RuntimeDeps {
 						return stats.WindowReport{}, err
 					}
 					return deps.LoadProjectWindow(cwd, label, start, end)
+				},
+			).
+			WithYearMonthlyLoaders(
+				deps.LoadGlobalYearMonthly,
+				func(endMonth time.Time) (stats.YearMonthlyReport, error) {
+					cwd, err := deps.Getwd()
+					if err != nil {
+						return stats.YearMonthlyReport{}, err
+					}
+					return deps.LoadProjectYearMonthly(cwd, endMonth)
+				},
+			).
+			WithMonthDailyLoaders(
+				deps.LoadGlobalMonthDaily,
+				func(monthStart time.Time) (stats.MonthDailyReport, error) {
+					cwd, err := deps.Getwd()
+					if err != nil {
+						return stats.MonthDailyReport{}, err
+					}
+					return deps.LoadProjectMonthDaily(cwd, monthStart)
 				},
 			)
 		result, err := tea.NewProgram(model).Run()
@@ -274,6 +310,26 @@ func normalizeDeps(deps RuntimeDeps) RuntimeDeps {
 	if deps.LoadProjectWindow == nil {
 		deps.LoadProjectWindow = func(string, string, time.Time, time.Time) (stats.WindowReport, error) {
 			return stats.WindowReport{}, nil
+		}
+	}
+	if deps.LoadGlobalYearMonthly == nil {
+		deps.LoadGlobalYearMonthly = func(time.Time) (stats.YearMonthlyReport, error) {
+			return stats.YearMonthlyReport{}, nil
+		}
+	}
+	if deps.LoadProjectYearMonthly == nil {
+		deps.LoadProjectYearMonthly = func(string, time.Time) (stats.YearMonthlyReport, error) {
+			return stats.YearMonthlyReport{}, nil
+		}
+	}
+	if deps.LoadGlobalMonthDaily == nil {
+		deps.LoadGlobalMonthDaily = func(time.Time) (stats.MonthDailyReport, error) {
+			return stats.MonthDailyReport{}, nil
+		}
+	}
+	if deps.LoadProjectMonthDaily == nil {
+		deps.LoadProjectMonthDaily = func(string, time.Time) (stats.MonthDailyReport, error) {
+			return stats.MonthDailyReport{}, nil
 		}
 	}
 	if deps.SendToast == nil {

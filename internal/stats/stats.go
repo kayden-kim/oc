@@ -122,15 +122,29 @@ type Report struct {
 }
 
 type WindowReport struct {
-	Label       string
-	Start       time.Time
-	End         time.Time
-	Messages    int
-	Sessions    int
-	Tokens      int64
-	Cost        float64
-	Models      []ModelUsage
-	TopSessions []SessionUsage
+	Label                string
+	Start                time.Time
+	End                  time.Time
+	Messages             int
+	Sessions             int
+	Tokens               int64
+	Cost                 float64
+	TotalToolCalls       int
+	TotalSkillCalls      int
+	TotalSubtasks        int
+	TotalAgentModelCalls int
+	TotalProjectCost     float64
+	UniqueProjectCount   int
+	Models               []ModelUsage
+	AllSessions          []SessionUsage
+	TopSessions          []SessionUsage
+	TopProjects          []UsageCount
+	TopAgents            []UsageCount
+	TopAgentModels       []UsageCount
+	TopSkills            []UsageCount
+	TopTools             []UsageCount
+	HalfHourSlots        [48]int64
+	ActiveMinutes        int
 }
 
 type ModelUsage struct {
@@ -172,6 +186,29 @@ type MonthDailyReport struct {
 	Days          []DailySummary
 }
 
+type MonthlySummary struct {
+	MonthStart    time.Time
+	MonthEnd      time.Time
+	ActiveDays    int
+	TotalMessages int
+	TotalSessions int
+	TotalTokens   int64
+	TotalCost     float64
+}
+
+type YearMonthlyReport struct {
+	Start         time.Time
+	End           time.Time
+	ActiveMonths  int
+	CurrentStreak int
+	BestStreak    int
+	TotalMessages int
+	TotalSessions int
+	TotalTokens   int64
+	TotalCost     float64
+	Months        []MonthlySummary
+}
+
 type DailyLoadKey struct {
 	Scope      string
 	MonthStart time.Time
@@ -183,6 +220,7 @@ type windowMessageRow struct {
 	MessageID string
 	SessionID string
 	Title     string
+	Directory string
 	CreatedAt int64
 	Role      string
 	Cost      float64
@@ -194,8 +232,12 @@ type windowPartRow struct {
 	MessageID        string
 	SessionID        string
 	Title            string
+	Directory        string
 	CreatedAt        int64
 	Type             string
+	Tool             string
+	SkillName        string
+	Agent            string
 	ProviderID       string
 	ModelID          string
 	Cost             float64
