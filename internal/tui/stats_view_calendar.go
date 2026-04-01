@@ -893,13 +893,18 @@ func (m Model) renderDailyDetailAxisLine() string {
 			parts = append(parts, "  ")
 		}
 	}
-	return defaultTextStyle.Render("    " + strings.Join(parts, " "))
+	return defaultTextStyle.Render("      " + strings.Join(parts, " "))
 }
 
 func (m Model) renderDailyDetailSparkline(report stats.WindowReport) string {
-	hourly := compressHalfHourSlots(report.HalfHourSlots)
+	now := time.Now()
+	highlightCurrent := startOfStatsDay(m.currentDailyDate()).Equal(startOfStatsDay(now))
+	return renderHalfHourSparkline(report.HalfHourSlots, now, highlightCurrent)
+}
+
+func renderHalfHourSparkline(slots [48]int64, now time.Time, highlightCurrent bool) string {
 	maxSlot := int64(0)
-	for _, slot := range hourly {
+	for _, slot := range slots {
 		if slot > maxSlot {
 			maxSlot = slot
 		}
@@ -909,27 +914,28 @@ func (m Model) renderDailyDetailSparkline(report stats.WindowReport) string {
 		step = 1
 	}
 	var b strings.Builder
-	for i, slot := range hourly {
+	currentSlot := -1
+	if highlightCurrent {
+		currentSlot = now.Hour()*2 + now.Minute()/30
+	}
+	for i, slot := range slots {
 		if i > 0 {
-			b.WriteByte(' ')
+			if i%2 == 0 {
+				b.WriteByte(' ')
+			}
 		}
 		level := sparklineLevel(slot, step)
-		char := strings.Repeat(string(sparklineChars[level]), 2)
+		char := string(sparklineChars[level])
 		color := sparklineTodayColors[level]
 		if level == 0 {
 			color = sparklineYesterdayColors[level]
 		}
+		if i == currentSlot {
+			color = currentHalfHourHighlightColor
+		}
 		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(char))
 	}
-	return defaultTextStyle.Render("    ") + b.String()
-}
-
-func compressHalfHourSlots(slots [48]int64) [24]int64 {
-	var hourly [24]int64
-	for i := range 24 {
-		hourly[i] = slots[i*2] + slots[i*2+1]
-	}
-	return hourly
+	return defaultTextStyle.Render("      ") + b.String()
 }
 
 func windowSessionTableRows(sessions []stats.SessionUsage, currentSessionID string) []statsTableRow {

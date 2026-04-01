@@ -883,11 +883,35 @@ func TestRenderDailyDetailHourlyLines_ShiftsGraphLeftByFourSpaces(t *testing.T) 
 	report := stats.WindowReport{}
 	axis := stripANSI(m.renderDailyDetailAxisLine())
 	spark := stripANSI(m.renderDailyDetailSparkline(report))
-	if !strings.HasPrefix(axis, "    00") {
-		t.Fatalf("expected axis line to align with the surrounding bullet indent, got %q", axis)
+	if !strings.HasPrefix(axis, "      00") {
+		t.Fatalf("expected axis line to start two columns further right, got %q", axis)
 	}
-	if !strings.HasPrefix(spark, "    ") {
-		t.Fatalf("expected sparkline to align with the surrounding bullet indent, got %q", spark)
+	if !strings.HasPrefix(spark, "      ") {
+		t.Fatalf("expected sparkline to start two columns further right, got %q", spark)
+	}
+}
+
+func TestRenderHalfHourSparkline_HighlightsCurrentSlotWhenToday(t *testing.T) {
+	now := time.Date(2026, time.April, 2, 10, 30, 0, 0, time.Local)
+	var slots [48]int64
+	slots[21] = 1000
+	line := renderHalfHourSparkline(slots, now, true)
+	expected := lipgloss.NewStyle().Foreground(lipgloss.Color(currentHalfHourHighlightColor)).Render(string(sparklineChars[7]))
+
+	if !strings.Contains(line, expected) {
+		t.Fatalf("expected current half-hour slot to be highlighted white, got %q", line)
+	}
+}
+
+func TestRenderHalfHourSparkline_DoesNotHighlightCurrentSlotWhenNotToday(t *testing.T) {
+	now := time.Date(2026, time.April, 2, 10, 30, 0, 0, time.Local)
+	var slots [48]int64
+	slots[21] = 1000
+	line := renderHalfHourSparkline(slots, now, false)
+	unexpected := lipgloss.NewStyle().Foreground(lipgloss.Color(currentHalfHourHighlightColor)).Render(string(sparklineChars[7]))
+
+	if strings.Contains(line, unexpected) {
+		t.Fatalf("did not expect white current-slot highlight for non-today data, got %q", line)
 	}
 }
 

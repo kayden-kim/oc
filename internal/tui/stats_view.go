@@ -215,7 +215,9 @@ func (m Model) renderLauncherTodayAxisLine() string {
 }
 
 func (m Model) renderLauncherTodaySparkline(report stats.WindowReport) string {
-	return m.renderDailyDetailSparkline(report)
+	now := time.Now()
+	highlightCurrent := startOfStatsDay(report.Start).Equal(startOfStatsDay(now))
+	return renderHalfHourSparkline(report.HalfHourSlots, now, highlightCurrent)
 }
 
 func (m Model) currentReport() stats.Report {
@@ -808,6 +810,7 @@ var sparklineYesterdayColors = [8]string{
 }
 
 const sparklineHighlightColor = "#FFAA33"
+const currentHalfHourHighlightColor = "#FFFFFF"
 
 func sparklineCell(level int, isCurrentSlot bool, isToday bool) string {
 	char := sparklineChars[level]

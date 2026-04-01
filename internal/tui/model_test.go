@@ -1160,7 +1160,7 @@ func TestView_RendersTodayAndMetricsSections(t *testing.T) {
 	if !strings.Contains(view, "• active 5.5/24h (streak 0.5h, best 2h)") {
 		t.Fatalf("expected today active summary, got %q", view)
 	}
-	if !strings.Contains(view, "    00") || !strings.Contains(view, "22") {
+	if !strings.Contains(view, "      00") || !strings.Contains(view, "22") {
 		t.Fatalf("expected daily-style hourly axis, got %q", view)
 	}
 	for _, snippet := range []string{"tokens", "input", "output", "c.read", "c.write", "reasoning", "total", "cost", "hours", "sess", "msgs", "lines", "files", "agents", "skills", "tools", "5.7M", "237k", "82.9M", "75k", "88.9M", "$38.54", "5.5h", "23", "352", "32.0k", "42", "33"} {
