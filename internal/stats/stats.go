@@ -127,6 +127,11 @@ type WindowReport struct {
 	End                  time.Time
 	Messages             int
 	Sessions             int
+	InputTokens          int64
+	OutputTokens         int64
+	CacheReadTokens      int64
+	CacheWriteTokens     int64
+	ReasoningTokens      int64
 	Tokens               int64
 	Cost                 float64
 	TotalToolCalls       int
@@ -135,6 +140,8 @@ type WindowReport struct {
 	TotalAgentModelCalls int
 	TotalProjectCost     float64
 	UniqueProjectCount   int
+	CodeLines            int
+	ChangedFiles         int
 	Models               []ModelUsage
 	AllSessions          []SessionUsage
 	TopSessions          []SessionUsage

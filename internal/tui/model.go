@@ -601,6 +601,28 @@ func (m *Model) jumpStatsTo(target scrollTarget, total int) {
 	m.statsOffset = jumpTarget(target, total, m.availableStatsRows())
 }
 
+func (m Model) statsListCanScreenScroll() bool {
+	if !m.statsMode {
+		return false
+	}
+	if (m.statsTab == 1 && m.dailyDetailMode) || (m.statsTab == 2 && m.monthlyDetailMode) {
+		return false
+	}
+	total := len(m.statsContentLines())
+	visible := m.availableStatsRows()
+	return visible > 0 && visible < total
+}
+
+func (m *Model) syncStatsListOffsetFromScreenScroll() {
+	if m.statsTab == 1 && !m.dailyDetailMode {
+		m.dailyListOffset = m.statsOffset
+		return
+	}
+	if m.statsTab == 2 && !m.monthlyDetailMode {
+		m.monthlyListOffset = m.statsOffset
+	}
+}
+
 // NewModel creates a new TUI model with the given plugin items
 func NewModel(items []PluginItem, editChoices []EditChoice, sessions []SessionItem, session SessionItem, globalStats stats.Report, projectStats stats.Report, statsConfig config.StatsConfig, version string, allowMultiplePlugins bool) Model {
 	selected := make(map[int]struct{})
@@ -613,8 +635,7 @@ func NewModel(items []PluginItem, editChoices []EditChoice, sessions []SessionIt
 		}
 	}
 
-	// Empty list: auto-confirm immediately
-	confirmed := len(items) == 0
+	confirmed := false
 
 	sessionCursor := 0
 	for i, item := range sessions {
@@ -649,7 +670,7 @@ func NewModel(items []PluginItem, editChoices []EditChoice, sessions []SessionIt
 	}
 }
 
-// Init initializes the model (no initial command needed)
+// Init initializes the model and kicks off the launcher today-summary load.
 func (m Model) Init() tea.Cmd {
 	return m.loadCurrentScopeCmd()
 }
@@ -1149,7 +1170,10 @@ func (m *Model) navigateDailyMonth(delta int) {
 
 func (m Model) loadCurrentScopeCmd() tea.Cmd {
 	now := time.Now()
-	if m.statsMode && m.statsTab > 0 {
+	if m.statsMode {
+		if m.statsTab == 0 {
+			return m.loadOverviewCmd(now)
+		}
 		if m.statsTab == 1 && !m.dailyDetailMode {
 			return m.loadMonthDailyReportCmd(m.currentDailyMonth(), now)
 		}
@@ -1165,7 +1189,8 @@ func (m Model) loadCurrentScopeCmd() tea.Cmd {
 		}
 		return m.loadWindowReportCmd(label, start, end, now)
 	}
-	return m.loadOverviewCmd(now)
+	start := startOfStatsDay(now)
+	return m.loadWindowReportCmd("Daily", start, start.AddDate(0, 0, 1), now)
 }
 
 func (m Model) loadOverviewCmd(now time.Time) tea.Cmd {
@@ -1233,7 +1258,7 @@ func (m Model) loadMonthDailyReportCmd(monthStart, now time.Time) tea.Cmd {
 
 func (m Model) loadWindowReportCmd(label string, start, end, now time.Time) tea.Cmd {
 	if m.projectScope {
-		if m.windowFresh(true, label, now) || m.windowLoading(true, label) || m.loadProjectWindow == nil {
+		if m.windowFresh(true, label, start, now) || m.windowLoading(true, label) || m.loadProjectWindow == nil {
 			return nil
 		}
 		m.setWindowLoading(true, label, true)
@@ -1241,7 +1266,7 @@ func (m Model) loadWindowReportCmd(label string, start, end, now time.Time) tea.
 			return m.loadProjectWindow(label, start, end)
 		})
 	}
-	if m.windowFresh(false, label, now) || m.windowLoading(false, label) || m.loadGlobalWindow == nil {
+	if m.windowFresh(false, label, start, now) || m.windowLoading(false, label) || m.loadGlobalWindow == nil {
 		return nil
 	}
 	m.setWindowLoading(false, label, true)
@@ -1250,16 +1275,16 @@ func (m Model) loadWindowReportCmd(label string, start, end, now time.Time) tea.
 	})
 }
 
-func (m Model) windowFresh(project bool, label string, now time.Time) bool {
+func (m Model) windowFresh(project bool, label string, start time.Time, now time.Time) bool {
 	switch {
 	case project && label == "Daily":
-		return m.projectDailyLoaded && startOfStatsDay(m.projectDailyDate).Equal(m.currentDailyDate()) && now.Sub(m.projectDailyUpdatedAt) < statsViewTTL
+		return m.projectDailyLoaded && startOfStatsDay(m.projectDailyDate).Equal(startOfStatsDay(start)) && now.Sub(m.projectDailyUpdatedAt) < statsViewTTL
 	case project && label == "Monthly":
-		return m.projectMonthlyLoaded && statsMonthStart(m.projectMonthly.Start).Equal(m.currentMonthlySelection()) && now.Sub(m.projectMonthlyUpdatedAt) < statsViewTTL
+		return m.projectMonthlyLoaded && statsMonthStart(m.projectMonthly.Start).Equal(statsMonthStart(start)) && now.Sub(m.projectMonthlyUpdatedAt) < statsViewTTL
 	case !project && label == "Daily":
-		return m.globalDailyLoaded && startOfStatsDay(m.globalDailyDate).Equal(m.currentDailyDate()) && now.Sub(m.globalDailyUpdatedAt) < statsViewTTL
+		return m.globalDailyLoaded && startOfStatsDay(m.globalDailyDate).Equal(startOfStatsDay(start)) && now.Sub(m.globalDailyUpdatedAt) < statsViewTTL
 	default:
-		return m.globalMonthlyLoaded && statsMonthStart(m.globalMonthly.Start).Equal(m.currentMonthlySelection()) && now.Sub(m.globalMonthlyUpdatedAt) < statsViewTTL
+		return m.globalMonthlyLoaded && statsMonthStart(m.globalMonthly.Start).Equal(statsMonthStart(start)) && now.Sub(m.globalMonthlyUpdatedAt) < statsViewTTL
 	}
 }
 
@@ -1349,11 +1374,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setWindowLoading(msg.project, msg.label, false)
 		if msg.err == nil {
 			if msg.label == "Daily" {
-				if m.dailyDetailMode == false {
-					return m, nil
-				}
-				if msg.project != m.projectScope || !startOfStatsDay(msg.start).Equal(m.currentDailyDate()) {
-					return m, nil
+				if m.statsMode {
+					if !m.dailyDetailMode || msg.project != m.projectScope || !startOfStatsDay(msg.start).Equal(m.currentDailyDate()) {
+						return m, nil
+					}
+				} else {
+					today := startOfStatsDay(time.Now())
+					if msg.project != m.projectScope {
+						return m, nil
+					}
+					if !startOfStatsDay(msg.start).Equal(today) {
+						return m, m.loadCurrentScopeCmd()
+					}
 				}
 			}
 			m.setWindowReport(msg.project, msg.label, msg.report)
@@ -1398,7 +1430,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.resetMonthlyState(time.Now())
 					return m, m.loadCurrentScopeCmd()
 				}
+				now := time.Now()
+				start := startOfStatsDay(now)
+				if m.windowLoading(m.projectScope, "Daily") || m.windowFresh(m.projectScope, "Daily", start, now) {
+					m.statsOffset = 0
+					return m, nil
+				}
 				m.statsOffset = 0
+				return m, m.loadCurrentScopeCmd()
 			}
 		case "g":
 			if !m.editMode && !m.sessionMode {
@@ -1413,6 +1452,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.statsOffset = m.monthlyDetailOffset
 				} else {
 					m.statsOffset = 0
+				}
+				now := time.Now()
+				if !m.statsMode {
+					start := startOfStatsDay(now)
+					if m.windowLoading(m.projectScope, "Daily") || m.windowFresh(m.projectScope, "Daily", start, now) {
+						return m, nil
+					}
 				}
 				return m, m.loadCurrentScopeCmd()
 			}
@@ -1472,6 +1518,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "pgup":
 			if m.statsMode {
+				if m.statsListCanScreenScroll() {
+					m.pageStats(-1, len(m.statsContentLines()))
+					m.syncStatsListOffsetFromScreenScroll()
+					return m, nil
+				}
 				if m.statsTab == 1 && !m.dailyDetailMode {
 					m.pageDailySelection(-1)
 					return m, nil
@@ -1494,6 +1545,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "pgdown":
 			if m.statsMode {
+				if m.statsListCanScreenScroll() {
+					m.pageStats(1, len(m.statsContentLines()))
+					m.syncStatsListOffsetFromScreenScroll()
+					return m, nil
+				}
 				if m.statsTab == 1 && !m.dailyDetailMode {
 					m.pageDailySelection(1)
 					return m, nil
@@ -1516,6 +1572,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "ctrl+u":
 			if m.statsMode {
+				if m.statsListCanScreenScroll() {
+					m.halfPageStats(-1, len(m.statsContentLines()))
+					m.syncStatsListOffsetFromScreenScroll()
+					return m, nil
+				}
 				if m.statsTab == 1 && !m.dailyDetailMode {
 					m.halfPageDailySelection(-1)
 					return m, nil
@@ -1538,6 +1599,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "ctrl+d":
 			if m.statsMode {
+				if m.statsListCanScreenScroll() {
+					m.halfPageStats(1, len(m.statsContentLines()))
+					m.syncStatsListOffsetFromScreenScroll()
+					return m, nil
+				}
 				if m.statsTab == 1 && !m.dailyDetailMode {
 					m.halfPageDailySelection(1)
 					return m, nil
@@ -1556,6 +1622,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.sessionMode {
 				m.halfPageSession(1)
+				return m, nil
+			}
+		case "ctrl+up":
+			if m.statsMode && m.statsListCanScreenScroll() {
+				m.scrollStats(-1, len(m.statsContentLines()))
+				m.syncStatsListOffsetFromScreenScroll()
+				return m, nil
+			}
+		case "ctrl+down":
+			if m.statsMode && m.statsListCanScreenScroll() {
+				m.scrollStats(1, len(m.statsContentLines()))
+				m.syncStatsListOffsetFromScreenScroll()
 				return m, nil
 			}
 		case "home":
@@ -1732,10 +1810,6 @@ func (m Model) View() tea.View {
 		return tea.NewView("")
 	}
 
-	if len(m.plugins) == 0 {
-		return tea.NewView("")
-	}
-
 	if m.editMode {
 		s := m.renderTopBadge() + "\n\n" + renderSectionHeader("📂 Choose config to edit", m.layoutWidth()) + "\n\n"
 
@@ -1787,7 +1861,7 @@ func (m Model) View() tea.View {
 		return tea.NewView(m.renderStatsView())
 	}
 
-	sections := []string{m.renderLauncherAnalytics(), renderSectionHeader("📋 Choose plugins", m.layoutWidth())}
+	sections := []string{m.renderLauncherTodaySummary(), renderSectionHeader("📋 Choose plugins", m.layoutWidth())}
 	s := m.renderTopBadge() + "\n\n" + strings.Join(filterNonEmpty(sections), "\n\n") + "\n\n"
 
 	for i, p := range m.plugins {
@@ -1816,6 +1890,10 @@ func (m Model) View() tea.View {
 		line = stylePluginRow(line, focused, selected)
 
 		s += line + "\n"
+	}
+	if len(m.plugins) == 0 {
+		hint := dimmedLabelStyle.Render("Press enter to launch opencode")
+		s += lipgloss.PlaceHorizontal(m.layoutWidth(), lipgloss.Center, hint) + "\n"
 	}
 
 	s += "\n" + renderHelpLine(m.layoutWidth())

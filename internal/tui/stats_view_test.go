@@ -92,6 +92,95 @@ func TestRenderStatsTable_PathAwareColumnsUsePathTruncation(t *testing.T) {
 	}
 }
 
+func TestStatsTableColumnWidths_PrefersExpandableColumnsForRemainingWidth(t *testing.T) {
+	columns := []statsTableColumn{
+		{Header: "Model", MinWidth: 10, Expand: true, Style: defaultTextStyle},
+		{Header: "Cost", MinWidth: 4, AlignRight: true, Style: statsValueTextStyle},
+	}
+	rows := []statsTableRow{{Cells: []string{"gpt-5.4", "$1"}}}
+	widths := statsTableColumnWidths(columns, rows, 20)
+
+	if got, want := widths[0], 14; got != want {
+		t.Fatalf("expected expandable first column width %d, got %d", want, got)
+	}
+	if got, want := widths[1], 4; got != want {
+		t.Fatalf("expected non-expandable second column width %d, got %d", want, got)
+	}
+}
+
+func TestMonthDailyColumns_PutsSessionsBeforeMessages(t *testing.T) {
+	m := NewModel([]PluginItem{}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, "v1.0", false)
+	m.width = 100
+	columns := m.monthDailyColumns()
+
+	if len(columns) < 3 {
+		t.Fatalf("expected daily columns to include date, sessions, and messages, got %#v", columns)
+	}
+	if columns[1].Header != "sess" || columns[2].Header != "msgs" {
+		t.Fatalf("expected sessions before messages, got %#v", columns)
+	}
+}
+
+func TestWindowModelColumns_UsesReasonHeaderAndExpandableNameColumn(t *testing.T) {
+	columns := windowModelColumns()
+
+	if len(columns) < 6 {
+		t.Fatalf("expected model columns, got %#v", columns)
+	}
+	if !columns[0].Expand {
+		t.Fatalf("expected first model column to absorb remaining width, got %#v", columns[0])
+	}
+	if columns[5].Header != "reason" {
+		t.Fatalf("expected reasoning column header to be renamed to reason, got %q", columns[5].Header)
+	}
+}
+
+func TestRenderMetricsLines_PutSessionsBeforeMessages(t *testing.T) {
+	m := NewModel([]PluginItem{}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, "v1.0", false)
+	m.width = 100
+	m.dailySelectedDate = time.Date(2026, time.March, 2, 0, 0, 0, 0, time.Local)
+	m.monthlySelectedMonth = time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local)
+
+	daily := stats.MonthDailyReport{
+		MonthStart:    time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local),
+		MonthEnd:      time.Date(2026, time.April, 1, 0, 0, 0, 0, time.Local),
+		TotalMessages: 30,
+		TotalSessions: 10,
+		TotalTokens:   1000,
+		TotalCost:     12.34,
+		Days: []stats.DailySummary{{
+			Date:     time.Date(2026, time.March, 2, 0, 0, 0, 0, time.Local),
+			Messages: 20,
+			Sessions: 5,
+			Tokens:   900,
+			Cost:     10.11,
+		}},
+	}
+	monthly := stats.YearMonthlyReport{
+		TotalMessages: 30,
+		TotalSessions: 10,
+		TotalTokens:   1000,
+		TotalCost:     12.34,
+		Months: []stats.MonthlySummary{{
+			MonthStart:    time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local),
+			MonthEnd:      time.Date(2026, time.April, 1, 0, 0, 0, 0, time.Local),
+			TotalMessages: 20,
+			TotalSessions: 5,
+			TotalTokens:   900,
+			TotalCost:     10.11,
+		}},
+	}
+
+	dailyPlain := stripANSI(strings.Join(m.renderMonthDailyMetricsLines(daily), "\n"))
+	if strings.Index(dailyPlain, "sessions") > strings.Index(dailyPlain, "messages") {
+		t.Fatalf("expected daily metrics to list sessions before messages, got %q", dailyPlain)
+	}
+	monthlyPlain := stripANSI(strings.Join(m.renderYearMonthlyMetricsLines(monthly), "\n"))
+	if strings.Index(monthlyPlain, "sessions") > strings.Index(monthlyPlain, "messages") {
+		t.Fatalf("expected monthly metrics to list sessions before messages, got %q", monthlyPlain)
+	}
+}
+
 func TestShortenPathMiddle_PreservesPathEnds(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -444,7 +533,7 @@ func TestRenderDailyDetailLines_UsesRequestedDetailLayout(t *testing.T) {
 		Tokens:               215900000,
 		Cost:                 130.28,
 		ActiveMinutes:        324,
-		Models:               []stats.ModelUsage{{Model: "gpt-5.4", TotalTokens: 1000, Cost: 1.23}},
+		Models:               []stats.ModelUsage{{Model: "openai\x00gpt-5.4", TotalTokens: 1000, Cost: 1.23}},
 		TopProjects:          []stats.UsageCount{{Name: "/tmp/work-a", Amount: 3000, Cost: 4.56}},
 		TopAgents:            []stats.UsageCount{{Name: "explore", Count: 2}},
 		TopAgentModels:       []stats.UsageCount{{Name: "explore\x00gpt-5.4", Count: 2}},
@@ -478,6 +567,9 @@ func TestRenderDailyDetailLines_UsesRequestedDetailLayout(t *testing.T) {
 	}
 	if !strings.Contains(plain, "Total") {
 		t.Fatalf("expected total rows in detail tables, got %q", plain)
+	}
+	if !strings.Contains(plain, "oa| gpt-5.4") {
+		t.Fatalf("expected daily detail model label to include provider abbreviation, got %q", plain)
 	}
 	if !strings.Contains(plain, "*    ses_1") && !strings.Contains(plain, "*        ses_1") && !strings.Contains(plain, "*  ses_1") {
 		t.Fatalf("expected current session marker in daily detail sessions table, got %q", plain)
@@ -727,13 +819,29 @@ func TestRenderYearMonthlyDetailLines_AppendsSelectedMonthDetail(t *testing.T) {
 	if !strings.Contains(content, detailSectionBarStyle.Render("┃")) {
 		t.Fatalf("expected monthly detail first header to use blue bar, got %q", content)
 	}
-	for _, snippet := range []string{"2026-03", "active 1/31d • streak 1d (best)", "Metrics", "peak day", "Providers (1)", "openai", "Models (1)", "openai/gpt-5.4", "Agents (1)", "explore", "Skills (1)", "golang-patterns", "Tools (1)", "read", "Total"} {
+	for _, snippet := range []string{"2026-03", "active 1/31d • streak 1d (best)", "Metrics", "peak day", "Providers (1)", "openai", "Models (1)", "oa| gpt-5.4", "Agents (1)", "explore", "Skills (1)", "golang-patterns", "Tools (1)", "read", "Total"} {
 		if !strings.Contains(plain, snippet) {
 			t.Fatalf("expected monthly detail snippet %q, got %q", snippet, plain)
 		}
 	}
 	if strings.Contains(plain, "03-01               peak day") || strings.Contains(plain, "03-01             peak day") {
 		t.Fatalf("expected monthly detail metrics to omit selected day header column, got %q", plain)
+	}
+}
+
+func TestRenderYearMonthlyDetailLines_LoadingHidesHeaderMeta(t *testing.T) {
+	m := NewModel([]PluginItem{}, []EditChoice{}, []SessionItem{}, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, "v1.0", false)
+	m.width = 100
+	m.height = 30
+	m.statsTab = 2
+	m.monthlySelectedMonth = time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local)
+	yearly := stats.YearMonthlyReport{Months: []stats.MonthlySummary{{MonthStart: time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local), MonthEnd: time.Date(2026, time.April, 1, 0, 0, 0, 0, time.Local)}}}
+	plain := stripANSI(strings.Join(m.renderYearMonthlyDetailLines(yearly, stats.WindowReport{}), "\n"))
+	if !strings.Contains(plain, "2026-03") {
+		t.Fatalf("expected loading detail header month label, got %q", plain)
+	}
+	if strings.Contains(plain, "selected") || strings.Contains(plain, "active ") || strings.Contains(plain, "streak") {
+		t.Fatalf("expected loading detail header to omit right-side meta, got %q", plain)
 	}
 }
 
@@ -767,12 +875,25 @@ func TestRenderYearMonthlyDetailLines_ShowsProjectsBeforeModelsInProjectScope(t 
 	}
 }
 
-func TestWindowModelDisplayName_PreservesProviderContext(t *testing.T) {
-	if got := windowModelDisplayName("openai\x00gpt-5.4"); got != "openai/gpt-5.4" {
-		t.Fatalf("expected provider context preserved, got %q", got)
+func TestWindowModelDisplayName_UsesProviderAbbreviationPrefix(t *testing.T) {
+	if got := windowModelDisplayName("openai\x00gpt-5.4"); got != "oa| gpt-5.4" {
+		t.Fatalf("expected provider abbreviation prefix, got %q", got)
 	}
 	if got := windowModelDisplayName("gpt-5.4"); got != "gpt-5.4" {
 		t.Fatalf("expected plain model unchanged, got %q", got)
+	}
+}
+
+func TestRenderDailyDetailHourlyLines_ShiftsGraphLeftByFourSpaces(t *testing.T) {
+	m := NewModel([]PluginItem{}, []EditChoice{}, []SessionItem{}, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, "v1.0", false)
+	report := stats.WindowReport{}
+	axis := stripANSI(m.renderDailyDetailAxisLine())
+	spark := stripANSI(m.renderDailyDetailSparkline(report))
+	if !strings.HasPrefix(axis, "    00") {
+		t.Fatalf("expected axis line to align with the surrounding bullet indent, got %q", axis)
+	}
+	if !strings.HasPrefix(spark, "    ") {
+		t.Fatalf("expected sparkline to align with the surrounding bullet indent, got %q", spark)
 	}
 }
 

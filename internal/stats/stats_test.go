@@ -2166,7 +2166,7 @@ func TestBuildWindowReport_PopulatesDailyDetailHourlyAndAllSessions(t *testing.T
 	t.Cleanup(func() { db.Close() })
 
 	_, err = db.Exec(`
-		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+		CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL, summary_additions INTEGER NOT NULL DEFAULT 0, summary_deletions INTEGER NOT NULL DEFAULT 0);
 		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
 		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
 	`)
@@ -2184,6 +2184,10 @@ func TestBuildWindowReport_PopulatesDailyDetailHourlyAndAllSessions(t *testing.T
 	insertPart(t, db, "part_a2", "msg_a2", "ses_a", start.Add(9*time.Hour+10*time.Minute), `{"type":"step-finish","tokens":{"input":500,"output":500}}`)
 	insertMessage(t, db, "msg_b", "ses_b", start.Add(11*time.Hour+30*time.Minute), `{"role":"assistant"}`)
 	insertPart(t, db, "part_b", "msg_b", "ses_b", start.Add(11*time.Hour+30*time.Minute), `{"type":"step-finish","tokens":{"input":2000,"output":1000}}`)
+	if _, err := db.Exec(`UPDATE session SET summary_additions = 120, summary_deletions = 30, time_updated = ? WHERE id = ?`, start.Add(20*time.Hour).UnixMilli(), "ses_a"); err != nil {
+		t.Fatal(err)
+	}
+	insertPart(t, db, "part_patch", "msg_a", "ses_a", start.Add(9*time.Hour+20*time.Minute), `{"type":"tool","tool":"apply_patch","state":{"status":"completed","input":{"patchText":"*** Begin Patch\n*** Update File: foo.go\n*** Add File: bar.go\n*** End Patch"}}}`)
 
 	report, err := buildWindowReport(db, dir, "Daily", start, start.Add(24*time.Hour))
 	if err != nil {
@@ -2192,7 +2196,7 @@ func TestBuildWindowReport_PopulatesDailyDetailHourlyAndAllSessions(t *testing.T
 	if len(report.AllSessions) != 2 {
 		t.Fatalf("expected all sessions populated, got %+v", report.AllSessions)
 	}
-	if len(report.TopTools) != 0 || len(report.TopSkills) != 0 || len(report.TopAgents) != 0 || len(report.TopProjects) != 1 {
+	if len(report.TopTools) != 1 || len(report.TopSkills) != 0 || len(report.TopAgents) != 0 || len(report.TopProjects) != 1 {
 		t.Fatalf("expected day-scoped activity aggregates, got tools=%v skills=%v agents=%v projects=%v", report.TopTools, report.TopSkills, report.TopAgents, report.TopProjects)
 	}
 	if report.HalfHourSlots[18] != 2500 {
@@ -2203,6 +2207,15 @@ func TestBuildWindowReport_PopulatesDailyDetailHourlyAndAllSessions(t *testing.T
 	}
 	if report.ActiveMinutes <= 0 {
 		t.Fatalf("expected active minutes to be computed, got %d", report.ActiveMinutes)
+	}
+	if report.InputTokens != 3500 || report.OutputTokens != 2000 {
+		t.Fatalf("expected token breakdown totals, got input=%d output=%d", report.InputTokens, report.OutputTokens)
+	}
+	if report.CodeLines != 150 {
+		t.Fatalf("expected window code lines from session summaries, got %d", report.CodeLines)
+	}
+	if report.ChangedFiles != 2 {
+		t.Fatalf("expected changed files deduped from patch payload, got %d", report.ChangedFiles)
 	}
 }
 

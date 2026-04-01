@@ -223,6 +223,15 @@ func RunWithDeps(args []string, deps RuntimeDeps) error {
 	}
 
 	paths := resolveRuntimePaths(homeDir)
+	if hasContinueArgs(args) {
+		ocConfig, err := deps.LoadOcConfig(paths.ocConfigPath)
+		if err != nil {
+			return fmt.Errorf("failed to load whitelist: %w", err)
+		}
+		_, _, effectivePortsRange, _, _ := extractRuntimeConfig(args, ocConfig)
+		portArgs := launch.ResolvePortArgs(effectivePortsRange, deps.ParsePortRange, deps.SelectPort, deps.IsPortAvailable, nil)
+		return runOpencode(r, args, portArgs, tui.SessionItem{}, nil, deps.SendToast)
+	}
 	selectedSession := tui.SessionItem{}
 
 	for {
@@ -231,11 +240,6 @@ func RunWithDeps(args []string, deps RuntimeDeps) error {
 			return err
 		}
 		selectedSession = state.selectedSession
-
-		if len(state.mergedItems) == 0 {
-			portArgs := launch.ResolvePortArgs(state.effectivePortsRange, deps.ParsePortRange, deps.SelectPort, deps.IsPortAvailable, nil)
-			return runOpencode(r, args, portArgs, state.selectedSession, nil, deps.SendToast)
-		}
 
 		selections, cancelled, editTarget, portArgs, nextSession, err := deps.RunTUI(
 			state.mergedItems,
@@ -751,6 +755,18 @@ func hasSessionArgs(args []string) bool {
 			return true
 		}
 		if strings.HasPrefix(arg, "--session=") || strings.HasPrefix(arg, "-s=") {
+			return true
+		}
+		if strings.HasPrefix(arg, "--continue=") || strings.HasPrefix(arg, "-c=") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasContinueArgs(args []string) bool {
+	for _, arg := range args {
+		if arg == "-c" || arg == "--continue" {
 			return true
 		}
 		if strings.HasPrefix(arg, "--continue=") || strings.HasPrefix(arg, "-c=") {

@@ -201,11 +201,39 @@ func TestNewModel_InitialState(t *testing.T) {
 func TestNewModel_EmptyList(t *testing.T) {
 	m := newTestModel([]PluginItem{}, nil, true)
 
-	if !m.confirmed {
-		t.Error("expected confirmed=true for empty list")
+	if m.confirmed {
+		t.Error("expected confirmed=false for empty list")
 	}
 	if m.cancelled {
 		t.Error("expected cancelled=false for empty list")
+	}
+}
+
+func TestView_EmptyListStillShowsOcScreen(t *testing.T) {
+	m := newTestModel([]PluginItem{}, nil, true)
+	view := m.View().Content
+
+	if !strings.Contains(view, renderSectionHeader("📋 Choose plugins", maxLayoutWidth)) {
+		t.Fatalf("expected empty plugin list to still render oc screen, got %q", view)
+	}
+	if !strings.Contains(view, renderHelpLine(maxLayoutWidth)) {
+		t.Fatalf("expected empty plugin list to still render help line, got %q", view)
+	}
+	if !strings.Contains(view, "Press enter to launch opencode") {
+		t.Fatalf("expected empty plugin list to show launch hint, got %q", view)
+	}
+}
+
+func TestUpdate_EmptyListEnterConfirms(t *testing.T) {
+	m := newTestModel([]PluginItem{}, nil, true)
+	updated, cmd := m.Update(mockKeyMsg("enter"))
+	m = updated.(Model)
+
+	if !m.confirmed {
+		t.Fatal("expected enter to confirm even with empty plugin list")
+	}
+	if cmd == nil {
+		t.Fatal("expected enter on empty plugin list to quit")
 	}
 }
 
@@ -1094,114 +1122,226 @@ func TestView_RendersStyledHelpLine(t *testing.T) {
 	}
 }
 
-func TestView_RendersRhythmAndMetricsSections(t *testing.T) {
-	report := stats.Report{CurrentStreak: 6, BestStreak: 6, CurrentHourlyStreakSlots: 0, BestHourlyStreakSlots: 0, AgentDays: 17, TodayCost: 1.84, YesterdayCost: 1.50, TodayTokens: 148000, YesterdayTokens: 170000, ThirtyDayCost: 7.42, ThirtyDayTokens: 420000, TodaySessionMinutes: 95, YesterdaySessionMinutes: 120, ThirtyDaySessionMinutes: 765, Rolling24hSessionMinutes: 95, TodayCodeLines: 150, YesterdayCodeLines: 190, ThirtyDayCodeLines: 1820, TodayChangedFiles: 7, YesterdayChangedFiles: 9, ThirtyDayChangedFiles: 84, WeeklyActiveDays: 4, HighestBurnDay: stats.Day{Cost: 12.34}, HighestCodeDay: stats.Day{CodeLines: 190}, HighestChangedFilesDay: stats.Day{ChangedFiles: 9}, Days: make([]stats.Day, 30)}
-	for i := range report.Days {
-		report.Days[i] = stats.Day{Date: time.Now().AddDate(0, 0, -(29 - i)), Tokens: 1000, Cost: 0.5, SessionMinutes: 10, CodeLines: 20, ChangedFiles: 3}
+func TestView_RendersTodayAndMetricsSections(t *testing.T) {
+	report := stats.WindowReport{
+		Start:                time.Date(2026, time.March, 28, 0, 0, 0, 0, time.Local),
+		End:                  time.Date(2026, time.March, 29, 0, 0, 0, 0, time.Local),
+		InputTokens:          5_700_000,
+		OutputTokens:         237_000,
+		CacheReadTokens:      82_900_000,
+		ReasoningTokens:      75_000,
+		Tokens:               88_912_000,
+		Cost:                 38.54,
+		Messages:             23,
+		Sessions:             5,
+		CodeLines:            352,
+		ChangedFiles:         32_000,
+		TotalAgentModelCalls: 42,
+		TotalSubtasks:        23,
+		TotalSkillCalls:      1,
+		TotalToolCalls:       33,
+		ActiveMinutes:        330,
 	}
-	report.Days[len(report.Days)-1].Tokens = 160000
-	report.Days[len(report.Days)-1].Cost = 1.84
-	report.Days[len(report.Days)-1].SessionMinutes = 95
-	report.Days[len(report.Days)-1].CodeLines = 150
-	report.Days[len(report.Days)-1].ChangedFiles = 7
-	report.Days[len(report.Days)-2].Cost = 12.34
-	report.Days[len(report.Days)-2].SessionMinutes = 120
-	report.Days[len(report.Days)-2].CodeLines = 190
-	report.Days[len(report.Days)-2].ChangedFiles = 9
-	report.HighestBurnDay = report.Days[len(report.Days)-2]
-	report.HighestCodeDay = report.Days[len(report.Days)-2]
-	report.HighestChangedFilesDay = report.Days[len(report.Days)-2]
-	model := NewModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{}, testVersion, true)
-	view := model.View().Content
+	report.HalfHourSlots[0] = 100
+	report.HalfHourSlots[1] = 100
+	report.HalfHourSlots[16] = 500
+	report.HalfHourSlots[17] = 500
+	report.HalfHourSlots[18] = 700
+	report.HalfHourSlots[19] = 700
+	report.HalfHourSlots[44] = 200
 
-	if !strings.Contains(view, "My Pulse") {
-		t.Fatalf("expected My Pulse section, got %q", view)
-	}
-	if strings.Contains(view, report.Days[0].Date.Format("2006-01-02")+"~") {
-		t.Fatalf("did not expect rhythm header date range, got %q", view)
+	model := NewModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true)
+	model.globalDaily = report
+	model.globalDailyLoaded = true
+	model.globalDailyDate = report.Start
+	model.width = 100
+	model.height = 30
+	view := stripANSI(model.View().Content)
+
+	if !strings.Contains(view, "Today") {
+		t.Fatalf("expected Today section, got %q", view)
 	}
 	if !strings.Contains(view, "Metrics") {
 		t.Fatalf("expected Metrics section, got %q", view)
 	}
-	if !strings.Contains(view, defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("0/30d (streak 6d)")) {
-		t.Fatalf("expected daily 30d summary, got %q", view)
+	if strings.Contains(view, "My Pulse") {
+		t.Fatalf("did not expect My Pulse section, got %q", view)
 	}
-	if !strings.Contains(view, defaultTextStyle.Render("    ")+defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("0/30d (streak 6d)")) {
-		t.Fatalf("expected bulleted daily summary, got %q", view)
+	if !strings.Contains(view, "• active 5.5/24h (streak 0.5h, best 2h)") {
+		t.Fatalf("expected today active summary, got %q", view)
 	}
-	if !strings.Contains(view, defaultTextStyle.Render("• hourly ")+statsValueTextStyle.Render("1.6/24h (streak 0h)")) {
-		t.Fatalf("expected hourly summary with inline streak stats, got %q", view)
+	if !strings.Contains(view, "    00") || !strings.Contains(view, "22") {
+		t.Fatalf("expected daily-style hourly axis, got %q", view)
 	}
-	if strings.Contains(view, defaultTextStyle.Render("• streak ")) {
-		t.Fatalf("did not expect standalone streak line, got %q", view)
-	}
-	if strings.Contains(view, "Today") {
-		t.Fatalf("did not expect Today section after Metrics table change, got %q", view)
-	}
-	if strings.Contains(view, "agent 17/30d") {
-		t.Fatalf("did not expect agent split metric, got %q", view)
-	}
-	if !strings.Contains(view, "\n\n") || !strings.Contains(view, "Metrics") {
-		t.Fatalf("expected Metrics section, got %q", view)
-	}
-	if strings.Contains(view, defaultTextStyle.Render("metric")) || !strings.Contains(view, defaultTextStyle.Render("today")) || !strings.Contains(view, defaultTextStyle.Render("peak day")) || !strings.Contains(view, defaultTextStyle.Render("30d total")) {
-		t.Fatalf("expected metrics table header, got %q", view)
-	}
-	if strings.Count(view, metricsDividerLine()) < 2 {
-		t.Fatalf("expected header and section divider lines, got %q", view)
-	}
-	todayAccent := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF9900"))
-	for _, row := range []struct{ label, today, peak, total string }{
-		{"tokens", "148k (92%)", "160k (" + report.Days[len(report.Days)-1].Date.Format("2006-01-02") + ")", "420k"},
-		{"tok/h", "93k (92%)", "101k (" + report.Days[len(report.Days)-1].Date.Format("2006-01-02") + ")", "33k"},
-		{"cost", "$1.84 (15%)", "$12.34 (" + report.HighestBurnDay.Date.Format("2006-01-02") + ")", "$7.42"},
-		{"hours", "1.6h (79%)", "2.0h (" + report.Days[len(report.Days)-2].Date.Format("2006-01-02") + ")", "12.8h"},
-		{"lines", "150 (79%)", "190 (" + report.HighestCodeDay.Date.Format("2006-01-02") + ")", "1.8k"},
-		{"files", "7 (78%)", "9 (" + report.HighestChangedFilesDay.Date.Format("2006-01-02") + ")", "84"},
-		{"line/h", "95 (79%)", "120 (" + report.Days[0].Date.Format("2006-01-02") + ")", "143"},
-	} {
-		if !strings.Contains(view, defaultTextStyle.Render(row.label)) || !strings.Contains(view, todayAccent.Render(row.today)) || !strings.Contains(view, statsValueTextStyle.Render(row.peak)) || !strings.Contains(view, statsValueTextStyle.Render(row.total)) {
-			t.Fatalf("expected metrics row for %s, got %q", row.label, view)
+	for _, snippet := range []string{"tokens", "input", "output", "c.read", "c.write", "reasoning", "total", "cost", "hours", "sess", "msgs", "lines", "files", "agents", "skills", "tools", "5.7M", "237k", "82.9M", "75k", "88.9M", "$38.54", "5.5h", "23", "352", "32.0k", "42", "33"} {
+		if !strings.Contains(view, snippet) {
+			t.Fatalf("expected launcher snippet %q, got %q", snippet, view)
 		}
 	}
-	if !strings.Contains(view, "(15%)") || !strings.Contains(view, "(92%)") {
-		t.Fatalf("expected top-based ratios, got %q", view)
-	}
-	firstDivider := strings.Index(view, metricsDividerLine())
-	secondDivider := strings.LastIndex(view, metricsDividerLine())
-	if !(strings.Index(view, defaultTextStyle.Render("lines")) < secondDivider &&
-		strings.Index(view, defaultTextStyle.Render("files")) < secondDivider &&
-		firstDivider < secondDivider &&
-		secondDivider < strings.Index(view, defaultTextStyle.Render("tok/h")) &&
-		strings.Index(view, defaultTextStyle.Render("tok/h")) < strings.Index(view, defaultTextStyle.Render("line/h"))) {
-		t.Fatalf("expected divider between summary and rate metrics, got %q", view)
-	}
-	if strings.Contains(view, "This Week") {
-		t.Fatalf("did not expect This Week section, got %q", view)
+	if strings.Contains(view, "subagents") {
+		t.Fatalf("did not expect subagents metric in launcher view, got %q", view)
 	}
 }
 
-func TestView_RendersRhythmPlaceholdersBeforeStatsLoad(t *testing.T) {
+func TestView_RendersTodayPlaceholdersBeforeLauncherStatsLoad(t *testing.T) {
 	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true)
-	view := model.View().Content
+	view := stripANSI(model.View().Content)
 
-	if !strings.Contains(view, defaultTextStyle.Render("• daily  ")+statsValueTextStyle.Render("--")) {
-		t.Fatalf("expected daily placeholder before stats load, got %q", view)
+	if !strings.Contains(view, "Today") || !strings.Contains(view, "Metrics") {
+		t.Fatalf("expected Today and Metrics sections before launcher stats load, got %q", view)
 	}
-	if !strings.Contains(view, defaultTextStyle.Render("• hourly ")+statsValueTextStyle.Render("--")) {
-		t.Fatalf("expected hourly placeholder before stats load, got %q", view)
+	if !strings.Contains(view, "• active --") {
+		t.Fatalf("expected active placeholder before launcher stats load, got %q", view)
 	}
-	if strings.Contains(view, "streak") {
-		t.Fatalf("expected no streak text before stats load, got %q", view)
+	if strings.Contains(view, "My Pulse") {
+		t.Fatalf("did not expect legacy launcher header, got %q", view)
 	}
-	if strings.Contains(view, defaultTextStyle.Render("• streak ")) {
-		t.Fatalf("did not expect standalone streak placeholder before stats load, got %q", view)
+}
+
+func TestInit_LoadsLauncherDailyWindowInsteadOfOverviewStats(t *testing.T) {
+	globalStatsCalls := 0
+	globalWindowCalls := 0
+	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true).
+		WithStatsLoaders(
+			func() (stats.Report, error) {
+				globalStatsCalls++
+				return stats.Report{}, nil
+			},
+			nil,
+			func(label string, start, end time.Time) (stats.WindowReport, error) {
+				globalWindowCalls++
+				if label != "Daily" {
+					t.Fatalf("expected launcher to request Daily window, got %q", label)
+				}
+				if !startOfStatsDay(start).Equal(start) {
+					t.Fatalf("expected launcher window to start at beginning of day, got %v", start)
+				}
+				if !end.Equal(start.AddDate(0, 0, 1)) {
+					t.Fatalf("expected launcher window to span one day, got %v -> %v", start, end)
+				}
+				return stats.WindowReport{Label: label, Start: start, End: end, ActiveMinutes: 60}, nil
+			},
+			nil,
+		)
+
+	cmd := model.Init()
+	if cmd == nil {
+		t.Fatal("expected launcher init to request today window report")
 	}
-	if strings.Contains(view, statsValueTextStyle.Render("0/30d")) {
-		t.Fatalf("did not expect loaded active summary before stats load, got %q", view)
+	msg := cmd()
+	windowMsg, ok := msg.(windowReportLoadedMsg)
+	if !ok {
+		t.Fatalf("expected windowReportLoadedMsg, got %T", msg)
 	}
-	if strings.Contains(view, statsValueTextStyle.Render("0d (best)")) {
-		t.Fatalf("did not expect loaded streak summary before stats load, got %q", view)
+	if windowMsg.label != "Daily" {
+		t.Fatalf("expected Daily window report load, got %+v", windowMsg)
+	}
+	if globalStatsCalls != 0 {
+		t.Fatalf("expected no overview stats load on launcher init, got %d", globalStatsCalls)
+	}
+	if globalWindowCalls != 1 {
+		t.Fatalf("expected one launcher window load, got %d", globalWindowCalls)
+	}
+}
+
+func TestUpdate_LauncherIgnoresStaleDailyMessageAndReloadsCurrentDay(t *testing.T) {
+	reloads := 0
+	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true).
+		WithStatsLoaders(
+			nil,
+			nil,
+			func(label string, start, end time.Time) (stats.WindowReport, error) {
+				reloads++
+				return stats.WindowReport{Label: label, Start: start, End: end}, nil
+			},
+			nil,
+		)
+
+	yesterday := startOfStatsDay(time.Now().AddDate(0, 0, -1))
+	updated, cmd := model.Update(windowReportLoadedMsg{
+		project: false,
+		label:   "Daily",
+		start:   yesterday,
+		end:     yesterday.AddDate(0, 0, 1),
+		report:  stats.WindowReport{Label: "Daily", Start: yesterday, End: yesterday.AddDate(0, 0, 1)},
+	})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected stale launcher daily message to trigger reload")
+	}
+	if model.globalDailyLoaded {
+		t.Fatal("expected stale launcher daily message to be ignored")
+	}
+	if _, ok := cmd().(windowReportLoadedMsg); !ok {
+		t.Fatalf("expected reload command to request current daily window, got %T", cmd())
+	}
+	if reloads != 1 {
+		t.Fatalf("expected one reload after stale launcher message, got %d", reloads)
+	}
+}
+
+func TestUpdate_LauncherScopeToggleReloadsStaleTodayCache(t *testing.T) {
+	projectLoads := 0
+	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true).
+		WithStatsLoaders(
+			nil,
+			nil,
+			nil,
+			func(label string, start, end time.Time) (stats.WindowReport, error) {
+				projectLoads++
+				return stats.WindowReport{Label: label, Start: start, End: end}, nil
+			},
+		)
+	model.projectDailyLoaded = true
+	model.projectDailyDate = startOfStatsDay(time.Now())
+	model.projectDailyUpdatedAt = time.Now().Add(-statsViewTTL - time.Minute)
+
+	updated, cmd := model.Update(mockKeyMsg("g"))
+	model = updated.(Model)
+	if !model.projectScope {
+		t.Fatal("expected scope toggle to enable project scope")
+	}
+	if cmd == nil {
+		t.Fatal("expected stale project today cache to trigger reload on scope toggle")
+	}
+	if _, ok := cmd().(windowReportLoadedMsg); !ok {
+		t.Fatalf("expected project scope toggle to load daily window, got %T", cmd())
+	}
+	if projectLoads != 1 {
+		t.Fatalf("expected one project launcher reload, got %d", projectLoads)
+	}
+}
+
+func TestUpdate_ReturningToLauncherReloadsStaleTodayCache(t *testing.T) {
+	globalLoads := 0
+	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true).
+		WithStatsLoaders(
+			func() (stats.Report, error) { return stats.Report{}, nil },
+			nil,
+			func(label string, start, end time.Time) (stats.WindowReport, error) {
+				globalLoads++
+				return stats.WindowReport{Label: label, Start: start, End: end}, nil
+			},
+			nil,
+		)
+	model.statsMode = true
+	model.globalDailyLoaded = true
+	model.globalDailyDate = startOfStatsDay(time.Now())
+	model.globalDailyUpdatedAt = time.Now().Add(-statsViewTTL - time.Minute)
+
+	updated, cmd := model.Update(mockKeyMsg("tab"))
+	model = updated.(Model)
+	if model.statsMode {
+		t.Fatal("expected tab to return to launcher")
+	}
+	if cmd == nil {
+		t.Fatal("expected stale launcher cache to reload when returning from stats")
+	}
+	if _, ok := cmd().(windowReportLoadedMsg); !ok {
+		t.Fatalf("expected launcher return to load daily window, got %T", cmd())
+	}
+	if globalLoads != 1 {
+		t.Fatalf("expected one launcher reload after leaving stats mode, got %d", globalLoads)
 	}
 }
 
@@ -1957,6 +2097,27 @@ func TestStatsContentLines_MonthlyLoadingShowsMonthHeaderOnly(t *testing.T) {
 	}
 }
 
+func TestStatsContentLines_MonthlyDetailLoadingShowsMonthHeaderOnly(t *testing.T) {
+	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true)
+	model.statsMode = true
+	model.statsTab = 2
+	model.monthlyDetailMode = true
+	model.globalMonthlyLoading = true
+	model.monthlySelectedMonth = time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local)
+	model.globalYearMonthly = stats.YearMonthlyReport{Months: []stats.MonthlySummary{{MonthStart: time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local), MonthEnd: time.Date(2026, time.April, 1, 0, 0, 0, 0, time.Local)}}}
+	lines := model.statsContentLines()
+	plain := stripANSI(strings.Join(lines, "\n"))
+	if !strings.Contains(plain, "2026-03") {
+		t.Fatalf("expected monthly detail loading header month label, got %q", plain)
+	}
+	if strings.Contains(plain, "Loading stats...") && !strings.Contains(plain, "2026-03") {
+		t.Fatalf("expected monthly detail loading to route through month header helper, got %q", plain)
+	}
+	if strings.Contains(plain, "selected") || strings.Contains(plain, "active ") || strings.Contains(plain, "streak") {
+		t.Fatalf("expected monthly detail loading header to omit right-side meta, got %q", plain)
+	}
+}
+
 func TestRenderStatsTabs_ShowsUnderlineStyleTabsWithMetadata(t *testing.T) {
 	report := stats.Report{Days: make([]stats.Day, 30)}
 	start := time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local)
@@ -2080,23 +2241,17 @@ func TestRenderStatsTabs_NarrowLayoutStillShowsScopeMeta(t *testing.T) {
 }
 
 func TestUpdate_GTogglesProjectScopeAndHeaders(t *testing.T) {
-	globalReport := stats.Report{Days: make([]stats.Day, 30)}
-	projectReport := stats.Report{Days: make([]stats.Day, 30)}
-	for i := range globalReport.Days {
-		globalReport.Days[i] = stats.Day{Date: time.Now().AddDate(0, 0, -(29 - i))}
-		projectReport.Days[i] = stats.Day{Date: time.Now().AddDate(0, 0, -(29 - i))}
-	}
-	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, globalReport, projectReport, config.StatsConfig{}, testVersion, true)
+	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true)
 	updated, _ := model.Update(mockKeyMsg("g"))
 	model = updated.(Model)
 	if !model.projectScope {
 		t.Fatal("expected project scope after g toggle")
 	}
 	view := model.View().Content
-	if !strings.Contains(view, "My Pulse") || !strings.Contains(view, "Metrics") {
+	if !strings.Contains(view, "Today") || !strings.Contains(view, "Metrics") {
 		t.Fatalf("expected headers without project prefix, got %q", view)
 	}
-	if strings.Contains(view, "[Project] My Pulse") || strings.Contains(view, "[Project] Metrics") {
+	if strings.Contains(view, "[Project] Today") || strings.Contains(view, "[Project] Metrics") {
 		t.Fatalf("did not expect project-prefixed headers, got %q", view)
 	}
 	updated, _ = model.Update(mockKeyMsg("g"))
@@ -2107,21 +2262,15 @@ func TestUpdate_GTogglesProjectScopeAndHeaders(t *testing.T) {
 }
 
 func TestNewModel_UsesConfiguredDefaultProjectScope(t *testing.T) {
-	globalReport := stats.Report{Days: make([]stats.Day, 30)}
-	projectReport := stats.Report{Days: make([]stats.Day, 30)}
-	for i := range globalReport.Days {
-		globalReport.Days[i] = stats.Day{Date: time.Now().AddDate(0, 0, -(29 - i))}
-		projectReport.Days[i] = stats.Day{Date: time.Now().AddDate(0, 0, -(29 - i))}
-	}
-	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, globalReport, projectReport, config.StatsConfig{DefaultScope: "project"}, testVersion, true)
+	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{DefaultScope: "project"}, testVersion, true)
 	if !model.projectScope {
 		t.Fatal("expected project scope from config default")
 	}
 	view := model.View().Content
-	if !strings.Contains(view, "My Pulse") || !strings.Contains(view, "Metrics") {
+	if !strings.Contains(view, "Today") || !strings.Contains(view, "Metrics") {
 		t.Fatalf("expected headers without project prefix from default scope, got %q", view)
 	}
-	if strings.Contains(view, "[Project] My Pulse") || strings.Contains(view, "[Project] Metrics") {
+	if strings.Contains(view, "[Project] Today") || strings.Contains(view, "[Project] Metrics") {
 		t.Fatalf("did not expect project-prefixed headers from default scope, got %q", view)
 	}
 }
@@ -2143,11 +2292,15 @@ func TestUpdate_StatsViewScrollsWithUpDown(t *testing.T) {
 
 func TestUpdate_StatsViewPageNavigationKeys(t *testing.T) {
 	model := openDailyStatsViewWithHeight(t, 12, 24)
+	initialSelection := model.dailySelectionIndex()
 
 	updated, _ := model.Update(mockKeyMsg("pgdown"))
 	model = updated.(Model)
-	if model.dailySelectionIndex() <= 0 {
-		t.Fatalf("expected pgdown to move selected day downward, got index %d", model.dailySelectionIndex())
+	if model.statsOffset <= 0 {
+		t.Fatalf("expected pgdown to prefer screen scroll, got offset %d", model.statsOffset)
+	}
+	if model.dailySelectionIndex() != initialSelection {
+		t.Fatalf("expected pgdown not to move selection when screen scroll is available, got index %d want %d", model.dailySelectionIndex(), initialSelection)
 	}
 
 	updated, _ = model.Update(mockKeyMsg("end"))
@@ -2164,8 +2317,8 @@ func TestUpdate_StatsViewPageNavigationKeys(t *testing.T) {
 
 	updated, _ = model.Update(mockKeyMsg("ctrl+d"))
 	model = updated.(Model)
-	if model.dailySelectionIndex() == 0 {
-		t.Fatalf("expected ctrl+d to move selection down from top")
+	if model.statsOffset == 0 {
+		t.Fatalf("expected ctrl+d to prefer screen scroll over selection movement")
 	}
 
 	updated, _ = model.Update(mockKeyMsg("home"))
@@ -2184,6 +2337,24 @@ func TestUpdate_StatsViewPageNavigationKeys(t *testing.T) {
 	model = updated.(Model)
 	if model.dailySelectionIndex() != 0 {
 		t.Fatalf("expected ctrl+u at top to stay clamped, got %d", model.dailySelectionIndex())
+	}
+}
+
+func TestUpdate_MonthlyListPageKeysPreferScreenScroll(t *testing.T) {
+	model := openMonthlyStatsViewWithHeight(t, 12)
+	beforeSelection := model.monthlySelectionIndex()
+	updated, _ := model.Update(mockKeyMsg("pgdown"))
+	model = updated.(Model)
+	if model.statsOffset <= 0 {
+		t.Fatalf("expected monthly pgdown to scroll screen, got offset %d", model.statsOffset)
+	}
+	if model.monthlySelectionIndex() != beforeSelection {
+		t.Fatalf("expected monthly pgdown not to move selection when screen scroll is available, got %d want %d", model.monthlySelectionIndex(), beforeSelection)
+	}
+	updated, _ = model.Update(mockKeyMsg("ctrl+d"))
+	model = updated.(Model)
+	if model.statsOffset <= 0 {
+		t.Fatalf("expected monthly ctrl+d to keep using screen scroll, got offset %d", model.statsOffset)
 	}
 }
 
@@ -2220,18 +2391,26 @@ func TestModel_LoadsOnlyVisibleStatsViewAndCachesWithinTTL(t *testing.T) {
 		)
 
 	if cmd := model.Init(); cmd == nil {
-		t.Fatal("expected init to load overview")
+		t.Fatal("expected init to load launcher daily window")
 	} else {
 		updated, _ := model.Update(cmd())
 		model = updated.(Model)
 	}
-	if overviewLoads != 1 {
-		t.Fatalf("expected one overview load, got %d", overviewLoads)
+	if dailyLoads != 1 {
+		t.Fatalf("expected one launcher daily window load, got %d", dailyLoads)
+	}
+	if overviewLoads != 0 {
+		t.Fatalf("expected no overview load during launcher init, got %d", overviewLoads)
 	}
 	updated, cmd := model.Update(mockKeyMsg("tab"))
 	model = updated.(Model)
-	if cmd != nil {
-		t.Fatal("expected no extra load when entering stats overview with fresh cache")
+	if cmd == nil {
+		t.Fatal("expected entering stats overview to trigger overview load")
+	}
+	updated, _ = model.Update(cmd())
+	model = updated.(Model)
+	if overviewLoads != 1 {
+		t.Fatalf("expected one overview load after entering stats, got %d", overviewLoads)
 	}
 	updated, cmd = model.Update(mockKeyMsg("right"))
 	model = updated.(Model)
@@ -2250,8 +2429,8 @@ func TestModel_LoadsOnlyVisibleStatsViewAndCachesWithinTTL(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("expected fresh daily cache to avoid reload")
 	}
-	if dailyLoads != 0 {
-		t.Fatalf("expected no day-detail window load yet, got %d", dailyLoads)
+	if dailyLoads != 1 {
+		t.Fatalf("expected launcher-only day window load before daily detail, got %d", dailyLoads)
 	}
 }
 
@@ -2272,6 +2451,32 @@ func TestUpdate_DailyEnterAndEscSwitchBetweenListAndDetail(t *testing.T) {
 	}
 	if !model.dailySelectedDate.Equal(selected) {
 		t.Fatalf("expected selected date preserved after returning from detail, got %v want %v", model.dailySelectedDate, selected)
+	}
+}
+
+func TestUpdate_DailyListCtrlUpDownScrollsScreenWithoutChangingSelection(t *testing.T) {
+	model := openDailyStatsViewWithHeight(t, 12, 20)
+	selected := model.dailySelectedDate
+	if !model.statsListCanScreenScroll() {
+		t.Fatal("expected daily stats list to require screen scrolling for this fixture")
+	}
+
+	updated, _ := model.Update(mockKeyMsg("ctrl+down"))
+	model = updated.(Model)
+	if model.statsOffset != 1 || model.dailyListOffset != 1 {
+		t.Fatalf("expected ctrl+down to scroll screen by one line, got statsOffset=%d dailyListOffset=%d", model.statsOffset, model.dailyListOffset)
+	}
+	if !model.dailySelectedDate.Equal(selected) {
+		t.Fatalf("expected ctrl+down to preserve selection, got %v want %v", model.dailySelectedDate, selected)
+	}
+
+	updated, _ = model.Update(mockKeyMsg("ctrl+up"))
+	model = updated.(Model)
+	if model.statsOffset != 0 || model.dailyListOffset != 0 {
+		t.Fatalf("expected ctrl+up to scroll back to top, got statsOffset=%d dailyListOffset=%d", model.statsOffset, model.dailyListOffset)
+	}
+	if !model.dailySelectedDate.Equal(selected) {
+		t.Fatalf("expected ctrl+up to preserve selection, got %v want %v", model.dailySelectedDate, selected)
 	}
 }
 
@@ -2374,60 +2579,33 @@ func TestUpdate_MonthlyDetailAcceptsMonthDailyForSelectedMonth(t *testing.T) {
 	}
 }
 
-func TestView_AnalyticsMinimapAdaptsToNarrowWidths(t *testing.T) {
-	now := time.Now()
-	report := stats.Report{Days: make([]stats.Day, 30)}
-	for i := range report.Days {
-		report.Days[i] = stats.Day{Date: now.AddDate(0, 0, -(29 - i)), Tokens: 1000}
-	}
-	report.Days[len(report.Days)-1].Tokens = 160000
-	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{}, testVersion, true)
+func TestView_LauncherTodayGraphHidesOnNarrowWidths(t *testing.T) {
+	report := stats.WindowReport{ActiveMinutes: 90}
+	report.HalfHourSlots[10] = 100
+	report.HalfHourSlots[11] = 100
+	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true)
+	model.globalDaily = report
+	model.globalDailyLoaded = true
+	model.globalDailyDate = startOfStatsDay(time.Now())
 
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	wideView := updated.(Model).View().Content
+	wideView := stripANSI(updated.(Model).View().Content)
 	updated, _ = model.Update(tea.WindowSizeMsg{Width: 50, Height: 30})
-	narrowView := updated.(Model).View().Content
+	narrowView := stripANSI(updated.(Model).View().Content)
 	updated, _ = model.Update(tea.WindowSizeMsg{Width: 35, Height: 30})
-	tinyView := updated.(Model).View().Content
-	widePlain := stripANSI(wideView)
-	narrowPlain := stripANSI(narrowView)
-	tinyPlain := stripANSI(tinyView)
+	tinyView := stripANSI(updated.(Model).View().Content)
 
-	if !strings.Contains(widePlain, "• daily  0/30d (streak 0d)") {
-		t.Fatalf("expected daily label in wide view, got %q", wideView)
+	if !strings.Contains(wideView, "00") || !strings.Contains(wideView, "22") {
+		t.Fatalf("expected wide launcher view to show hourly axis, got %q", wideView)
 	}
-	if strings.Count(wideView, "█")+strings.Count(wideView, "▓")+strings.Count(wideView, "░")+strings.Count(wideView, "·") < 28 {
-		t.Fatalf("expected 4-week minimap density in wide view, got %q", wideView)
+	if strings.Contains(narrowView, "00") || strings.Contains(narrowView, "22") {
+		t.Fatalf("expected narrow launcher view to hide hourly axis, got %q", narrowView)
 	}
-	if !strings.Contains(narrowPlain, "• daily  0/30d (streak 0d)") {
-		t.Fatalf("expected daily label in narrow view, got %q", narrowView)
+	if strings.Contains(tinyView, "00") || strings.Contains(tinyView, "22") {
+		t.Fatalf("expected tiny launcher view to hide hourly axis, got %q", tinyView)
 	}
-	if !strings.Contains(tinyPlain, "• daily  0/30d (streak 0d)") {
-		t.Fatalf("expected daily label to remain in tiny view, got %q", tinyView)
-	}
-	if strings.Contains(narrowView, "·") || strings.Contains(narrowView, "░") || strings.Contains(narrowView, "▓") || strings.Contains(narrowView, "█") {
-		t.Fatalf("expected minimap cells hidden in narrow view when inline summaries take priority, got %q", narrowView)
-	}
-	if strings.Contains(tinyView, "·") || strings.Contains(tinyView, "░") || strings.Contains(tinyView, "▓") || strings.Contains(tinyView, "█") {
-		t.Fatalf("expected minimap cells hidden in tiny view, got %q", tinyView)
-	}
-	if !strings.Contains(tinyPlain, "streak") || !strings.Contains(tinyPlain, "cost") {
-		t.Fatalf("expected core metrics to remain in tiny view, got %q", tinyView)
-	}
-}
-
-func TestView_AnalyticsMinimapHidesWhenRenderedWidthWouldOverflow(t *testing.T) {
-	now := time.Now()
-	report := stats.Report{Days: make([]stats.Day, 30)}
-	for i := range report.Days {
-		report.Days[i] = stats.Day{Date: now.AddDate(0, 0, -(29 - i)), Tokens: 1000}
-	}
-	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{}, testVersion, true)
-	updated, _ := model.Update(tea.WindowSizeMsg{Width: 70, Height: 30})
-	view := updated.(Model).View().Content
-
-	if strings.Contains(view, "·") || strings.Contains(view, "░") || strings.Contains(view, "▓") || strings.Contains(view, "█") {
-		t.Fatalf("expected minimap hidden when visible width is insufficient, got %q", view)
+	if !strings.Contains(tinyView, "• active ") || !strings.Contains(tinyView, "Metrics") {
+		t.Fatalf("expected tiny launcher view to keep core today summary, got %q", tinyView)
 	}
 }
 
@@ -2832,35 +3010,42 @@ func TestRender24hSparkline_WidthAdaptation(t *testing.T) {
 	}
 }
 
-func TestView_RendersRhythmWithSparkline(t *testing.T) {
+func TestView_RendersLauncherTodayWithDailyStyleGraph(t *testing.T) {
 	var slots [48]int64
-	slots[47] = 100000 // some activity in the current slot
-	report := stats.Report{
-		Days:                     make([]stats.Day, 30),
-		ActiveDays:               15,
-		CurrentStreak:            5,
-		BestStreak:               5,
-		CurrentHourlyStreakSlots: 3,
-		BestHourlyStreakSlots:    5,
-		Rolling24hSlots:          slots,
-		Rolling24hSessionMinutes: 90,
-	}
+	slots[12] = 100000
+	slots[13] = 100000
+	slots[14] = 100000
+	report := stats.WindowReport{HalfHourSlots: slots, ActiveMinutes: 90}
 	cfg := config.StatsConfig{HighTokens: 5000000, MediumTokens: 1000000}
-	m := NewModel([]PluginItem{{Name: "test-plugin", InitiallyEnabled: true}}, nil, nil, SessionItem{}, report, stats.Report{}, cfg, "test", false)
+	m := NewModel([]PluginItem{{Name: "test-plugin", InitiallyEnabled: true}}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, cfg, "test", false)
+	m.globalDaily = report
+	m.globalDailyLoaded = true
+	m.globalDailyDate = startOfStatsDay(time.Now())
 	m.width = 80
-	view := m.View().Content
+	view := stripANSI(m.View().Content)
 
-	// Should contain the "hourly" label with session hours
-	if !strings.Contains(view, defaultTextStyle.Render("• hourly ")) {
-		t.Error("view should contain 'hourly' sparkline label")
+	if !strings.Contains(view, "Today") {
+		t.Error("view should contain Today section")
 	}
-	if strings.Contains(view, defaultTextStyle.Render("• 24h    ")) {
-		t.Error("view should not contain the old '24h' sparkline label")
+	if !strings.Contains(view, "• active 1.5/24h (streak 1.5h)") {
+		t.Errorf("view should contain today active summary, got %q", view)
 	}
-	if !strings.Contains(view, "1.5/24h") {
-		t.Error("view should contain rolling 24h session ratio '1.5/24h'")
+	if !strings.Contains(view, "00") || !strings.Contains(view, "22") {
+		t.Errorf("view should contain daily-style hourly axis, got %q", view)
 	}
-	if !strings.Contains(view, "(streak 1.5h, best 2.5h)") {
-		t.Errorf("view should contain inline hourly streak summary, got %q", view)
+}
+
+func TestView_LauncherSingleEventStillShowsActiveDuration(t *testing.T) {
+	report := stats.WindowReport{ActiveMinutes: 0}
+	report.HalfHourSlots[20] = 500
+	m := NewModel([]PluginItem{{Name: "test-plugin", InitiallyEnabled: true}}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, false)
+	m.globalDaily = report
+	m.globalDailyLoaded = true
+	m.globalDailyDate = startOfStatsDay(time.Now())
+	m.width = 80
+	view := stripANSI(m.View().Content)
+
+	if !strings.Contains(view, "• active 0.0/24h") {
+		t.Fatalf("expected single-event launcher activity to show zero-hour summary instead of placeholder, got %q", view)
 	}
 }

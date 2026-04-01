@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/kayden-kim/oc/internal/config"
+	"github.com/kayden-kim/oc/internal/launch"
 	"github.com/kayden-kim/oc/internal/port"
 	"github.com/kayden-kim/oc/internal/runner"
 	"github.com/kayden-kim/oc/internal/stats"
@@ -232,6 +233,27 @@ func TestRunWithDeps_RefreshesFromManualSelectionToLatestSessionAcrossLoop(t *te
 	}
 }
 
+func TestRefreshSelectedSession_UsesCurrentProjectPath(t *testing.T) {
+	projectPath := filepath.Join("workspace", "current-project")
+	calledWith := ""
+	got := refreshSelectedSession(RuntimeDeps{
+		ListSessions: func(cwd string) ([]tui.SessionItem, error) {
+			calledWith = cwd
+			if cwd != projectPath {
+				return nil, fmt.Errorf("unexpected cwd %q", cwd)
+			}
+			return []tui.SessionItem{{ID: "ses_project_latest", Title: "Project latest"}}, nil
+		},
+	}, projectPath, tui.SessionItem{ID: "ses_previous", Title: "Previous"})
+
+	if calledWith != projectPath {
+		t.Fatalf("expected refreshSelectedSession to use current project path %q, got %q", projectPath, calledWith)
+	}
+	if got.ID != "ses_project_latest" {
+		t.Fatalf("expected latest session for current project, got %+v", got)
+	}
+}
+
 func TestRunWithDeps_UserProvidedSessionFlagWins(t *testing.T) {
 	tmp := t.TempDir()
 	configDir := filepath.Join(tmp, ".config", "opencode")
@@ -313,8 +335,8 @@ func TestRunWithDeps_UserProvidedContinueEqualsFlagWins(t *testing.T) {
 	if !r.ran {
 		t.Fatal("runner.Run should be called")
 	}
-	if len(r.args) != 1 || r.args[0] != "--continue=ses_manual" {
-		t.Fatalf("expected continue flag to win without appended session args, got %#v", r.args)
+	if len(r.args) != 3 || r.args[0] != "--continue=ses_manual" || r.args[1] != "--port" || r.args[2] == "" {
+		t.Fatalf("expected continue flag to win and fast path to add port args, got %#v", r.args)
 	}
 }
 
@@ -466,7 +488,7 @@ func TestRunWithDeps_DoesNotPrintPreLaunchText(t *testing.T) {
 	}
 }
 
-func TestRunWithDeps_EmptyPluginArraySkipsTUI(t *testing.T) {
+func TestRunWithDeps_EmptyPluginArrayStillShowsTUI(t *testing.T) {
 	tmp := t.TempDir()
 	configDir := filepath.Join(tmp, ".config", "opencode")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
@@ -481,6 +503,7 @@ func TestRunWithDeps_EmptyPluginArraySkipsTUI(t *testing.T) {
 
 	r := &fakeRunner{}
 	tuiCalled := false
+	tuiCallCount := 0
 	err := RunWithDeps(nil, RuntimeDeps{
 		NewRunner:         func() RunnerAPI { return r },
 		UserHomeDir:       func() (string, error) { return tmp, nil },
@@ -489,24 +512,29 @@ func TestRunWithDeps_EmptyPluginArraySkipsTUI(t *testing.T) {
 		ParsePlugins:      config.ParsePlugins,
 		FilterByWhitelist: DefaultDeps("test").FilterByWhitelist,
 		RunTUI: wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string, _ bool) (map[string]bool, bool, string, []string, error) {
+			tuiCallCount++
 			tuiCalled = true
-			return map[string]bool{}, false, "", nil, nil
+			if tuiCallCount > 1 {
+				return nil, true, "", nil, nil
+			}
+			return map[string]bool{}, false, "", []string{"--port", "55501"}, nil
 		}),
 		ApplySelections: config.ApplySelections,
 		WriteConfigFile: config.WriteConfigFile,
 		OpenEditor:      func(string, string) error { return nil },
+		SendToast:       func(_ context.Context, _ int, _ []string) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("RunWithDeps returned error: %v", err)
 	}
-	if tuiCalled {
-		t.Fatal("TUI should be skipped when visible list is empty")
+	if !tuiCalled {
+		t.Fatal("TUI should still be shown when visible list is empty")
 	}
 	if !r.ran {
 		t.Fatal("runner.Run should be called")
 	}
-	if len(r.args) != 2 || r.args[0] != "--port" || r.args[1] == "" {
-		t.Fatalf("expected default port selection to append --port, got %v", r.args)
+	if len(r.args) != 2 || r.args[0] != "--port" || r.args[1] != "55501" {
+		t.Fatalf("expected --port 55501 args, got %v", r.args)
 	}
 
 	updated, err := os.ReadFile(configPath)
@@ -515,6 +543,51 @@ func TestRunWithDeps_EmptyPluginArraySkipsTUI(t *testing.T) {
 	}
 	if string(updated) != initial {
 		t.Fatalf("config should not change for empty plugin array\nwant:\n%s\ngot:\n%s", initial, string(updated))
+	}
+}
+
+func TestRunWithDeps_ContinueSkipsSessionDiscoveryAndTUI(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, ".config", "opencode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "opencode.json"), []byte("{\n  \"plugin\": [\n    \"plugin-a\"\n  ]\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &fakeRunner{}
+	listSessionsCalled := false
+	runTUICalled := false
+	err := RunWithDeps([]string{"--continue=ses_manual"}, RuntimeDeps{
+		NewRunner:    func() RunnerAPI { return r },
+		UserHomeDir:  func() (string, error) { return tmp, nil },
+		ReadFile:     os.ReadFile,
+		LoadOcConfig: config.LoadOcConfig,
+		ListSessions: func(string) ([]tui.SessionItem, error) {
+			listSessionsCalled = true
+			return []tui.SessionItem{{ID: "ses_latest", Title: "Latest session"}}, nil
+		},
+		RunTUI: func([]tui.PluginItem, []tui.EditChoice, []tui.SessionItem, tui.SessionItem, stats.Report, stats.Report, config.StatsConfig, string, bool) (map[string]bool, bool, string, []string, tui.SessionItem, error) {
+			runTUICalled = true
+			return nil, false, "", nil, tui.SessionItem{}, nil
+		},
+		SendToast: func(_ context.Context, _ int, _ []string) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("RunWithDeps returned error: %v", err)
+	}
+	if listSessionsCalled {
+		t.Fatal("--continue should skip session discovery")
+	}
+	if runTUICalled {
+		t.Fatal("--continue should skip launcher TUI")
+	}
+	if !r.ran {
+		t.Fatal("runner.Run should be called")
+	}
+	if len(r.args) < 3 || r.args[0] != "--continue=ses_manual" || r.args[1] != "--port" || r.args[2] == "" {
+		t.Fatalf("expected continue fast path to preserve continue arg and add port, got %#v", r.args)
 	}
 }
 
@@ -1617,7 +1690,10 @@ func baseDepsWithPort(tmp string, r *fakeRunner) RuntimeDeps {
 		ParsePlugins:      config.ParsePlugins,
 		FilterByWhitelist: DefaultDeps("test").FilterByWhitelist,
 		RunTUI: wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string, _ bool) (map[string]bool, bool, string, []string, error) {
-			return map[string]bool{}, false, "", nil, nil
+			if r.runCalls > 0 {
+				return nil, true, "", nil, nil
+			}
+			return map[string]bool{}, false, "", []string{"--port", "51234"}, nil
 		}),
 		ApplySelections: config.ApplySelections,
 		WriteConfigFile: config.WriteConfigFile,
@@ -1627,6 +1703,7 @@ func baseDepsWithPort(tmp string, r *fakeRunner) RuntimeDeps {
 			return port.SelectResult{Port: 51234, Attempts: 1, Found: true}
 		},
 		IsPortAvailable: func(int) bool { return true },
+		SendToast:       func(_ context.Context, _ int, _ []string) error { return nil },
 	}
 }
 
@@ -1866,9 +1943,6 @@ func TestRunWithDeps_PortSelectionRunsWithoutVisiblePlugins(t *testing.T) {
 
 	r := &fakeRunner{}
 	deps := baseDepsWithPort(tmp, r)
-	deps.SelectPort = func(minPort, maxPort int, checkAvailable func(int) bool, logFn func(attempt, p int, available bool)) port.SelectResult {
-		return port.SelectResult{Port: 52000, Attempts: 1, Found: true}
-	}
 
 	err := RunWithDeps([]string{"--verbose"}, deps)
 	if err != nil {
@@ -1877,7 +1951,7 @@ func TestRunWithDeps_PortSelectionRunsWithoutVisiblePlugins(t *testing.T) {
 	if !r.ran {
 		t.Fatal("runner.Run should be called")
 	}
-	if len(r.args) != 3 || r.args[0] != "--verbose" || r.args[1] != "--port" || r.args[2] != "52000" {
+	if len(r.args) != 3 || r.args[0] != "--verbose" || r.args[1] != "--port" || r.args[2] != "51234" {
 		t.Fatalf("expected --port to be appended even without visible plugins, got %v", r.args)
 	}
 }
@@ -2028,6 +2102,7 @@ func TestRunWithDeps_SendsToastAfterLaunchWithPortAndPlugins(t *testing.T) {
 	r := &fakeRunner{}
 	deps := baseDepsWithPort(tmp, r)
 	deps.NewRunner = func() RunnerAPI { return r }
+	deps.SendToast = launch.SendToast
 	deps.RunTUI = wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
 		if r.runCalls > 0 {
 			return nil, true, "", nil, nil
@@ -2099,6 +2174,7 @@ func TestRunWithDeps_SendsToastForUserProvidedPortFlag(t *testing.T) {
 
 	r := &fakeRunner{}
 	deps := baseDepsWithPort(tmp, r)
+	deps.SendToast = launch.SendToast
 	deps.RunTUI = wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
 		if portsRange != "" {
 			t.Fatalf("expected auto port selection to be skipped when user passed --port, got %q", portsRange)
@@ -2161,6 +2237,7 @@ func TestRunWithDeps_ClearsStaleToastCallbackWhenNextLaunchHasNoPort(t *testing.
 
 	r := &fakeRunner{}
 	deps := baseDepsWithPort(tmp, r)
+	deps.SendToast = launch.SendToast
 	deps.RunTUI = scriptedTUI(t,
 		tuiResponse{selections: map[string]bool{"oh-my-opencode": true}, portArgs: []string{"--port", serverPort}},
 		tuiResponse{selections: map[string]bool{"oh-my-opencode": true}, portArgs: nil},

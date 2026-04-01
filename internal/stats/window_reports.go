@@ -91,6 +91,11 @@ func buildWindowReport(db *sql.DB, dir string, label string, start time.Time, en
 			modelKey = row.ModelID
 		}
 		model := ensureModelUsage(modelAgg, modelKey)
+		report.InputTokens += row.InputTokens
+		report.OutputTokens += row.OutputTokens
+		report.CacheReadTokens += row.CacheReadTokens
+		report.CacheWriteTokens += row.CacheWriteTokens
+		report.ReasoningTokens += row.ReasoningTokens
 		model.InputTokens += row.InputTokens
 		model.OutputTokens += row.OutputTokens
 		model.CacheReadTokens += row.CacheReadTokens
@@ -176,8 +181,106 @@ func buildWindowReport(db *sql.DB, dir string, label string, start time.Time, en
 	for _, usage := range projectAgg {
 		report.TotalProjectCost += usage.Cost
 	}
+	if report.CodeLines, err = loadWindowCodeLines(db, dir, start, end); err != nil {
+		return WindowReport{}, err
+	}
+	if report.ChangedFiles, err = loadWindowChangedFiles(db, dir, start, end); err != nil {
+		return WindowReport{}, err
+	}
 	report.ActiveMinutes = computeSessionMinutes(eventTimes, defaultSessionGapMinutes)
 	return report, nil
+}
+
+func loadWindowCodeLines(db *sql.DB, dir string, start, end time.Time) (int, error) {
+	hasColumns, err := hasSessionSummaryColumns(db)
+	if err != nil {
+		return 0, err
+	}
+	if !hasColumns {
+		return 0, nil
+	}
+
+	query := `
+		SELECT
+			CAST(COALESCE(s.summary_additions, 0) AS INTEGER),
+			CAST(COALESCE(s.summary_deletions, 0) AS INTEGER)
+		FROM session s
+		WHERE %s s.time_updated >= ? AND s.time_updated < ?
+	`
+	args := []any{start.UnixMilli(), end.UnixMilli()}
+	wherePrefix := ""
+	if dir != "" {
+		wherePrefix = scopedDirectoryClause() + " AND "
+		args = []any{scopedDirectoryArg(dir), start.UnixMilli(), end.UnixMilli()}
+	}
+	rows, err := db.Query(fmt.Sprintf(query, wherePrefix), args...)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	total := 0
+	for rows.Next() {
+		var additions int
+		var deletions int
+		if err := rows.Scan(&additions, &deletions); err != nil {
+			return 0, err
+		}
+		total += additions + deletions
+	}
+	return total, rows.Err()
+}
+
+func loadWindowChangedFiles(db *sql.DB, dir string, start, end time.Time) (int, error) {
+	query := `
+		SELECT
+			CAST(COALESCE(p.data, '') AS TEXT),
+			CAST(COALESCE(json_extract(m.data, '$.summary'), 0) AS INTEGER),
+			CAST(COALESCE(json_extract(m.data, '$.agent'), '') AS TEXT)
+		FROM part p
+		%s
+		LEFT JOIN message m ON m.id = p.message_id
+		WHERE p.time_created >= ? AND p.time_created < ?
+	`
+	joinClause := ""
+	args := []any{start.UnixMilli(), end.UnixMilli()}
+	if dir != "" {
+		joinClause = "JOIN session s ON s.id = p.session_id"
+		query = strings.Replace(query, "%s", joinClause, 1)
+		query = strings.Replace(query, "WHERE p.time_created >= ? AND p.time_created < ?", "WHERE "+scopedDirectoryClause()+" AND p.time_created >= ? AND p.time_created < ?", 1)
+		args = []any{scopedDirectoryArg(dir), start.UnixMilli(), end.UnixMilli()}
+	} else {
+		query = strings.Replace(query, "%s", "", 1)
+	}
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	seen := map[string]struct{}{}
+	for rows.Next() {
+		var raw string
+		var summary int64
+		var messageAgent string
+		if err := rows.Scan(&raw, &summary, &messageAgent); err != nil {
+			return 0, err
+		}
+		if summary != 0 || strings.EqualFold(messageAgent, "compaction") {
+			continue
+		}
+		for _, file := range extractChangedFilesFromPart(raw) {
+			normalized := normalizeChangedFilePath(file)
+			if normalized == "" {
+				continue
+			}
+			seen[normalized] = struct{}{}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	return len(seen), nil
 }
 
 func loadWindowMessages(db *sql.DB, dir string, start, end time.Time) ([]windowMessageRow, error) {
