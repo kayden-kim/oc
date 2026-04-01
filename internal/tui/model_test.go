@@ -57,20 +57,100 @@ func openDailyStatsViewWithHeight(t *testing.T, height int, sessionCount int) Mo
 
 	report := stats.Report{}
 	daily := stats.WindowReport{Label: "Daily"}
+	month := stats.MonthDailyReport{
+		MonthStart: time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local),
+		MonthEnd:   time.Date(2026, time.April, 1, 0, 0, 0, 0, time.Local),
+	}
 	for i := 0; i < sessionCount; i++ {
 		daily.TopSessions = append(daily.TopSessions, stats.SessionUsage{ID: fmt.Sprintf("ses_%02d", i), Title: fmt.Sprintf("Title %02d", i), Messages: i + 1})
+		date := month.MonthEnd.AddDate(0, 0, -(i + 1))
+		month.Days = append(month.Days, stats.DailySummary{Date: date, Messages: i + 1, Sessions: 1, Tokens: int64((i + 1) * 1000), Cost: float64(i+1) / 10})
 	}
 
 	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{}, testVersion, true)
 	model.globalDaily = daily
 	model.globalDailyLoaded = true
+	model.globalMonthDaily = month
+	model.globalMonthDailyLoaded = true
+	model.globalMonthDailyMonth = month.MonthStart
+	model.dailyMonthAnchor = month.MonthStart
+	model.dailySelectedDate = month.Days[0].Date
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: height})
 	model = updated.(Model)
 	updated, _ = model.Update(mockKeyMsg("tab"))
 	model = updated.(Model)
 	updated, _ = model.Update(mockKeyMsg("right"))
+	model = updated.(Model)
+	model.dailyMonthAnchor = month.MonthStart
+	model.dailySelectedDate = month.Days[0].Date
+	model.dailyListOffset = 0
+	model.statsOffset = 0
+	return model
+}
 
-	return updated.(Model)
+func openMonthlyStatsViewWithHeight(t *testing.T, height int) Model {
+	t.Helper()
+
+	report := stats.Report{}
+	yearly := stats.YearMonthlyReport{
+		Start:         time.Date(2025, time.April, 1, 0, 0, 0, 0, time.Local),
+		End:           time.Date(2026, time.April, 1, 0, 0, 0, 0, time.Local),
+		ActiveMonths:  10,
+		CurrentStreak: 4,
+		BestStreak:    4,
+	}
+	for i := 0; i < 12; i++ {
+		month := yearly.Start.AddDate(0, i, 0)
+		tokens := int64((i + 1) * 1_000_000)
+		if i == 4 {
+			tokens = 0
+		}
+		monthly := stats.MonthlySummary{
+			MonthStart:    month,
+			MonthEnd:      month.AddDate(0, 1, 0),
+			ActiveDays:    i + 1,
+			TotalMessages: (i + 1) * 100,
+			TotalSessions: (i + 1) * 10,
+			TotalTokens:   tokens,
+			TotalCost:     float64(i+1) * 12.5,
+		}
+		yearly.Months = append(yearly.Months, monthly)
+		yearly.TotalMessages += monthly.TotalMessages
+		yearly.TotalSessions += monthly.TotalSessions
+		yearly.TotalTokens += monthly.TotalTokens
+		yearly.TotalCost += monthly.TotalCost
+	}
+	selectedMonth := time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local)
+	detail := stats.WindowReport{
+		Label:       "Monthly",
+		Start:       selectedMonth,
+		End:         selectedMonth.AddDate(0, 1, 0),
+		Messages:    13600,
+		Sessions:    885,
+		Tokens:      1006400000,
+		Cost:        603.73,
+		Models:      []stats.ModelUsage{{Model: "gpt-5.4", TotalTokens: 123456, Cost: 12.34}},
+		AllSessions: []stats.SessionUsage{{ID: "ses_01", Title: "Monthly detail", Messages: 12, Tokens: 123456, Cost: 12.34}},
+	}
+
+	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{}, testVersion, true)
+	model.globalYearMonthly = yearly
+	model.globalYearMonthlyLoaded = true
+	model.globalMonthly = detail
+	model.globalMonthlyLoaded = true
+	model.monthlySelectedMonth = selectedMonth
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: height})
+	model = updated.(Model)
+	updated, _ = model.Update(mockKeyMsg("tab"))
+	model = updated.(Model)
+	updated, _ = model.Update(mockKeyMsg("right"))
+	model = updated.(Model)
+	updated, _ = model.Update(mockKeyMsg("right"))
+	model = updated.(Model)
+	model.monthlySelectedMonth = selectedMonth
+	model.monthlyListOffset = 0
+	model.statsOffset = 0
+	return model
 }
 
 func maxRenderedLineWidth(content string) int {
@@ -871,7 +951,7 @@ func TestRenderHelpLine_IncludesStyledKeyTokens(t *testing.T) {
 func TestRenderSessionHelpLine_IncludesScrollNavigationTokens(t *testing.T) {
 	helpLine := renderSessionHelpLine(maxLayoutWidth)
 
-	for _, token := range []string{"↑/↓", "PgUp/PgDn", "Ctrl+U/D", "Home/End", "enter", "esc"} {
+	for _, token := range []string{"↑/↓", "pgup/pgdn", "ctrl+u/d", "home/end", "enter", "esc"} {
 		if !strings.Contains(helpLine, helpBgKeyStyle.Render(token)) {
 			t.Fatalf("expected styled help token %q in %q", token, helpLine)
 		}
@@ -881,7 +961,7 @@ func TestRenderSessionHelpLine_IncludesScrollNavigationTokens(t *testing.T) {
 func TestRenderStatsHelpLine_IncludesScrollNavigationTokens(t *testing.T) {
 	helpLine := renderStatsHelpLine(maxLayoutWidth)
 
-	for _, token := range []string{"↑/↓", "PgUp/PgDn", "Ctrl+U/D", "Home/End", "tab", "g", "←/→", "esc"} {
+	for _, token := range []string{"↑/↓", "pgup/pgdn", "ctrl+u/d", "home/end", "tab", "g", "←/→", "esc"} {
 		if !strings.Contains(helpLine, helpBgKeyStyle.Render(token)) {
 			t.Fatalf("expected styled help token %q in %q", token, helpLine)
 		}
@@ -1174,7 +1254,7 @@ func TestRenderOverviewLines_GroupsPostMetricsIntoSections(t *testing.T) {
 	content := strings.Join(model.renderOverviewLines(), "\n")
 	plainContent := stripANSI(content)
 
-	for _, section := range []string{"Trends", "Activity - Models (0)", "Activity - Projects (2)", "Activity - Agents (6)", "Activity - Skills (2)", "Activity - Tools (9)"} {
+	for _, section := range []string{"Trends", "Models (0)", "Projects (2)", "Agents (6)", "Skills (2)", "Tools (9)"} {
 		if !strings.Contains(plainContent, section) {
 			t.Fatalf("expected %s section in overview, got %q", section, plainContent)
 		}
@@ -1270,7 +1350,7 @@ func TestRenderOverviewLines_KeepsTrendsAsCompactList(t *testing.T) {
 	model := NewModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{}, testVersion, true)
 	content := strings.Join(model.renderOverviewLines(), "\n")
 
-	trendsSection := strings.SplitN(content, renderSubSectionHeader("Activity - Models", habitSectionTitleStyle), 2)[0]
+	trendsSection := strings.SplitN(content, renderSubSectionHeader("Models", habitSectionTitleStyle), 2)[0]
 	for _, snippet := range []string{
 		defaultTextStyle.Render("• tokens "),
 		defaultTextStyle.Render("• cost "),
@@ -1300,6 +1380,19 @@ func TestRenderOverviewLines_KeepsTrendsAsCompactList(t *testing.T) {
 	}
 }
 
+func TestRenderOverviewLines_HidesReasoningWhenTrendsAreNotShown(t *testing.T) {
+	report := stats.Report{Days: make([]stats.Day, 30), TodayReasoningShare: 0.2, RecentReasoningShare: 0.1}
+	for i := range report.Days {
+		report.Days[i] = stats.Day{Date: time.Now().AddDate(0, 0, -(29 - i)), Tokens: 1000}
+	}
+	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{}, testVersion, true)
+	model.width = 60
+	content := strings.Join(model.renderOverviewLines(), "\n")
+	if strings.Contains(stripANSI(content), "reasoning") {
+		t.Fatalf("expected reasoning line hidden when trends are omitted, got %q", content)
+	}
+}
+
 func TestRenderOverviewLines_OrdersTrendRowsAsRequested(t *testing.T) {
 	report := stats.Report{Days: make([]stats.Day, 30)}
 	for i := range report.Days {
@@ -1315,7 +1408,7 @@ func TestRenderOverviewLines_OrdersTrendRowsAsRequested(t *testing.T) {
 
 	model := NewModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{}, testVersion, true)
 	content := strings.Join(model.renderOverviewLines(), "\n")
-	trendsSection := strings.SplitN(content, renderSubSectionHeader("Activity - Models", habitSectionTitleStyle), 2)[0]
+	trendsSection := strings.SplitN(content, renderSubSectionHeader("Models", habitSectionTitleStyle), 2)[0]
 
 	positions := []int{
 		strings.Index(trendsSection, defaultTextStyle.Render("• tokens ")),
@@ -1373,11 +1466,11 @@ func TestRenderOverviewLines_IncludesModelActivitySection(t *testing.T) {
 
 	model := NewModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{}, testVersion, true)
 	content := strings.Join(model.renderOverviewLines(), "\n")
-	modelSection := strings.SplitN(strings.SplitN(content, renderSubSectionHeader("Activity - Models (12)", habitSectionTitleStyle), 2)[1], renderSubSectionHeader("Activity - Agents (11)", habitSectionTitleStyle), 2)[0]
+	modelSection := strings.SplitN(strings.SplitN(content, renderSubSectionHeader("Models (12)", habitSectionTitleStyle), 2)[1], renderSubSectionHeader("Agents (11)", habitSectionTitleStyle), 2)[0]
 	plainContent := stripANSI(content)
 	plainModelSection := stripANSI(modelSection)
 
-	for _, snippet := range []string{"Activity - Models (12)", "730", "openai", "anthropic", "gpt-5.4", "claude-haiku-4.5", "Total", "$12.00", "$3.00", "$73.00", "16%", "100%"} {
+	for _, snippet := range []string{"Models (12)", "730", "openai", "anthropic", "gpt-5.4", "claude-haiku-4.5", "Total", "$12.00", "$3.00", "$73.00", "16%", "100%"} {
 		if !strings.Contains(plainContent, snippet) {
 			t.Fatalf("expected model activity snippet %q, got %q", snippet, plainContent)
 		}
@@ -1435,11 +1528,11 @@ func TestRenderOverviewLines_OrdersActivitySectionsAsRequested(t *testing.T) {
 	content := strings.Join(model.renderOverviewLines(), "\n")
 
 	positions := []int{
-		strings.Index(content, renderSubSectionHeader("Activity - Models (1)", habitSectionTitleStyle)),
-		strings.Index(content, renderSubSectionHeader("Activity - Projects (1)", habitSectionTitleStyle)),
-		strings.Index(content, renderSubSectionHeader("Activity - Agents (1)", habitSectionTitleStyle)),
-		strings.Index(content, renderSubSectionHeader("Activity - Skills (1)", habitSectionTitleStyle)),
-		strings.Index(content, renderSubSectionHeader("Activity - Tools (1)", habitSectionTitleStyle)),
+		strings.Index(content, renderSubSectionHeader("Models (1)", habitSectionTitleStyle)),
+		strings.Index(content, renderSubSectionHeader("Projects (1)", habitSectionTitleStyle)),
+		strings.Index(content, renderSubSectionHeader("Agents (1)", habitSectionTitleStyle)),
+		strings.Index(content, renderSubSectionHeader("Skills (1)", habitSectionTitleStyle)),
+		strings.Index(content, renderSubSectionHeader("Tools (1)", habitSectionTitleStyle)),
 	}
 	for i, pos := range positions {
 		if pos < 0 {
@@ -1466,7 +1559,7 @@ func TestRenderOverviewLines_HidesProjectActivityInProjectScope(t *testing.T) {
 	model := NewModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{DefaultScope: "project"}, testVersion, true)
 	content := strings.Join(model.renderOverviewLines(), "\n")
 
-	if strings.Contains(stripANSI(content), "Activity - Projects") {
+	if strings.Contains(stripANSI(content), "Projects") {
 		t.Fatalf("expected project activity section to stay hidden in project scope, got %q", content)
 	}
 }
@@ -1488,7 +1581,7 @@ func TestRenderOverviewLines_ShortensProjectPathsInNarrowLayout(t *testing.T) {
 	content := strings.Join(model.renderOverviewLines(), "\n")
 	plainContent := stripANSI(content)
 
-	if !strings.Contains(plainContent, "Activity - Projects") {
+	if !strings.Contains(plainContent, "Projects") {
 		t.Fatalf("expected projects section, got %q", plainContent)
 	}
 	for _, snippet := range []string{"/Users", "..", "t-name"} {
@@ -1630,7 +1723,7 @@ func TestRenderUsageLines_ShowsPlaceholderOnlyWhenTotalIsZero(t *testing.T) {
 	if len(lines) != 3 {
 		t.Fatalf("expected 3 usage lines, got %d", len(lines))
 	}
-	if !strings.Contains(stripANSI(lines[2]), "top 15") {
+	if !strings.Contains(stripANSI(lines[2]), "-") {
 		t.Fatalf("expected placeholder row, got %q", stripANSI(lines[2]))
 	}
 	if strings.Contains(stripANSI(strings.Join(lines, "\n")), "Total") {
@@ -1642,7 +1735,7 @@ func TestRenderUsageLines_ShowsTotalWhenItemsMissingButTotalExists(t *testing.T)
 	lines := (Model{}).renderUsageLines("count", nil, 42)
 	plain := stripANSI(strings.Join(lines, "\n"))
 
-	if !strings.Contains(plain, "top 15") {
+	if !strings.Contains(plain, "-") {
 		t.Fatalf("expected placeholder row, got %q", plain)
 	}
 	if !strings.Contains(plain, "Total") || !strings.Contains(plain, "42") || !strings.Contains(plain, "········ 100%") {
@@ -1735,6 +1828,18 @@ func TestWindowSessionRows_GroupsMessageCounts(t *testing.T) {
 	}
 }
 
+func TestWindowSessionRows_DoesNotInsertMissingCurrentSessionRow(t *testing.T) {
+	report := stats.WindowReport{TopSessions: []stats.SessionUsage{{ID: "ses_other", Messages: 1}}}
+	model := NewModel(nil, nil, nil, SessionItem{ID: "ses_current"}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true)
+	rows := model.windowSessionRows(report)
+	if len(rows) != 1 {
+		t.Fatalf("expected only actual session rows, got %+v", rows)
+	}
+	if strings.Contains(strings.Join(rows[0], " "), "current session not") {
+		t.Fatalf("did not expect synthetic current-session row, got %+v", rows)
+	}
+}
+
 func TestRenderValueTrend_HighlightsTodayCellLikeRhythm(t *testing.T) {
 	days := []stats.Day{
 		{Date: time.Now().AddDate(0, 0, -2), Cost: 1},
@@ -1804,13 +1909,51 @@ func TestUpdate_LeftRightMovesStatsTabs(t *testing.T) {
 	if model.statsTab != 1 {
 		t.Fatalf("expected stats tab 1, got %d", model.statsTab)
 	}
-	if !strings.Contains(model.View().Content, "Token Used") {
+	if !strings.Contains(stripANSI(model.View().Content), time.Now().Format("2006-01")) {
 		t.Fatalf("expected daily tab content, got %q", model.View().Content)
 	}
 	updated, _ = model.Update(mockKeyMsg("left"))
 	model = updated.(Model)
 	if model.statsTab != 0 {
 		t.Fatalf("expected stats tab 0, got %d", model.statsTab)
+	}
+}
+
+func TestStatsContentLines_DailyLoadingShowsMonthHeaderOnly(t *testing.T) {
+	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true)
+	model.statsMode = true
+	model.statsTab = 1
+	model.globalMonthDailyLoading = true
+	model.dailyMonthAnchor = time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local)
+	lines := model.statsContentLines()
+	if len(lines) != 1 {
+		t.Fatalf("expected single loading header line, got %+v", lines)
+	}
+	plain := stripANSI(lines[0])
+	if !strings.Contains(plain, "2026-03") {
+		t.Fatalf("expected loading header month label, got %q", plain)
+	}
+	if strings.Contains(plain, "active") || strings.Contains(plain, "streak") {
+		t.Fatalf("expected no right-side loading meta, got %q", plain)
+	}
+}
+
+func TestStatsContentLines_MonthlyLoadingShowsMonthHeaderOnly(t *testing.T) {
+	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true)
+	model.statsMode = true
+	model.statsTab = 2
+	model.globalYearMonthlyLoading = true
+	model.monthlySelectedMonth = time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local)
+	lines := model.statsContentLines()
+	if len(lines) != 1 {
+		t.Fatalf("expected single loading header line, got %+v", lines)
+	}
+	plain := stripANSI(lines[0])
+	if !strings.Contains(plain, "2026-03") {
+		t.Fatalf("expected loading header month label, got %q", plain)
+	}
+	if strings.Contains(plain, "active") || strings.Contains(plain, "streak") {
+		t.Fatalf("expected no right-side loading meta, got %q", plain)
 	}
 }
 
@@ -1835,18 +1978,24 @@ func TestRenderStatsTabs_ShowsUnderlineStyleTabsWithMetadata(t *testing.T) {
 	if got := lipgloss.Width(lines[1]); got != maxLayoutWidth {
 		t.Fatalf("expected underline row width %d, got %d in %q", maxLayoutWidth, got, lines[1])
 	}
-	for _, snippet := range []string{"Overview", "Daily", "Monthly", "global", "2026-03-01 ~"} {
+	for _, snippet := range []string{"Overview", "Daily", "Monthly", "GLOBAL"} {
 		if !strings.Contains(rendered, snippet) {
 			t.Fatalf("expected %q in tab row, got %q", snippet, rendered)
 		}
 	}
-	for _, snippet := range []string{"   Overview   ", "   Daily   ", "   Monthly   ", " global • 2026-03-01 ~ "} {
-		if !strings.Contains(rendered, snippet) {
+	plainRendered := stripANSI(rendered)
+	for _, snippet := range []string{"   Overview   ", "   Daily   ", "   Monthly   ", "| GLOBAL"} {
+		if !strings.Contains(plainRendered, snippet) {
 			t.Fatalf("expected padded snippet %q in tab row, got %q", snippet, rendered)
 		}
 	}
-	if strings.Contains(rendered, "|") {
-		t.Fatalf("expected conceptual tab grouping without literal pipe characters, got %q", rendered)
+	if strings.Contains(plainRendered, "|") && !strings.Contains(plainRendered, "| GLOBAL") && !strings.Contains(plainRendered, "| PROJECT") {
+		t.Fatalf("expected literal pipe only in monthly scope meta, got %q", rendered)
+	}
+	model.statsTab = 2
+	monthlyRendered := model.renderStatsTabs()
+	if !strings.Contains(stripANSI(monthlyRendered), "| GLOBAL") {
+		t.Fatalf("expected monthly tab scope label in pipe format, got %q", monthlyRendered)
 	}
 	activeIndicator := statsTabIndicatorStyle.Render(strings.Repeat("▔", statsTabWidth))
 	if !strings.Contains(lines[1], activeIndicator) {
@@ -1858,7 +2007,7 @@ func TestRenderStatsTabs_ShowsUnderlineStyleTabsWithMetadata(t *testing.T) {
 	if rendered == updated {
 		t.Fatal("expected tab row to change when scope changes")
 	}
-	if !strings.Contains(updated, "project") {
+	if !strings.Contains(stripANSI(updated), "PROJECT") {
 		t.Fatalf("expected project scope label, got %q", updated)
 	}
 }
@@ -1903,8 +2052,30 @@ func TestRenderStatsTabs_UsesWindowRangeForMonthlyTab(t *testing.T) {
 	}
 
 	rendered := model.renderStatsTabs()
-	if !strings.Contains(rendered, "global • 2026-03") {
-		t.Fatalf("expected monthly window range in tab metadata, got %q", rendered)
+	plainRendered := stripANSI(rendered)
+	if !strings.Contains(plainRendered, "| GLOBAL") {
+		t.Fatalf("expected scope-only tab metadata, got %q", rendered)
+	}
+	if strings.Contains(plainRendered, "2026-03") {
+		t.Fatalf("did not expect monthly date range in tab metadata, got %q", rendered)
+	}
+}
+
+func TestRenderStatsTabs_NarrowLayoutStillShowsScopeMeta(t *testing.T) {
+	report := stats.Report{Days: make([]stats.Day, 30)}
+	for i := range report.Days {
+		report.Days[i] = stats.Day{Date: time.Date(2026, time.February, 1, 0, 0, 0, 0, time.Local).AddDate(0, 0, i)}
+	}
+	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{}, testVersion, true)
+	model.width = 60
+	model.statsTab = 0
+	rendered := stripANSI(model.renderStatsTabs())
+	if !strings.Contains(rendered, "| GLOBAL") {
+		t.Fatalf("expected narrow stats tabs to include scope meta, got %q", rendered)
+	}
+	lines := strings.Split(rendered, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected narrow stats tabs to render scope on a second line, got %q", rendered)
 	}
 }
 
@@ -1922,8 +2093,11 @@ func TestUpdate_GTogglesProjectScopeAndHeaders(t *testing.T) {
 		t.Fatal("expected project scope after g toggle")
 	}
 	view := model.View().Content
-	if !strings.Contains(view, "[Project] My Pulse") || !strings.Contains(view, "[Project] Metrics") {
-		t.Fatalf("expected project-prefixed headers, got %q", view)
+	if !strings.Contains(view, "My Pulse") || !strings.Contains(view, "Metrics") {
+		t.Fatalf("expected headers without project prefix, got %q", view)
+	}
+	if strings.Contains(view, "[Project] My Pulse") || strings.Contains(view, "[Project] Metrics") {
+		t.Fatalf("did not expect project-prefixed headers, got %q", view)
 	}
 	updated, _ = model.Update(mockKeyMsg("g"))
 	model = updated.(Model)
@@ -1944,22 +2118,26 @@ func TestNewModel_UsesConfiguredDefaultProjectScope(t *testing.T) {
 		t.Fatal("expected project scope from config default")
 	}
 	view := model.View().Content
-	if !strings.Contains(view, "[Project] My Pulse") || !strings.Contains(view, "[Project] Metrics") {
-		t.Fatalf("expected project-prefixed headers from default scope, got %q", view)
+	if !strings.Contains(view, "My Pulse") || !strings.Contains(view, "Metrics") {
+		t.Fatalf("expected headers without project prefix from default scope, got %q", view)
+	}
+	if strings.Contains(view, "[Project] My Pulse") || strings.Contains(view, "[Project] Metrics") {
+		t.Fatalf("did not expect project-prefixed headers from default scope, got %q", view)
 	}
 }
 
 func TestUpdate_StatsViewScrollsWithUpDown(t *testing.T) {
 	model := openDailyStatsViewWithHeight(t, 12, 20)
-	before := model.View().Content
+	before := stripANSI(model.View().Content)
+	beforeDate := model.dailySelectedDate
 	updated, _ := model.Update(mockKeyMsg("down"))
 	model = updated.(Model)
-	after := model.View().Content
+	after := stripANSI(model.View().Content)
 	if before == after {
 		t.Fatalf("expected stats view to change after scrolling down")
 	}
-	if model.statsOffset == 0 {
-		t.Fatalf("expected statsOffset to increase after scrolling, got %d", model.statsOffset)
+	if model.dailySelectedDate.Equal(beforeDate) {
+		t.Fatalf("expected selected day to change after moving down")
 	}
 }
 
@@ -1968,61 +2146,49 @@ func TestUpdate_StatsViewPageNavigationKeys(t *testing.T) {
 
 	updated, _ := model.Update(mockKeyMsg("pgdown"))
 	model = updated.(Model)
-	expectedStep := pageStep(model.availableStatsRows())
-	maxOffset := len(model.statsContentLines()) - model.availableStatsRows()
-	if maxOffset < 0 {
-		maxOffset = 0
-	}
-	if expectedStep > maxOffset {
-		expectedStep = maxOffset
-	}
-	if model.statsOffset != expectedStep {
-		t.Fatalf("expected pgdown to move to offset %d, got %d", expectedStep, model.statsOffset)
+	if model.dailySelectionIndex() <= 0 {
+		t.Fatalf("expected pgdown to move selected day downward, got index %d", model.dailySelectionIndex())
 	}
 
 	updated, _ = model.Update(mockKeyMsg("end"))
 	model = updated.(Model)
-	maxOffset = len(model.statsContentLines()) - model.availableStatsRows()
-	if maxOffset < 0 {
-		maxOffset = 0
-	}
-	if model.statsOffset != maxOffset {
-		t.Fatalf("expected end to jump to bottom offset %d, got %d", maxOffset, model.statsOffset)
+	if model.dailySelectionIndex() != len(model.currentMonthDaily().Days)-1 {
+		t.Fatalf("expected end to jump to last day, got index %d", model.dailySelectionIndex())
 	}
 
 	updated, _ = model.Update(mockKeyMsg("home"))
 	model = updated.(Model)
-	if model.statsOffset != 0 {
-		t.Fatalf("expected home to reset offset, got %d", model.statsOffset)
+	if model.dailySelectionIndex() != 0 {
+		t.Fatalf("expected home to reset selection to top, got %d", model.dailySelectionIndex())
 	}
 
 	updated, _ = model.Update(mockKeyMsg("ctrl+d"))
 	model = updated.(Model)
-	if model.statsOffset == 0 {
-		t.Fatalf("expected ctrl+d to move down from top, got offset %d", model.statsOffset)
+	if model.dailySelectionIndex() == 0 {
+		t.Fatalf("expected ctrl+d to move selection down from top")
 	}
 
 	updated, _ = model.Update(mockKeyMsg("home"))
 	model = updated.(Model)
-	if model.statsOffset != 0 {
-		t.Fatalf("expected home to reset offset after ctrl+d, got %d", model.statsOffset)
+	if model.dailySelectionIndex() != 0 {
+		t.Fatalf("expected home to reset selection after ctrl+d, got %d", model.dailySelectionIndex())
 	}
 
 	updated, _ = model.Update(mockKeyMsg("pgup"))
 	model = updated.(Model)
-	if model.statsOffset != 0 {
-		t.Fatalf("expected pgup at top to stay clamped, got %d", model.statsOffset)
+	if model.dailySelectionIndex() != 0 {
+		t.Fatalf("expected pgup at top to stay clamped, got %d", model.dailySelectionIndex())
 	}
 
 	updated, _ = model.Update(mockKeyMsg("ctrl+u"))
 	model = updated.(Model)
-	if model.statsOffset != 0 {
-		t.Fatalf("expected ctrl+u at top to stay clamped, got %d", model.statsOffset)
+	if model.dailySelectionIndex() != 0 {
+		t.Fatalf("expected ctrl+u at top to stay clamped, got %d", model.dailySelectionIndex())
 	}
 }
 
 func TestModel_LoadsOnlyVisibleStatsViewAndCachesWithinTTL(t *testing.T) {
-	var overviewLoads, dailyLoads int
+	var overviewLoads, monthLoads, dailyLoads int
 	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true).
 		WithStatsLoaders(
 			func() (stats.Report, error) {
@@ -2040,6 +2206,16 @@ func TestModel_LoadsOnlyVisibleStatsViewAndCachesWithinTTL(t *testing.T) {
 			func(label string, start, end time.Time) (stats.WindowReport, error) {
 				dailyLoads++
 				return stats.WindowReport{Label: label}, nil
+			},
+		).
+		WithMonthDailyLoaders(
+			func(time.Time) (stats.MonthDailyReport, error) {
+				monthLoads++
+				return stats.MonthDailyReport{MonthStart: time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local)}, nil
+			},
+			func(time.Time) (stats.MonthDailyReport, error) {
+				monthLoads++
+				return stats.MonthDailyReport{MonthStart: time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local)}, nil
 			},
 		)
 
@@ -2060,12 +2236,12 @@ func TestModel_LoadsOnlyVisibleStatsViewAndCachesWithinTTL(t *testing.T) {
 	updated, cmd = model.Update(mockKeyMsg("right"))
 	model = updated.(Model)
 	if cmd == nil {
-		t.Fatal("expected daily tab to trigger window load")
+		t.Fatal("expected daily tab to trigger month load")
 	}
 	updated, _ = model.Update(cmd())
 	model = updated.(Model)
-	if dailyLoads != 1 {
-		t.Fatalf("expected one daily load, got %d", dailyLoads)
+	if monthLoads != 1 {
+		t.Fatalf("expected one month-daily load, got %d", monthLoads)
 	}
 	updated, cmd = model.Update(mockKeyMsg("left"))
 	model = updated.(Model)
@@ -2073,6 +2249,128 @@ func TestModel_LoadsOnlyVisibleStatsViewAndCachesWithinTTL(t *testing.T) {
 	model = updated.(Model)
 	if cmd != nil {
 		t.Fatal("expected fresh daily cache to avoid reload")
+	}
+	if dailyLoads != 0 {
+		t.Fatalf("expected no day-detail window load yet, got %d", dailyLoads)
+	}
+}
+
+func TestUpdate_DailyEnterAndEscSwitchBetweenListAndDetail(t *testing.T) {
+	model := openDailyStatsViewWithHeight(t, 12, 8)
+	selected := model.dailySelectedDate
+
+	updated, _ := model.Update(mockKeyMsg("enter"))
+	model = updated.(Model)
+	if !model.dailyDetailMode {
+		t.Fatal("expected enter to open daily detail mode")
+	}
+
+	updated, _ = model.Update(mockKeyMsg("esc"))
+	model = updated.(Model)
+	if model.dailyDetailMode {
+		t.Fatal("expected esc to return to month list mode")
+	}
+	if !model.dailySelectedDate.Equal(selected) {
+		t.Fatalf("expected selected date preserved after returning from detail, got %v want %v", model.dailySelectedDate, selected)
+	}
+}
+
+func TestUpdate_DailyMonthNavigationPreservesDayWhenPossible(t *testing.T) {
+	model := newTestModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: false}}, nil, true)
+	updated, _ := model.Update(mockKeyMsg("tab"))
+	model = updated.(Model)
+	updated, _ = model.Update(mockKeyMsg("right"))
+	model = updated.(Model)
+	model.dailyMonthAnchor = time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local)
+	model.dailySelectedDate = time.Date(2026, time.March, 31, 0, 0, 0, 0, time.Local)
+
+	updated, _ = model.Update(mockKeyMsg("["))
+	model = updated.(Model)
+	if got := model.currentDailyMonth(); got.Month() != time.February {
+		t.Fatalf("expected previous month February, got %v", got)
+	}
+	if got := model.currentDailyDate().Day(); got != 28 {
+		t.Fatalf("expected day clamped to Feb 28, got %d", got)
+	}
+}
+
+func TestUpdate_DailyMonthNavigationDoesNotAdvancePastCurrentMonth(t *testing.T) {
+	model := newTestModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: false}}, nil, true)
+	updated, _ := model.Update(mockKeyMsg("tab"))
+	model = updated.(Model)
+	updated, _ = model.Update(mockKeyMsg("right"))
+	model = updated.(Model)
+
+	currentMonth := statsMonthStart(time.Now())
+	model.dailyMonthAnchor = currentMonth
+	model.dailySelectedDate = startOfStatsDay(time.Now())
+
+	updated, _ = model.Update(mockKeyMsg("]"))
+	model = updated.(Model)
+	if got := model.currentDailyMonth(); !got.Equal(currentMonth) {
+		t.Fatalf("expected current month to remain capped, got %v want %v", got, currentMonth)
+	}
+}
+
+func TestUpdate_MonthlyEnterAndEscSwitchBetweenListAndDetail(t *testing.T) {
+	model := openMonthlyStatsViewWithHeight(t, 14)
+	selected := model.monthlySelectedMonth
+
+	updated, _ := model.Update(mockKeyMsg("enter"))
+	model = updated.(Model)
+	if !model.monthlyDetailMode {
+		t.Fatal("expected enter to open monthly detail mode")
+	}
+
+	updated, _ = model.Update(mockKeyMsg("esc"))
+	model = updated.(Model)
+	if model.monthlyDetailMode {
+		t.Fatal("expected esc to return to monthly list mode")
+	}
+	if !model.monthlySelectedMonth.Equal(selected) {
+		t.Fatalf("expected selected month preserved after returning from detail, got %v want %v", model.monthlySelectedMonth, selected)
+	}
+}
+
+func TestUpdate_MonthlySelectionMovesWithUpDown(t *testing.T) {
+	model := openMonthlyStatsViewWithHeight(t, 12)
+	before := model.monthlySelectedMonth
+
+	updated, _ := model.Update(mockKeyMsg("down"))
+	model = updated.(Model)
+	if model.monthlySelectedMonth.Equal(before) {
+		t.Fatalf("expected selected month to change after moving down")
+	}
+
+	updated, _ = model.Update(mockKeyMsg("up"))
+	model = updated.(Model)
+	if !model.monthlySelectedMonth.Equal(before) {
+		t.Fatalf("expected up to restore previous month, got %v want %v", model.monthlySelectedMonth, before)
+	}
+}
+
+func TestUpdate_MonthlyDetailAcceptsMonthDailyForSelectedMonth(t *testing.T) {
+	model := NewModel([]PluginItem{{Name: "plugin-a"}}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true)
+	model.statsMode = true
+	model.statsTab = 2
+	model.monthlyDetailMode = true
+	model.monthlySelectedMonth = time.Date(2025, time.December, 1, 0, 0, 0, 0, time.Local)
+	model.dailyMonthAnchor = time.Date(2026, time.April, 1, 0, 0, 0, 0, time.Local)
+	model.dailySelectedDate = time.Date(2026, time.April, 1, 0, 0, 0, 0, time.Local)
+
+	msg := monthDailyReportLoadedMsg{
+		project:    false,
+		monthStart: time.Date(2025, time.December, 1, 0, 0, 0, 0, time.Local),
+		report:     stats.MonthDailyReport{MonthStart: time.Date(2025, time.December, 1, 0, 0, 0, 0, time.Local), MonthEnd: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.Local)},
+	}
+	updated, _ := model.Update(msg)
+	model = updated.(Model)
+
+	if !model.globalMonthDailyLoaded {
+		t.Fatal("expected selected monthly detail month-daily report to be accepted")
+	}
+	if !model.globalMonthDailyMonth.Equal(time.Date(2025, time.December, 1, 0, 0, 0, 0, time.Local)) {
+		t.Fatalf("expected loaded month to track selected month, got %v", model.globalMonthDailyMonth)
 	}
 }
 

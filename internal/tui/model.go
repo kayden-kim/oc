@@ -33,40 +33,50 @@ type SessionItem struct {
 
 // Model holds the state of the multi-select TUI
 type Model struct {
-	plugins                 []PluginItem
-	editChoices             []EditChoice
-	version                 string
-	allowMultiplePlugins    bool
-	sessions                []SessionItem
-	session                 SessionItem
-	globalStats             stats.Report
-	projectStats            stats.Report
-	globalStatsLoaded       bool
-	projectStatsLoaded      bool
-	globalStatsLoading      bool
-	projectStatsLoading     bool
-	globalStatsUpdatedAt    time.Time
-	projectStatsUpdatedAt   time.Time
-	loadGlobalStats         func() (stats.Report, error)
-	loadProjectStats        func() (stats.Report, error)
-	globalDaily             stats.WindowReport
-	projectDaily            stats.WindowReport
-	globalMonthly           stats.WindowReport
-	projectMonthly          stats.WindowReport
-	globalDailyLoaded       bool
-	projectDailyLoaded      bool
-	globalMonthlyLoaded     bool
-	projectMonthlyLoaded    bool
-	globalDailyLoading      bool
-	projectDailyLoading     bool
-	globalMonthlyLoading    bool
-	projectMonthlyLoading   bool
-	globalDailyUpdatedAt    time.Time
-	projectDailyUpdatedAt   time.Time
-	globalMonthlyUpdatedAt  time.Time
-	projectMonthlyUpdatedAt time.Time
-	loadGlobalWindow        func(string, time.Time, time.Time) (stats.WindowReport, error)
-	loadProjectWindow       func(string, time.Time, time.Time) (stats.WindowReport, error)
+	plugins                     []PluginItem
+	editChoices                 []EditChoice
+	version                     string
+	allowMultiplePlugins        bool
+	sessions                    []SessionItem
+	session                     SessionItem
+	globalStats                 stats.Report
+	projectStats                stats.Report
+	globalStatsLoaded           bool
+	projectStatsLoaded          bool
+	globalStatsLoading          bool
+	projectStatsLoading         bool
+	globalStatsUpdatedAt        time.Time
+	projectStatsUpdatedAt       time.Time
+	loadGlobalStats             func() (stats.Report, error)
+	loadProjectStats            func() (stats.Report, error)
+	globalDaily                 stats.WindowReport
+	projectDaily                stats.WindowReport
+	globalMonthly               stats.WindowReport
+	projectMonthly              stats.WindowReport
+	globalYearMonthly           stats.YearMonthlyReport
+	projectYearMonthly          stats.YearMonthlyReport
+	globalDailyLoaded           bool
+	projectDailyLoaded          bool
+	globalMonthlyLoaded         bool
+	projectMonthlyLoaded        bool
+	globalYearMonthlyLoaded     bool
+	projectYearMonthlyLoaded    bool
+	globalDailyLoading          bool
+	projectDailyLoading         bool
+	globalMonthlyLoading        bool
+	projectMonthlyLoading       bool
+	globalYearMonthlyLoading    bool
+	projectYearMonthlyLoading   bool
+	globalDailyUpdatedAt        time.Time
+	projectDailyUpdatedAt       time.Time
+	globalMonthlyUpdatedAt      time.Time
+	projectMonthlyUpdatedAt     time.Time
+	globalYearMonthlyUpdatedAt  time.Time
+	projectYearMonthlyUpdatedAt time.Time
+	loadGlobalWindow            func(string, time.Time, time.Time) (stats.WindowReport, error)
+	loadProjectWindow           func(string, time.Time, time.Time) (stats.WindowReport, error)
+	loadGlobalYearMonthly       func(time.Time) (stats.YearMonthlyReport, error)
+	loadProjectYearMonthly      func(time.Time) (stats.YearMonthlyReport, error)
 	// Month-daily report caches (for month-list/day-detail view)
 	globalMonthDaily           stats.MonthDailyReport
 	projectMonthDaily          stats.MonthDailyReport
@@ -93,11 +103,22 @@ type Model struct {
 	editMode                   bool
 	sessionMode                bool
 	statsMode                  bool
+	dailyDetailMode            bool
+	monthlyDetailMode          bool
 	editTarget                 string
 	width                      int
 	height                     int
 	sessionOffset              int
 	statsOffset                int
+	dailyMonthAnchor           time.Time
+	dailySelectedDate          time.Time
+	dailyListOffset            int
+	dailyDetailOffset          int
+	monthlySelectedMonth       time.Time
+	monthlyListOffset          int
+	monthlyDetailOffset        int
+	globalDailyDate            time.Time
+	projectDailyDate           time.Time
 }
 
 type statsLoadedMsg struct {
@@ -109,6 +130,8 @@ type statsLoadedMsg struct {
 type windowReportLoadedMsg struct {
 	project bool
 	label   string
+	start   time.Time
+	end     time.Time
 	report  stats.WindowReport
 	err     error
 }
@@ -118,6 +141,13 @@ type monthDailyReportLoadedMsg struct {
 	monthStart time.Time
 	report     stats.MonthDailyReport
 	err        error
+}
+
+type yearMonthlyReportLoadedMsg struct {
+	project  bool
+	endMonth time.Time
+	report   stats.YearMonthlyReport
+	err      error
 }
 
 const sessionChromeHeight = 6
@@ -131,28 +161,30 @@ const (
 )
 
 var (
-	defaultTextStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#7A7A7A"))
-	statsValueTextStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#CCCCCC"))
-	cursorStyle            = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Bold(true)
-	cursorSelectedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Bold(true)
-	helpKeyStyle           = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Bold(true)
-	helpBgKeyStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Background(lipgloss.Color("#191919")).Bold(true)
-	helpBgTextStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("#7A7A7A")).Background(lipgloss.Color("#191919"))
-	helpBarStyle           = lipgloss.NewStyle().Foreground(lipgloss.Color("#191919"))
-	helpBlockStyle         = lipgloss.NewStyle().Background(lipgloss.Color("#191919"))
-	sessionContainerStyle  = lipgloss.NewStyle()
-	sessionLabelStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#FF9900")).Bold(true).Padding(0, 1)
-	sessionContentStyle    = lipgloss.NewStyle().Background(lipgloss.Color("#292929")).Padding(0, 1)
-	sessionValueStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#C0C0C0")).Background(lipgloss.Color("#292929")).Bold(false)
-	sessionMetaStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Background(lipgloss.Color("#393939")).Bold(false).Padding(0, 1)
-	habitSectionTitleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#C0C0C0")).Background(lipgloss.Color("#191919")).Bold(false).Padding(0, 1)
-	todaySectionTitleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#C0C0C0")).Background(lipgloss.Color("#191919")).Bold(false).Bold(true).Padding(0, 1)
-	instructionTitleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#C0C0C0")).Background(lipgloss.Color("#292929")).Bold(false).Padding(0, 1)
-	statsTabActiveStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Background(lipgloss.Color("#393939")).Bold(true).Padding(0, 1)
-	statsTabStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("#999999")).Background(lipgloss.Color("#1F1F1F")).Padding(0, 1)
-	statsTabIndicatorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#60C5F1"))
-	statsTabMetaStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#999999"))
-	dimmedLabelStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#999999"))
+	defaultTextStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("#7A7A7A"))
+	statsValueTextStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#CCCCCC"))
+	cursorStyle             = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Bold(true)
+	cursorSelectedStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Bold(true)
+	helpKeyStyle            = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Bold(true)
+	helpBgKeyStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFCC00")).Background(lipgloss.Color("#191919")).Bold(true)
+	helpBgTextStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("#7A7A7A")).Background(lipgloss.Color("#191919"))
+	helpBarStyle            = lipgloss.NewStyle().Foreground(lipgloss.Color("#191919"))
+	helpBlockStyle          = lipgloss.NewStyle().Background(lipgloss.Color("#191919"))
+	sessionContainerStyle   = lipgloss.NewStyle()
+	sessionLabelStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#FF9900")).Bold(true).Padding(0, 1)
+	sessionContentStyle     = lipgloss.NewStyle().Background(lipgloss.Color("#292929")).Padding(0, 1)
+	sessionValueStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#C0C0C0")).Background(lipgloss.Color("#292929")).Bold(false)
+	sessionMetaStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Background(lipgloss.Color("#393939")).Bold(false).Padding(0, 1)
+	habitSectionTitleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#C0C0C0")).Background(lipgloss.Color("#191919")).Bold(false).Padding(0, 1)
+	todaySectionTitleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#C0C0C0")).Background(lipgloss.Color("#191919")).Bold(false).Bold(true).Padding(0, 1)
+	instructionTitleStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#C0C0C0")).Background(lipgloss.Color("#292929")).Bold(false).Padding(0, 1)
+	statsTabActiveStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Background(lipgloss.Color("#393939")).Bold(true).Padding(0, 1)
+	statsTabStyle           = lipgloss.NewStyle().Foreground(lipgloss.Color("#999999")).Background(lipgloss.Color("#1F1F1F")).Padding(0, 1)
+	statsTabIndicatorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#60C5F1"))
+	statsTabMetaStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#999999"))
+	dimmedLabelStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("#999999"))
+	sundayTextStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("#C97373"))
+	selectedSundayTextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B")).Bold(true)
 )
 
 func (m Model) renderTopBadge() string {
@@ -173,8 +205,9 @@ func (m Model) renderTopBadge() string {
 }
 
 var (
-	sectionBarStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF9900"))
-	instructionBarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#60C5F1"))
+	sectionBarStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF9900"))
+	instructionBarStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#60C5F1"))
+	detailSectionBarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#60C5F1"))
 )
 
 func renderSectionHeader(text string, targetWidth int) string {
@@ -185,6 +218,10 @@ func renderSectionHeader(text string, targetWidth int) string {
 
 func renderSubSectionHeader(text string, style lipgloss.Style) string {
 	return "  " + sectionBarStyle.Render("┃") + style.Render(text)
+}
+
+func renderDetailSectionHeader(text string, style lipgloss.Style) string {
+	return "  " + detailSectionBarStyle.Render("┃") + style.Render(text)
 }
 
 func selectedSessionSummary(session SessionItem, maxWidth int) string {
@@ -260,7 +297,7 @@ func renderHelpLine(targetWidth int) string {
 
 func renderStatsHelpLine(targetWidth int) string {
 	return renderHelpBlock([]string{
-		helpBgTextStyle.Render("💡 ") + helpEntry("↑/↓", "scroll") + helpBgTextStyle.Render(" • ") + helpEntry("PgUp/PgDn", "page") + helpBgTextStyle.Render(" • ") + helpEntry("Ctrl+U/D", "half") + helpBgTextStyle.Render(" • ") + helpEntry("Home/End", "top/bottom"),
+		helpBgTextStyle.Render("💡 ") + helpEntry("↑/↓", "scroll") + helpBgTextStyle.Render(" • ") + helpEntry("pgup/pgdn", "page") + helpBgTextStyle.Render(" • ") + helpEntry("ctrl+u/d", "half") + helpBgTextStyle.Render(" • ") + helpEntry("home/end", "top/bottom"),
 		helpBgTextStyle.Render("   ") + helpEntry("tab", "launcher") + helpBgTextStyle.Render(" • ") + helpEntry("g", "scope") + helpBgTextStyle.Render(" • ") + helpEntry("←/→", "tabs") + helpBgTextStyle.Render(" • ") + helpEntry("esc", "back"),
 	}, targetWidth)
 }
@@ -273,7 +310,7 @@ func renderEditHelpLine(targetWidth int) string {
 
 func renderSessionHelpLine(targetWidth int) string {
 	return renderHelpBlock([]string{
-		helpBgTextStyle.Render("💡 ") + helpEntry("↑/↓", "navigate") + helpBgTextStyle.Render(" • ") + helpEntry("PgUp/PgDn", "page") + helpBgTextStyle.Render(" • ") + helpEntry("Ctrl+U/D", "half") + helpBgTextStyle.Render(" • ") + helpEntry("Home/End", "top/bottom"),
+		helpBgTextStyle.Render("💡 ") + helpEntry("↑/↓", "navigate") + helpBgTextStyle.Render(" • ") + helpEntry("pgup/pgdn", "page") + helpBgTextStyle.Render(" • ") + helpEntry("ctrl+u/d", "half") + helpBgTextStyle.Render(" • ") + helpEntry("home/end", "top/bottom"),
 		helpBgTextStyle.Render("   ") + helpEntry("enter", "select") + helpBgTextStyle.Render(" • ") + helpEntry("esc", "back"),
 	}, targetWidth)
 }
@@ -587,6 +624,7 @@ func NewModel(items []PluginItem, editChoices []EditChoice, sessions []SessionIt
 		}
 	}
 
+	now := time.Now()
 	return Model{
 		plugins:              items,
 		editChoices:          editChoices,
@@ -605,6 +643,9 @@ func NewModel(items []PluginItem, editChoices []EditChoice, sessions []SessionIt
 		sessionCursor:        sessionCursor,
 		selected:             selected,
 		confirmed:            confirmed,
+		dailyMonthAnchor:     statsMonthStart(now),
+		dailySelectedDate:    startOfStatsDay(now),
+		monthlySelectedMonth: statsMonthStart(now),
 	}
 }
 
@@ -620,6 +661,14 @@ func (m Model) WithStatsLoaders(global func() (stats.Report, error), project fun
 	m.loadProjectWindow = projectWindow
 	m.globalStatsLoaded = false
 	m.projectStatsLoaded = false
+	return m
+}
+
+func (m Model) WithYearMonthlyLoaders(global func(time.Time) (stats.YearMonthlyReport, error), project func(time.Time) (stats.YearMonthlyReport, error)) Model {
+	m.loadGlobalYearMonthly = global
+	m.loadProjectYearMonthly = project
+	m.globalYearMonthlyLoaded = false
+	m.projectYearMonthlyLoaded = false
 	return m
 }
 
@@ -642,12 +691,16 @@ func loadStatsCmd(project bool, loader func() (stats.Report, error)) tea.Cmd {
 }
 
 func loadWindowCmd(project bool, label string, loader func() (stats.WindowReport, error)) tea.Cmd {
+	return loadWindowCmdWithRange(project, label, time.Time{}, time.Time{}, loader)
+}
+
+func loadWindowCmdWithRange(project bool, label string, start, end time.Time, loader func() (stats.WindowReport, error)) tea.Cmd {
 	if loader == nil {
 		return nil
 	}
 	return func() tea.Msg {
 		report, err := loader()
-		return windowReportLoadedMsg{project: project, label: label, report: report, err: err}
+		return windowReportLoadedMsg{project: project, label: label, start: start, end: end, report: report, err: err}
 	}
 }
 
@@ -661,10 +714,455 @@ func loadMonthDailyCmd(project bool, monthStart time.Time, loader func(time.Time
 	}
 }
 
+func loadYearMonthlyCmd(project bool, endMonth time.Time, loader func(time.Time) (stats.YearMonthlyReport, error)) tea.Cmd {
+	if loader == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		report, err := loader(endMonth)
+		return yearMonthlyReportLoadedMsg{project: project, endMonth: endMonth, report: report, err: err}
+	}
+}
+
+func (m Model) currentDailyMonth() time.Time {
+	if !m.dailyMonthAnchor.IsZero() {
+		return statsMonthStart(m.dailyMonthAnchor)
+	}
+	now := time.Now()
+	return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+}
+
+func statsMonthStart(t time.Time) time.Time {
+	if t.IsZero() {
+		return time.Time{}
+	}
+	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, t.Location())
+}
+
+func startOfStatsDay(t time.Time) time.Time {
+	if t.IsZero() {
+		return time.Time{}
+	}
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+}
+
+func (m *Model) resetDailyState(now time.Time) {
+	month := statsMonthStart(now)
+	m.dailyDetailMode = false
+	m.dailyMonthAnchor = month
+	m.dailySelectedDate = startOfStatsDay(now)
+	m.dailyListOffset = 0
+	m.dailyDetailOffset = 0
+	m.statsOffset = 0
+	if m.dailySelectedDate.Before(month) || !m.dailySelectedDate.Before(month.AddDate(0, 1, 0)) {
+		m.dailySelectedDate = month
+	}
+}
+
+func (m *Model) resetMonthlyState(now time.Time) {
+	month := statsMonthStart(now)
+	m.monthlyDetailMode = false
+	m.monthlySelectedMonth = month
+	m.monthlyListOffset = 0
+	m.monthlyDetailOffset = 0
+	m.statsOffset = 0
+}
+
+func (m Model) currentDailyDate() time.Time {
+	if !m.dailySelectedDate.IsZero() {
+		return startOfStatsDay(m.dailySelectedDate)
+	}
+	month := m.currentDailyMonth()
+	if !month.IsZero() {
+		return month
+	}
+	return startOfStatsDay(time.Now())
+}
+
+func (m Model) currentDailyReportDate(project bool) time.Time {
+	if project {
+		return startOfStatsDay(m.projectDailyDate)
+	}
+	return startOfStatsDay(m.globalDailyDate)
+}
+
+func (m Model) currentMonthlySelection() time.Time {
+	if !m.monthlySelectedMonth.IsZero() {
+		return statsMonthStart(m.monthlySelectedMonth)
+	}
+	if report := m.currentYearMonthly(); len(report.Months) > 0 {
+		return statsMonthStart(report.Months[len(report.Months)-1].MonthStart)
+	}
+	return statsMonthStart(time.Now())
+}
+
+func (m Model) currentYearMonthlyEnd() time.Time {
+	return statsMonthStart(time.Now())
+}
+
+func (m Model) currentYearMonthly() stats.YearMonthlyReport {
+	if m.projectScope {
+		return m.projectYearMonthly
+	}
+	return m.globalYearMonthly
+}
+
+func (m Model) currentYearMonthlyLoading() bool {
+	if m.projectScope {
+		return m.projectYearMonthlyLoading
+	}
+	return m.globalYearMonthlyLoading
+}
+
+func (m Model) currentYearMonthlyFresh(now time.Time) bool {
+	if m.projectScope {
+		return m.projectYearMonthlyLoaded && now.Sub(m.projectYearMonthlyUpdatedAt) < statsViewTTL
+	}
+	return m.globalYearMonthlyLoaded && now.Sub(m.globalYearMonthlyUpdatedAt) < statsViewTTL
+}
+
+func (m *Model) setYearMonthlyLoading(project bool, loading bool) {
+	if project {
+		m.projectYearMonthlyLoading = loading
+		return
+	}
+	m.globalYearMonthlyLoading = loading
+}
+
+func (m *Model) setYearMonthlyReport(project bool, report stats.YearMonthlyReport) {
+	if project {
+		m.projectYearMonthly = report
+		m.projectYearMonthlyLoaded = true
+		m.projectYearMonthlyUpdatedAt = time.Now()
+		return
+	}
+	m.globalYearMonthly = report
+	m.globalYearMonthlyLoaded = true
+	m.globalYearMonthlyUpdatedAt = time.Now()
+}
+
+func (m Model) yearMonthlyRows() []stats.MonthlySummary {
+	report := m.currentYearMonthly()
+	rows := make([]stats.MonthlySummary, 0, len(report.Months))
+	for i := len(report.Months) - 1; i >= 0; i-- {
+		rows = append(rows, report.Months[i])
+	}
+	return rows
+}
+
+func (m Model) monthlySelectionIndex() int {
+	rows := m.yearMonthlyRows()
+	if len(rows) == 0 {
+		return -1
+	}
+	selected := m.currentMonthlySelection()
+	for i, row := range rows {
+		if statsMonthStart(row.MonthStart).Equal(selected) {
+			return i
+		}
+	}
+	return 0
+}
+
+func (m *Model) syncMonthlySelectionToYear() {
+	rows := m.yearMonthlyRows()
+	if len(rows) == 0 {
+		m.monthlySelectedMonth = time.Time{}
+		return
+	}
+	idx := m.monthlySelectionIndex()
+	if idx < 0 || idx >= len(rows) {
+		idx = 0
+	}
+	m.monthlySelectedMonth = statsMonthStart(rows[idx].MonthStart)
+}
+
+func (m *Model) ensureMonthlySelectionVisible() {
+	total := len(m.statsContentLines())
+	if total <= 0 {
+		m.monthlyListOffset = 0
+		m.statsOffset = 0
+		return
+	}
+	idx := m.monthlySelectionIndex()
+	if idx < 0 {
+		m.monthlyListOffset = 0
+		m.statsOffset = 0
+		return
+	}
+	lineIndex := m.yearMonthlyRowLineOffset() + idx
+	visibleRows := m.availableStatsRows()
+	if visibleRows <= 0 || visibleRows >= total {
+		m.monthlyListOffset = 0
+		m.statsOffset = 0
+		return
+	}
+	if m.monthlyListOffset > total-visibleRows {
+		m.monthlyListOffset = max(0, total-visibleRows)
+	}
+	if lineIndex < m.monthlyListOffset {
+		m.monthlyListOffset = lineIndex
+	}
+	if lineIndex >= m.monthlyListOffset+visibleRows {
+		m.monthlyListOffset = lineIndex - visibleRows + 1
+	}
+	if m.monthlyListOffset < 0 {
+		m.monthlyListOffset = 0
+	}
+	if maxOffset := max(0, total-visibleRows); m.monthlyListOffset > maxOffset {
+		m.monthlyListOffset = maxOffset
+	}
+	m.statsOffset = m.monthlyListOffset
+}
+
+func (m Model) yearMonthlyRowLineOffset() int {
+	if m.isNarrowLayout() {
+		return 3
+	}
+	return 13
+}
+
+func (m *Model) moveMonthlySelection(delta int) {
+	rows := m.yearMonthlyRows()
+	if len(rows) == 0 {
+		return
+	}
+	idx := m.monthlySelectionIndex()
+	if idx < 0 {
+		idx = 0
+	}
+	idx = clampCursor(idx+delta, len(rows))
+	m.monthlySelectedMonth = statsMonthStart(rows[idx].MonthStart)
+	m.ensureMonthlySelectionVisible()
+}
+
+func (m *Model) jumpMonthlySelection(target scrollTarget) {
+	rows := m.yearMonthlyRows()
+	if len(rows) == 0 {
+		return
+	}
+	idx := 0
+	if target == scrollTargetBottom {
+		idx = len(rows) - 1
+	}
+	m.monthlySelectedMonth = statsMonthStart(rows[idx].MonthStart)
+	m.ensureMonthlySelectionVisible()
+}
+
+func (m *Model) pageMonthlySelection(delta int) {
+	m.moveMonthlySelection(delta * pageStep(m.availableStatsRows()))
+}
+
+func (m *Model) halfPageMonthlySelection(delta int) {
+	m.moveMonthlySelection(delta * halfPageStep(m.availableStatsRows()))
+}
+
+func (m *Model) enterMonthlyDetail() {
+	m.syncMonthlySelectionToYear()
+	m.monthlyDetailMode = true
+	m.monthlyDetailOffset = 0
+	m.statsOffset = 0
+}
+
+func (m *Model) exitMonthlyDetail() {
+	m.monthlyDetailMode = false
+	m.statsOffset = m.monthlyListOffset
+	m.ensureMonthlySelectionVisible()
+}
+
+func (m Model) currentMonthDailyFresh(month, now time.Time) bool {
+	month = statsMonthStart(month)
+	if m.projectScope {
+		return m.projectMonthDailyLoaded && statsMonthStart(m.projectMonthDailyMonth).Equal(month) && now.Sub(m.projectMonthDailyUpdatedAt) < statsViewTTL
+	}
+	return m.globalMonthDailyLoaded && statsMonthStart(m.globalMonthDailyMonth).Equal(month) && now.Sub(m.globalMonthDailyUpdatedAt) < statsViewTTL
+}
+
+func (m *Model) setMonthDailyLoading(project bool, loading bool) {
+	if project {
+		m.projectMonthDailyLoading = loading
+		return
+	}
+	m.globalMonthDailyLoading = loading
+}
+
+func (m *Model) setMonthDailyReport(project bool, month time.Time, report stats.MonthDailyReport) {
+	month = statsMonthStart(month)
+	if project {
+		m.projectMonthDaily = report
+		m.projectMonthDailyLoaded = true
+		m.projectMonthDailyMonth = month
+		m.projectMonthDailyUpdatedAt = time.Now()
+		return
+	}
+	m.globalMonthDaily = report
+	m.globalMonthDailyLoaded = true
+	m.globalMonthDailyMonth = month
+	m.globalMonthDailyUpdatedAt = time.Now()
+}
+
+func (m Model) monthDailyRows() []stats.DailySummary {
+	return m.currentMonthDaily().Days
+}
+
+func (m Model) dailySelectionIndex() int {
+	rows := m.monthDailyRows()
+	if len(rows) == 0 {
+		return -1
+	}
+	selected := m.currentDailyDate()
+	for i, row := range rows {
+		if startOfStatsDay(row.Date).Equal(selected) {
+			return i
+		}
+	}
+	return 0
+}
+
+func (m *Model) syncDailySelectionToMonth() {
+	rows := m.monthDailyRows()
+	if len(rows) == 0 {
+		m.dailySelectedDate = time.Time{}
+		return
+	}
+	idx := m.dailySelectionIndex()
+	if idx < 0 || idx >= len(rows) {
+		idx = 0
+	}
+	m.dailySelectedDate = startOfStatsDay(rows[idx].Date)
+}
+
+func (m *Model) ensureDailySelectionVisible() {
+	total := len(m.statsContentLines())
+	if total <= 0 {
+		m.dailyListOffset = 0
+		m.statsOffset = 0
+		return
+	}
+	idx := m.dailySelectionIndex()
+	if idx < 0 {
+		m.dailyListOffset = 0
+		m.statsOffset = 0
+		return
+	}
+	lineIndex := m.monthDailyRowLineOffset() + idx
+	visibleRows := m.availableStatsRows()
+	if visibleRows <= 0 || visibleRows >= total {
+		m.dailyListOffset = 0
+		m.statsOffset = 0
+		return
+	}
+	if m.dailyListOffset > total-visibleRows {
+		m.dailyListOffset = max(0, total-visibleRows)
+	}
+	if lineIndex < m.dailyListOffset {
+		m.dailyListOffset = lineIndex
+	}
+	if lineIndex >= m.dailyListOffset+visibleRows {
+		m.dailyListOffset = lineIndex - visibleRows + 1
+	}
+	if m.dailyListOffset < 0 {
+		m.dailyListOffset = 0
+	}
+	if maxOffset := max(0, total-visibleRows); m.dailyListOffset > maxOffset {
+		m.dailyListOffset = maxOffset
+	}
+	m.statsOffset = m.dailyListOffset
+}
+
+func (m Model) monthDailyRowLineOffset() int {
+	if m.isNarrowLayout() {
+		return 4
+	}
+	return 4
+}
+
+func (m *Model) moveDailySelection(delta int) {
+	rows := m.monthDailyRows()
+	if len(rows) == 0 {
+		return
+	}
+	idx := m.dailySelectionIndex()
+	if idx < 0 {
+		idx = 0
+	}
+	idx = clampCursor(idx+delta, len(rows))
+	m.dailySelectedDate = startOfStatsDay(rows[idx].Date)
+	m.ensureDailySelectionVisible()
+}
+
+func (m *Model) jumpDailySelection(target scrollTarget) {
+	rows := m.monthDailyRows()
+	if len(rows) == 0 {
+		return
+	}
+	idx := 0
+	if target == scrollTargetBottom {
+		idx = len(rows) - 1
+	}
+	m.dailySelectedDate = startOfStatsDay(rows[idx].Date)
+	m.ensureDailySelectionVisible()
+}
+
+func (m *Model) pageDailySelection(delta int) {
+	m.moveDailySelection(delta * pageStep(m.availableStatsRows()))
+}
+
+func (m *Model) halfPageDailySelection(delta int) {
+	m.moveDailySelection(delta * halfPageStep(m.availableStatsRows()))
+}
+
+func (m *Model) enterDailyDetail() {
+	m.syncDailySelectionToMonth()
+	m.dailyDetailMode = true
+	m.dailyDetailOffset = 0
+	m.statsOffset = 0
+}
+
+func (m *Model) exitDailyDetail() {
+	m.dailyDetailMode = false
+	m.statsOffset = m.dailyListOffset
+	m.ensureDailySelectionVisible()
+}
+
+func (m *Model) navigateDailyMonth(delta int) {
+	month := m.currentDailyMonth()
+	if month.IsZero() {
+		month = statsMonthStart(time.Now())
+	}
+	currentMonth := statsMonthStart(time.Now())
+	selected := m.currentDailyDate()
+	preferredDay := selected.Day()
+	newMonth := month.AddDate(0, delta, 0)
+	if newMonth.After(currentMonth) {
+		newMonth = currentMonth
+	}
+	lastDay := newMonth.AddDate(0, 1, -1).Day()
+	if preferredDay > lastDay {
+		preferredDay = lastDay
+	}
+	m.dailyMonthAnchor = newMonth
+	m.dailySelectedDate = time.Date(newMonth.Year(), newMonth.Month(), preferredDay, 0, 0, 0, 0, newMonth.Location())
+	m.dailyListOffset = 0
+	m.statsOffset = 0
+}
+
 func (m Model) loadCurrentScopeCmd() tea.Cmd {
 	now := time.Now()
 	if m.statsMode && m.statsTab > 0 {
+		if m.statsTab == 1 && !m.dailyDetailMode {
+			return m.loadMonthDailyReportCmd(m.currentDailyMonth(), now)
+		}
+		if m.statsTab == 2 && !m.monthlyDetailMode {
+			return m.loadYearMonthlyReportCmd(m.currentYearMonthlyEnd(), now)
+		}
 		label, start, end := m.currentWindowSpec(now)
+		if m.statsTab == 2 && m.monthlyDetailMode {
+			return tea.Batch(
+				m.loadMonthDailyReportCmd(m.currentMonthlySelection(), now),
+				m.loadWindowReportCmd(label, start, end, now),
+			)
+		}
 		return m.loadWindowReportCmd(label, start, end, now)
 	}
 	return m.loadOverviewCmd(now)
@@ -687,11 +1185,50 @@ func (m Model) loadOverviewCmd(now time.Time) tea.Cmd {
 
 func (m Model) currentWindowSpec(now time.Time) (string, time.Time, time.Time) {
 	if m.statsTab == 1 {
-		start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		date := m.currentDailyDate()
+		if date.IsZero() {
+			date = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		}
+		start := startOfStatsDay(date)
 		return "Daily", start, start.AddDate(0, 0, 1)
 	}
-	start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	start := m.currentMonthlySelection()
+	if start.IsZero() {
+		start = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	}
 	return "Monthly", start, start.AddDate(0, 1, 0)
+}
+
+func (m Model) loadYearMonthlyReportCmd(endMonth, now time.Time) tea.Cmd {
+	endMonth = statsMonthStart(endMonth)
+	if m.projectScope {
+		if m.currentYearMonthlyFresh(now) || m.projectYearMonthlyLoading || m.loadProjectYearMonthly == nil {
+			return nil
+		}
+		m.setYearMonthlyLoading(true, true)
+		return loadYearMonthlyCmd(true, endMonth, m.loadProjectYearMonthly)
+	}
+	if m.currentYearMonthlyFresh(now) || m.globalYearMonthlyLoading || m.loadGlobalYearMonthly == nil {
+		return nil
+	}
+	m.setYearMonthlyLoading(false, true)
+	return loadYearMonthlyCmd(false, endMonth, m.loadGlobalYearMonthly)
+}
+
+func (m Model) loadMonthDailyReportCmd(monthStart, now time.Time) tea.Cmd {
+	monthStart = statsMonthStart(monthStart)
+	if m.projectScope {
+		if m.currentMonthDailyFresh(monthStart, now) || m.projectMonthDailyLoading || m.loadProjectMonthDaily == nil {
+			return nil
+		}
+		m.setMonthDailyLoading(true, true)
+		return loadMonthDailyCmd(true, monthStart, m.loadProjectMonthDaily)
+	}
+	if m.currentMonthDailyFresh(monthStart, now) || m.globalMonthDailyLoading || m.loadGlobalMonthDaily == nil {
+		return nil
+	}
+	m.setMonthDailyLoading(false, true)
+	return loadMonthDailyCmd(false, monthStart, m.loadGlobalMonthDaily)
 }
 
 func (m Model) loadWindowReportCmd(label string, start, end, now time.Time) tea.Cmd {
@@ -700,7 +1237,7 @@ func (m Model) loadWindowReportCmd(label string, start, end, now time.Time) tea.
 			return nil
 		}
 		m.setWindowLoading(true, label, true)
-		return loadWindowCmd(true, label, func() (stats.WindowReport, error) {
+		return loadWindowCmdWithRange(true, label, start, end, func() (stats.WindowReport, error) {
 			return m.loadProjectWindow(label, start, end)
 		})
 	}
@@ -708,7 +1245,7 @@ func (m Model) loadWindowReportCmd(label string, start, end, now time.Time) tea.
 		return nil
 	}
 	m.setWindowLoading(false, label, true)
-	return loadWindowCmd(false, label, func() (stats.WindowReport, error) {
+	return loadWindowCmdWithRange(false, label, start, end, func() (stats.WindowReport, error) {
 		return m.loadGlobalWindow(label, start, end)
 	})
 }
@@ -716,13 +1253,13 @@ func (m Model) loadWindowReportCmd(label string, start, end, now time.Time) tea.
 func (m Model) windowFresh(project bool, label string, now time.Time) bool {
 	switch {
 	case project && label == "Daily":
-		return m.projectDailyLoaded && now.Sub(m.projectDailyUpdatedAt) < statsViewTTL
+		return m.projectDailyLoaded && startOfStatsDay(m.projectDailyDate).Equal(m.currentDailyDate()) && now.Sub(m.projectDailyUpdatedAt) < statsViewTTL
 	case project && label == "Monthly":
-		return m.projectMonthlyLoaded && now.Sub(m.projectMonthlyUpdatedAt) < statsViewTTL
+		return m.projectMonthlyLoaded && statsMonthStart(m.projectMonthly.Start).Equal(m.currentMonthlySelection()) && now.Sub(m.projectMonthlyUpdatedAt) < statsViewTTL
 	case !project && label == "Daily":
-		return m.globalDailyLoaded && now.Sub(m.globalDailyUpdatedAt) < statsViewTTL
+		return m.globalDailyLoaded && startOfStatsDay(m.globalDailyDate).Equal(m.currentDailyDate()) && now.Sub(m.globalDailyUpdatedAt) < statsViewTTL
 	default:
-		return m.globalMonthlyLoaded && now.Sub(m.globalMonthlyUpdatedAt) < statsViewTTL
+		return m.globalMonthlyLoaded && statsMonthStart(m.globalMonthly.Start).Equal(m.currentMonthlySelection()) && now.Sub(m.globalMonthlyUpdatedAt) < statsViewTTL
 	}
 }
 
@@ -757,12 +1294,14 @@ func (m *Model) setWindowReport(project bool, label string, report stats.WindowR
 	case project && label == "Daily":
 		m.projectDaily = report
 		m.projectDailyLoaded = true
+		m.projectDailyDate = startOfStatsDay(report.Start)
 	case project && label == "Monthly":
 		m.projectMonthly = report
 		m.projectMonthlyLoaded = true
 	case !project && label == "Daily":
 		m.globalDaily = report
 		m.globalDailyLoaded = true
+		m.globalDailyDate = startOfStatsDay(report.Start)
 	default:
 		m.globalMonthly = report
 		m.globalMonthlyLoaded = true
@@ -809,8 +1348,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case windowReportLoadedMsg:
 		m.setWindowLoading(msg.project, msg.label, false)
 		if msg.err == nil {
+			if msg.label == "Daily" {
+				if m.dailyDetailMode == false {
+					return m, nil
+				}
+				if msg.project != m.projectScope || !startOfStatsDay(msg.start).Equal(m.currentDailyDate()) {
+					return m, nil
+				}
+			}
 			m.setWindowReport(msg.project, msg.label, msg.report)
 			m.setWindowUpdatedAt(msg.project, msg.label, time.Now())
+		}
+		return m, nil
+	case monthDailyReportLoadedMsg:
+		m.setMonthDailyLoading(msg.project, false)
+		if msg.err == nil {
+			expectedMonth := m.currentDailyMonth()
+			if m.statsTab == 2 && m.monthlyDetailMode {
+				expectedMonth = m.currentMonthlySelection()
+			}
+			if msg.project != m.projectScope || !statsMonthStart(msg.monthStart).Equal(statsMonthStart(expectedMonth)) {
+				return m, nil
+			}
+			m.setMonthDailyReport(msg.project, msg.monthStart, msg.report)
+			if m.statsTab == 1 && !m.dailyDetailMode {
+				m.syncDailySelectionToMonth()
+				m.ensureDailySelectionVisible()
+			}
+		}
+		return m, nil
+	case yearMonthlyReportLoadedMsg:
+		m.setYearMonthlyLoading(msg.project, false)
+		if msg.err == nil {
+			if msg.project != m.projectScope {
+				return m, nil
+			}
+			m.setYearMonthlyReport(msg.project, msg.report)
+			m.syncMonthlySelectionToYear()
+			m.ensureMonthlySelectionVisible()
 		}
 		return m, nil
 	case tea.KeyPressMsg:
@@ -818,20 +1393,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "tab":
 			if !m.editMode && !m.sessionMode {
 				m.statsMode = !m.statsMode
-				m.statsOffset = 0
 				if m.statsMode {
+					m.resetDailyState(time.Now())
+					m.resetMonthlyState(time.Now())
 					return m, m.loadCurrentScopeCmd()
 				}
+				m.statsOffset = 0
 			}
 		case "g":
 			if !m.editMode && !m.sessionMode {
 				m.projectScope = !m.projectScope
-				m.statsOffset = 0
+				if m.statsTab == 1 && !m.dailyDetailMode {
+					m.statsOffset = m.dailyListOffset
+				} else if m.statsTab == 1 {
+					m.statsOffset = m.dailyDetailOffset
+				} else if m.statsTab == 2 && !m.monthlyDetailMode {
+					m.statsOffset = m.monthlyListOffset
+				} else if m.statsTab == 2 {
+					m.statsOffset = m.monthlyDetailOffset
+				} else {
+					m.statsOffset = 0
+				}
 				return m, m.loadCurrentScopeCmd()
 			}
 		case "up", "k":
 			if m.statsMode {
+				if m.statsTab == 1 && !m.dailyDetailMode {
+					m.moveDailySelection(-1)
+					return m, nil
+				}
+				if m.statsTab == 2 && !m.monthlyDetailMode {
+					m.moveMonthlySelection(-1)
+					return m, nil
+				}
 				m.scrollStats(-1, len(m.statsContentLines()))
+				if m.statsTab == 1 && m.dailyDetailMode {
+					m.dailyDetailOffset = m.statsOffset
+				} else if m.statsTab == 2 && m.monthlyDetailMode {
+					m.monthlyDetailOffset = m.statsOffset
+				}
 				return m, nil
 			}
 			if m.sessionMode {
@@ -845,7 +1445,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "down", "j":
 			if m.statsMode {
+				if m.statsTab == 1 && !m.dailyDetailMode {
+					m.moveDailySelection(1)
+					return m, nil
+				}
+				if m.statsTab == 2 && !m.monthlyDetailMode {
+					m.moveMonthlySelection(1)
+					return m, nil
+				}
 				m.scrollStats(1, len(m.statsContentLines()))
+				if m.statsTab == 1 && m.dailyDetailMode {
+					m.dailyDetailOffset = m.statsOffset
+				} else if m.statsTab == 2 && m.monthlyDetailMode {
+					m.monthlyDetailOffset = m.statsOffset
+				}
 				return m, nil
 			}
 			if m.sessionMode {
@@ -859,7 +1472,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "pgup":
 			if m.statsMode {
+				if m.statsTab == 1 && !m.dailyDetailMode {
+					m.pageDailySelection(-1)
+					return m, nil
+				}
+				if m.statsTab == 2 && !m.monthlyDetailMode {
+					m.pageMonthlySelection(-1)
+					return m, nil
+				}
 				m.pageStats(-1, len(m.statsContentLines()))
+				if m.statsTab == 1 && m.dailyDetailMode {
+					m.dailyDetailOffset = m.statsOffset
+				} else if m.statsTab == 2 && m.monthlyDetailMode {
+					m.monthlyDetailOffset = m.statsOffset
+				}
 				return m, nil
 			}
 			if m.sessionMode {
@@ -868,7 +1494,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "pgdown":
 			if m.statsMode {
+				if m.statsTab == 1 && !m.dailyDetailMode {
+					m.pageDailySelection(1)
+					return m, nil
+				}
+				if m.statsTab == 2 && !m.monthlyDetailMode {
+					m.pageMonthlySelection(1)
+					return m, nil
+				}
 				m.pageStats(1, len(m.statsContentLines()))
+				if m.statsTab == 1 && m.dailyDetailMode {
+					m.dailyDetailOffset = m.statsOffset
+				} else if m.statsTab == 2 && m.monthlyDetailMode {
+					m.monthlyDetailOffset = m.statsOffset
+				}
 				return m, nil
 			}
 			if m.sessionMode {
@@ -877,7 +1516,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "ctrl+u":
 			if m.statsMode {
+				if m.statsTab == 1 && !m.dailyDetailMode {
+					m.halfPageDailySelection(-1)
+					return m, nil
+				}
+				if m.statsTab == 2 && !m.monthlyDetailMode {
+					m.halfPageMonthlySelection(-1)
+					return m, nil
+				}
 				m.halfPageStats(-1, len(m.statsContentLines()))
+				if m.statsTab == 1 && m.dailyDetailMode {
+					m.dailyDetailOffset = m.statsOffset
+				} else if m.statsTab == 2 && m.monthlyDetailMode {
+					m.monthlyDetailOffset = m.statsOffset
+				}
 				return m, nil
 			}
 			if m.sessionMode {
@@ -886,7 +1538,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "ctrl+d":
 			if m.statsMode {
+				if m.statsTab == 1 && !m.dailyDetailMode {
+					m.halfPageDailySelection(1)
+					return m, nil
+				}
+				if m.statsTab == 2 && !m.monthlyDetailMode {
+					m.halfPageMonthlySelection(1)
+					return m, nil
+				}
 				m.halfPageStats(1, len(m.statsContentLines()))
+				if m.statsTab == 1 && m.dailyDetailMode {
+					m.dailyDetailOffset = m.statsOffset
+				} else if m.statsTab == 2 && m.monthlyDetailMode {
+					m.monthlyDetailOffset = m.statsOffset
+				}
 				return m, nil
 			}
 			if m.sessionMode {
@@ -895,7 +1560,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "home":
 			if m.statsMode {
+				if m.statsTab == 1 && !m.dailyDetailMode {
+					m.jumpDailySelection(scrollTargetTop)
+					return m, nil
+				}
+				if m.statsTab == 2 && !m.monthlyDetailMode {
+					m.jumpMonthlySelection(scrollTargetTop)
+					return m, nil
+				}
 				m.jumpStatsTo(scrollTargetTop, len(m.statsContentLines()))
+				if m.statsTab == 1 && m.dailyDetailMode {
+					m.dailyDetailOffset = m.statsOffset
+				} else if m.statsTab == 2 && m.monthlyDetailMode {
+					m.monthlyDetailOffset = m.statsOffset
+				}
 				return m, nil
 			}
 			if m.sessionMode {
@@ -904,7 +1582,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "end":
 			if m.statsMode {
+				if m.statsTab == 1 && !m.dailyDetailMode {
+					m.jumpDailySelection(scrollTargetBottom)
+					return m, nil
+				}
+				if m.statsTab == 2 && !m.monthlyDetailMode {
+					m.jumpMonthlySelection(scrollTargetBottom)
+					return m, nil
+				}
 				m.jumpStatsTo(scrollTargetBottom, len(m.statsContentLines()))
+				if m.statsTab == 1 && m.dailyDetailMode {
+					m.dailyDetailOffset = m.statsOffset
+				} else if m.statsTab == 2 && m.monthlyDetailMode {
+					m.monthlyDetailOffset = m.statsOffset
+				}
 				return m, nil
 			}
 			if m.sessionMode {
@@ -924,6 +1615,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "enter":
 			if m.statsMode {
+				if m.statsTab == 1 && !m.dailyDetailMode {
+					m.enterDailyDetail()
+					return m, m.loadCurrentScopeCmd()
+				}
+				if m.statsTab == 2 && !m.monthlyDetailMode {
+					m.enterMonthlyDetail()
+					return m, m.loadCurrentScopeCmd()
+				}
 				return m, nil
 			}
 			if m.sessionMode {
@@ -938,16 +1637,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.confirmed = true
 			return m, tea.Quit
+		case "[":
+			if m.statsMode && m.statsTab == 1 && !m.dailyDetailMode {
+				m.navigateDailyMonth(-1)
+				return m, m.loadCurrentScopeCmd()
+			}
+		case "]":
+			if m.statsMode && m.statsTab == 1 && !m.dailyDetailMode {
+				m.navigateDailyMonth(1)
+				return m, m.loadCurrentScopeCmd()
+			}
 		case "left", "h":
 			if m.statsMode && m.statsTab > 0 {
 				m.statsTab--
-				m.statsOffset = 0
+				if m.statsTab == 1 && !m.dailyDetailMode {
+					m.statsOffset = m.dailyListOffset
+				} else if m.statsTab == 1 {
+					m.statsOffset = m.dailyDetailOffset
+				} else if m.statsTab == 2 && !m.monthlyDetailMode {
+					m.statsOffset = m.monthlyListOffset
+				} else if m.statsTab == 2 {
+					m.statsOffset = m.monthlyDetailOffset
+				} else {
+					m.statsOffset = 0
+				}
 				return m, m.loadCurrentScopeCmd()
 			}
 		case "right", "l":
 			if m.statsMode && m.statsTab < len(statsTabTitles())-1 {
 				m.statsTab++
-				m.statsOffset = 0
+				if m.statsTab == 1 && !m.dailyDetailMode {
+					m.statsOffset = m.dailyListOffset
+				} else if m.statsTab == 1 {
+					m.statsOffset = m.dailyDetailOffset
+				} else if m.statsTab == 2 && !m.monthlyDetailMode {
+					m.statsOffset = m.monthlyListOffset
+				} else if m.statsTab == 2 {
+					m.statsOffset = m.monthlyDetailOffset
+				} else {
+					m.statsOffset = 0
+				}
 				return m, m.loadCurrentScopeCmd()
 			}
 		case "s":
@@ -971,6 +1700,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "ctrl+c", "q", "esc":
 			if m.statsMode && msg.String() == "esc" {
+				if m.statsTab == 1 && m.dailyDetailMode {
+					m.exitDailyDetail()
+					return m, nil
+				}
+				if m.statsTab == 2 && m.monthlyDetailMode {
+					m.exitMonthlyDetail()
+					return m, nil
+				}
 				m.statsMode = false
 				return m, nil
 			}
