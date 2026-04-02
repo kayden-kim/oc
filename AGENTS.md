@@ -40,7 +40,7 @@
 | Change stats rendering | `internal/tui/stats_view*.go` | overview/window/calendar/shared rendering helpers |
 | Change launch progress UI | `internal/tui/launch_model.go` | async message channel and spinner |
 | Change session discovery | `internal/session/session.go` | cwd-filtered list + latest-session selection |
-| Change usage aggregation | `internal/stats/stats.go`, `internal/stats/window_reports.go` | daily/monthly/window summaries and SQLite queries |
+| Change usage aggregation | `internal/stats/stats.go`, `internal/stats/overview_reports.go`, `internal/stats/summary_math.go`, `internal/stats/window_reports.go` | stats entrypoints, overview assembly, pure summary helpers, and window SQLite queries |
 | Change pricing-backed cost estimation | `internal/stats/litellm_pricing.go` | embedded pricing cache + network refresh |
 | Change whitelist behavior | `internal/plugin/plugin.go` | `nil` whitelist means show all |
 | Change port behavior | `internal/port/port.go` | `min-max`, 15 random attempts |
