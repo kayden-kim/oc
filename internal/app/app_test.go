@@ -24,122 +24,6 @@ import (
 	"github.com/kayden-kim/oc/internal/tui"
 )
 
-type fakeRunner struct {
-	checkErr error
-	runErr   error
-	ran      bool
-	runCalls int
-	args     []string
-}
-
-type fakeEditor struct {
-	openErr      error
-	opened       bool
-	path         string
-	configEditor string
-}
-
-func (f *fakeRunner) CheckAvailable() error {
-	return f.checkErr
-}
-
-func (f *fakeRunner) Run(args []string, onStart func(context.Context)) error {
-	f.ran = true
-	f.runCalls++
-	f.args = append([]string(nil), args...)
-	if f.runErr == nil && onStart != nil {
-		go onStart(context.Background())
-	}
-	return f.runErr
-}
-
-type tuiResponse struct {
-	selections map[string]bool
-	cancelled  bool
-	editTarget string
-	portArgs   []string
-	session    tui.SessionItem
-	err        error
-}
-
-type tuiFunc func([]tui.PluginItem, []tui.EditChoice, string, bool) (map[string]bool, bool, string, []string, error)
-
-func wrapTUI(fn tuiFunc) func([]tui.PluginItem, []tui.EditChoice, []tui.SessionItem, tui.SessionItem, stats.Report, stats.Report, config.StatsConfig, string, bool) (map[string]bool, bool, string, []string, tui.SessionItem, error) {
-	return func(items []tui.PluginItem, editChoices []tui.EditChoice, _ []tui.SessionItem, session tui.SessionItem, _ stats.Report, _ stats.Report, _ config.StatsConfig, portsRange string, allowMultiplePlugins bool) (map[string]bool, bool, string, []string, tui.SessionItem, error) {
-		selections, cancelled, editTarget, portArgs, err := fn(items, editChoices, portsRange, allowMultiplePlugins)
-		return selections, cancelled, editTarget, portArgs, session, err
-	}
-}
-
-func scriptedTUI(t *testing.T, responses ...tuiResponse) func([]tui.PluginItem, []tui.EditChoice, []tui.SessionItem, tui.SessionItem, stats.Report, stats.Report, config.StatsConfig, string, bool) (map[string]bool, bool, string, []string, tui.SessionItem, error) {
-	t.Helper()
-	call := 0
-	return func(items []tui.PluginItem, editChoices []tui.EditChoice, _ []tui.SessionItem, session tui.SessionItem, _ stats.Report, _ stats.Report, _ config.StatsConfig, _ string, _ bool) (map[string]bool, bool, string, []string, tui.SessionItem, error) {
-		if call >= len(responses) {
-			t.Fatalf("unexpected TUI call %d", call+1)
-		}
-		resp := responses[call]
-		call++
-		if resp.session.ID != "" {
-			session = resp.session
-		}
-		return resp.selections, resp.cancelled, resp.editTarget, resp.portArgs, session, resp.err
-	}
-}
-
-func setupConfigFiles(t *testing.T, tmp string, pluginContent string, ocContent string) string {
-	t.Helper()
-	configDir := filepath.Join(tmp, ".config", "opencode")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	configPath := filepath.Join(configDir, "opencode.json")
-	if err := os.WriteFile(configPath, []byte(pluginContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if ocContent != "" {
-		ocConfigPath := filepath.Join(tmp, ".oc")
-		if err := os.WriteFile(ocConfigPath, []byte(ocContent), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return configPath
-}
-
-func captureOutput(t *testing.T, stderrOnly bool, fn func()) string {
-	t.Helper()
-	readPipe, writePipe, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("failed to create pipe: %v", err)
-	}
-	originalStdout := os.Stdout
-	originalStderr := os.Stderr
-	if !stderrOnly {
-		os.Stdout = writePipe
-	}
-	os.Stderr = writePipe
-	defer func() {
-		os.Stdout = originalStdout
-		os.Stderr = originalStderr
-	}()
-
-	fn()
-	writePipe.Close()
-	output, readErr := io.ReadAll(readPipe)
-	readPipe.Close()
-	if readErr != nil {
-		t.Fatalf("failed to read captured output: %v", readErr)
-	}
-	return string(output)
-}
-
-func (f *fakeEditor) Open(path string, configEditor string) error {
-	f.opened = true
-	f.path = path
-	f.configEditor = configEditor
-	return f.openErr
-}
-
 func TestRunWithDeps_FullHappyPath(t *testing.T) {
 	tmp := t.TempDir()
 	initial := "{\n  \"plugin\": [\n    \"plugin-a\",\n    // \"plugin-b\",\n    \"plugin-c\"\n  ]\n}\n"
@@ -987,6 +871,63 @@ func TestRunWithDeps_PassesResolvedEditChoicesToTUI(t *testing.T) {
 	}
 	if r.ran {
 		t.Fatal("runner should not execute when edit is requested")
+	}
+}
+
+func TestRunWithDeps_PassesProjectEditChoicePathToTUI(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, ".config", "opencode")
+	projectDir := filepath.Join(tmp, ".opencode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	configPath := filepath.Join(configDir, "opencode.json")
+	if err := os.WriteFile(configPath, []byte("{\n  \"plugin\": [\n    \"plugin-a\"\n  ]\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	projectConfigPath := filepath.Join(projectDir, "opencode.json")
+	if err := os.WriteFile(projectConfigPath, []byte("{\n  \"plugin\": [\n    \"plugin-b\"\n  ]\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &fakeRunner{}
+	var gotChoices []tui.EditChoice
+
+	err := RunWithDeps(nil, RuntimeDeps{
+		NewRunner:         func() RunnerAPI { return r },
+		UserHomeDir:       func() (string, error) { return tmp, nil },
+		ReadFile:          os.ReadFile,
+		LoadOcConfig:      config.LoadOcConfig,
+		ParsePlugins:      config.ParsePlugins,
+		FilterByWhitelist: DefaultDeps("test").FilterByWhitelist,
+		Getwd:             func() (string, error) { return tmp, nil },
+		RunTUI: wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string, _ bool) (map[string]bool, bool, string, []string, error) {
+			gotChoices = append([]tui.EditChoice(nil), editChoices...)
+			return nil, true, "", nil, nil
+		}),
+		ApplySelections: config.ApplySelections,
+		WriteConfigFile: config.WriteConfigFile,
+		OpenEditor:      func(string, string) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("RunWithDeps returned error: %v", err)
+	}
+
+	if len(gotChoices) != 4 {
+		t.Fatalf("expected 4 edit choices, got %d", len(gotChoices))
+	}
+	if gotChoices[3].Label != "4) project opencode.json file" {
+		t.Fatalf("expected fourth choice label '4) project opencode.json file', got %q", gotChoices[3].Label)
+	}
+	if gotChoices[3].Path != projectConfigPath {
+		t.Fatalf("expected fourth choice path %q, got %q", projectConfigPath, gotChoices[3].Path)
+	}
+	if r.ran {
+		t.Fatal("runner should not execute when TUI cancels")
 	}
 }
 
@@ -2419,7 +2360,7 @@ func TestBuildEditChoices_ProjectConfigAbsent(t *testing.T) {
 
 // --- Dual-config integration tests ---
 
-func TestIntegration_FullDualConfigCycle(t *testing.T) {
+func TestRunWithDeps_PersistsMergedPluginSelectionToUserAndProjectConfig(t *testing.T) {
 	home := t.TempDir()
 	cwd := filepath.Join(home, "workspace")
 	if err := os.MkdirAll(cwd, 0o755); err != nil {

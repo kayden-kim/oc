@@ -50,7 +50,7 @@ func RunWithDeps(args []string, deps RuntimeDeps) error {
 
 		selections, cancelled, editTarget, portArgs, nextSession, err := deps.RunTUI(
 			state.mergedItems,
-			buildEditChoices(paths, paths.projectConfigPath, state.projectSource != nil),
+			buildEditChoices(paths, state.projectConfigPath, state.projectSource != nil),
 			state.sessions,
 			state.selectedSession,
 			stats.Report{},

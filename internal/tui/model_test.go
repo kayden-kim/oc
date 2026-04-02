@@ -1005,6 +1005,14 @@ func TestView_RendersPluginSelectionPrompt(t *testing.T) {
 	}
 }
 
+func TestViewLauncher_MatchesDefaultView(t *testing.T) {
+	m := newTestModel([]PluginItem{{Name: "plugin-a"}}, nil, true)
+
+	if got, want := m.viewLauncher().Content, m.View().Content; got != want {
+		t.Fatalf("expected launcher helper to match default view\nhelper: %q\nview:   %q", got, want)
+	}
+}
+
 func TestView_EditModeRendersInstructionPrompt(t *testing.T) {
 	model := newTestModel([]PluginItem{{Name: "plugin-a"}}, []EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}}, true)
 	updatedModel, _ := model.Update(mockKeyMsg("c"))
@@ -1016,6 +1024,16 @@ func TestView_EditModeRendersInstructionPrompt(t *testing.T) {
 	}
 }
 
+func TestViewEditPicker_MatchesEditModeView(t *testing.T) {
+	model := newTestModel([]PluginItem{{Name: "plugin-a"}}, []EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}}, true)
+	updatedModel, _ := model.Update(mockKeyMsg("c"))
+	m := updatedModel.(Model)
+
+	if got, want := m.viewEditPicker().Content, m.View().Content; got != want {
+		t.Fatalf("expected edit helper to match edit mode view\nhelper: %q\nview:   %q", got, want)
+	}
+}
+
 func TestView_SessionModeRendersInstructionPrompt(t *testing.T) {
 	model := newTestModelWithSession([]PluginItem{{Name: "plugin-a"}}, nil, []SessionItem{{ID: "ses_latest", Title: "Latest session"}}, SessionItem{}, true)
 	updatedModel, _ := model.Update(mockKeyMsg("s"))
@@ -1024,6 +1042,16 @@ func TestView_SessionModeRendersInstructionPrompt(t *testing.T) {
 	expected := renderSectionHeader("🕘 Choose session", maxLayoutWidth)
 	if !strings.Contains(view, expected) {
 		t.Fatalf("expected session prompt line %q in %q", expected, view)
+	}
+}
+
+func TestViewSessionPicker_MatchesSessionModeView(t *testing.T) {
+	model := newTestModelWithSession([]PluginItem{{Name: "plugin-a"}}, nil, []SessionItem{{ID: "ses_latest", Title: "Latest session"}}, SessionItem{}, true)
+	updatedModel, _ := model.Update(mockKeyMsg("s"))
+	m := updatedModel.(Model)
+
+	if got, want := m.viewSessionPicker().Content, m.View().Content; got != want {
+		t.Fatalf("expected session helper to match session mode view\nhelper: %q\nview:   %q", got, want)
 	}
 }
 
