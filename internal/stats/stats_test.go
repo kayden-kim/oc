@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,6 +25,15 @@ const defaultStatsTestSchema = `
 	CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
 	CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
 `
+
+var statsTestAnchor = time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
+
+type statsTestWorkSession struct {
+	db      *sql.DB
+	tempDir string
+	dir     string
+	now     time.Time
+}
 
 func openStatsTestDB(t *testing.T) (*sql.DB, string) {
 	t.Helper()
@@ -44,6 +54,62 @@ func openStatsTestDBWithSchema(t *testing.T, schema string) (*sql.DB, string) {
 	}
 	t.Setenv("OPENCODE_DB", dbPath)
 	return db, tmp
+}
+
+func setupStatsTestWorkSession(t *testing.T) statsTestWorkSession {
+	t.Helper()
+	db, tempDir := openStatsTestDB(t)
+	dir := filepath.Join(tempDir, "work")
+	insertSession(t, db, "ses_work", dir)
+	return statsTestWorkSession{db: db, tempDir: tempDir, dir: dir, now: statsTestAnchor}
+}
+
+func TestNewEmptyDay_InitializesReportMaps(t *testing.T) {
+	date := time.Date(2026, time.March, 27, 0, 0, 0, 0, time.Local)
+
+	day := newEmptyDay(date)
+
+	if !day.Date.Equal(date) {
+		t.Fatalf("expected date %v, got %v", date, day.Date)
+	}
+	if day.ToolCounts == nil || day.SkillCounts == nil || day.AgentCounts == nil || day.AgentModelCounts == nil {
+		t.Fatal("expected usage count maps to be initialized")
+	}
+	if day.ModelCounts == nil || day.ModelCosts == nil {
+		t.Fatal("expected model maps to be initialized")
+	}
+	if day.UniqueTools == nil || day.UniqueSkills == nil || day.UniqueAgents == nil || day.UniqueAgentModels == nil {
+		t.Fatal("expected unique tracking maps to be initialized")
+	}
+	if day.AssistantMessages != 0 || day.ToolCalls != 0 || day.Tokens != 0 || day.Cost != 0 {
+		t.Fatalf("expected zero-value metrics, got %+v", day)
+	}
+}
+
+func TestNewEmptyReport_InitializesHighlightDays(t *testing.T) {
+	report := newEmptyReport(nil)
+
+	if report.Days != nil {
+		t.Fatalf("expected nil days, got %v", report.Days)
+	}
+	highlights := []Day{
+		report.HighestBurnDay,
+		report.HighestCodeDay,
+		report.HighestChangedFilesDay,
+		report.LongestSessionDay,
+		report.MostEfficientDay,
+	}
+	for i, day := range highlights {
+		if day.ToolCounts == nil || day.SkillCounts == nil || day.AgentCounts == nil || day.AgentModelCounts == nil {
+			t.Fatalf("expected initialized count maps for highlight %d", i)
+		}
+		if day.ModelCounts == nil || day.ModelCosts == nil {
+			t.Fatalf("expected initialized model maps for highlight %d", i)
+		}
+		if day.UniqueTools == nil || day.UniqueSkills == nil || day.UniqueAgents == nil || day.UniqueAgentModels == nil {
+			t.Fatalf("expected initialized unique maps for highlight %d", i)
+		}
+	}
 }
 
 func TestLoadForDirAt_AggregatesGlobalStatsAndFiltersSynthetic(t *testing.T) {
@@ -119,20 +185,15 @@ func TestLoadForDirAt_AggregatesGlobalStatsAndFiltersSynthetic(t *testing.T) {
 }
 
 func TestLoadForDirAt_Uses30DaySumsForWeeklyTotals(t *testing.T) {
-	db, _ := openStatsTestDB(t)
-	tmp := t.TempDir()
+	testSession := setupStatsTestWorkSession(t)
 
-	dir := filepath.Join(tmp, "work")
-	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
-	insertSession(t, db, "ses_work", dir)
+	insertMessage(t, testSession.db, "msg_old", "ses_work", testSession.now.AddDate(0, 0, -10), `{"role":"assistant","cost":2.00}`)
+	insertPart(t, testSession.db, "step_old", "msg_old", "ses_work", testSession.now.AddDate(0, 0, -10), `{"type":"step-finish","tokens":{"input":20,"output":30,"reasoning":10}}`)
 
-	insertMessage(t, db, "msg_old", "ses_work", now.AddDate(0, 0, -10), `{"role":"assistant","cost":2.00}`)
-	insertPart(t, db, "step_old", "msg_old", "ses_work", now.AddDate(0, 0, -10), `{"type":"step-finish","tokens":{"input":20,"output":30,"reasoning":10}}`)
+	insertMessage(t, testSession.db, "msg_today", "ses_work", testSession.now, `{"role":"assistant","cost":3.00}`)
+	insertPart(t, testSession.db, "step_today", "msg_today", "ses_work", testSession.now, `{"type":"step-finish","tokens":{"input":40,"output":30,"reasoning":20}}`)
 
-	insertMessage(t, db, "msg_today", "ses_work", now, `{"role":"assistant","cost":3.00}`)
-	insertPart(t, db, "step_today", "msg_today", "ses_work", now, `{"type":"step-finish","tokens":{"input":40,"output":30,"reasoning":20}}`)
-
-	report, err := loadForDirAt(dir, now)
+	report, err := loadForDirAt(testSession.dir, testSession.now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
 	}
@@ -146,34 +207,29 @@ func TestLoadForDirAt_Uses30DaySumsForWeeklyTotals(t *testing.T) {
 }
 
 func TestLoadForDirAt_CountsDelegatedAgentMessages(t *testing.T) {
-	db, _ := openStatsTestDB(t)
-	tmp := t.TempDir()
+	testSession := setupStatsTestWorkSession(t)
 
-	dir := filepath.Join(tmp, "work")
-	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
-	insertSession(t, db, "ses_work", dir)
+	insertMessage(t, testSession.db, "msg_main", "ses_work", testSession.now, `{"role":"assistant","cost":1.00}`)
+	insertPart(t, testSession.db, "main_step", "msg_main", "ses_work", testSession.now, `{"type":"step-finish","tokens":{"input":10,"output":10,"reasoning":0}}`)
 
-	insertMessage(t, db, "msg_main", "ses_work", now, `{"role":"assistant","cost":1.00}`)
-	insertPart(t, db, "main_step", "msg_main", "ses_work", now, `{"type":"step-finish","tokens":{"input":10,"output":10,"reasoning":0}}`)
+	insertMessage(t, testSession.db, "msg_explore", "ses_work", testSession.now, `{"role":"assistant","agent":"explore","cost":0.20}`)
+	insertPart(t, testSession.db, "explore_start", "msg_explore", "ses_work", testSession.now, `{"type":"step-start"}`)
+	insertPart(t, testSession.db, "explore_tool", "msg_explore", "ses_work", testSession.now, `{"type":"tool","tool":"read"}`)
+	insertPart(t, testSession.db, "explore_finish", "msg_explore", "ses_work", testSession.now, `{"type":"step-finish","tokens":{"input":5,"output":5,"reasoning":0}}`)
 
-	insertMessage(t, db, "msg_explore", "ses_work", now, `{"role":"assistant","agent":"explore","cost":0.20}`)
-	insertPart(t, db, "explore_start", "msg_explore", "ses_work", now, `{"type":"step-start"}`)
-	insertPart(t, db, "explore_tool", "msg_explore", "ses_work", now, `{"type":"tool","tool":"read"}`)
-	insertPart(t, db, "explore_finish", "msg_explore", "ses_work", now, `{"type":"step-finish","tokens":{"input":5,"output":5,"reasoning":0}}`)
+	insertMessage(t, testSession.db, "msg_librarian", "ses_work", testSession.now, `{"role":"assistant","agent":"librarian","cost":0.30}`)
+	insertPart(t, testSession.db, "librarian_finish", "msg_librarian", "ses_work", testSession.now, `{"type":"step-finish","tokens":{"input":6,"output":4,"reasoning":0}}`)
 
-	insertMessage(t, db, "msg_librarian", "ses_work", now, `{"role":"assistant","agent":"librarian","cost":0.30}`)
-	insertPart(t, db, "librarian_finish", "msg_librarian", "ses_work", now, `{"type":"step-finish","tokens":{"input":6,"output":4,"reasoning":0}}`)
+	insertMessage(t, testSession.db, "msg_user_agent", "ses_work", testSession.now, `{"role":"user","agent":"explore"}`)
+	insertPart(t, testSession.db, "user_agent_finish", "msg_user_agent", "ses_work", testSession.now, `{"type":"step-finish","tokens":{"input":1,"output":1,"reasoning":0}}`)
 
-	insertMessage(t, db, "msg_user_agent", "ses_work", now, `{"role":"user","agent":"explore"}`)
-	insertPart(t, db, "user_agent_finish", "msg_user_agent", "ses_work", now, `{"type":"step-finish","tokens":{"input":1,"output":1,"reasoning":0}}`)
+	insertMessage(t, testSession.db, "msg_compaction", "ses_work", testSession.now, `{"role":"assistant","agent":"compaction","cost":5.00}`)
+	insertPart(t, testSession.db, "compaction_part", "msg_compaction", "ses_work", testSession.now, `{"type":"step-finish","tokens":{"input":50,"output":50,"reasoning":50}}`)
 
-	insertMessage(t, db, "msg_compaction", "ses_work", now, `{"role":"assistant","agent":"compaction","cost":5.00}`)
-	insertPart(t, db, "compaction_part", "msg_compaction", "ses_work", now, `{"type":"step-finish","tokens":{"input":50,"output":50,"reasoning":50}}`)
+	insertMessage(t, testSession.db, "msg_part_subtask", "ses_work", testSession.now, `{"role":"assistant","cost":0.10}`)
+	insertPart(t, testSession.db, "part_subtask", "msg_part_subtask", "ses_work", testSession.now, `{"type":"subtask","agent":"legacy-subtask"}`)
 
-	insertMessage(t, db, "msg_part_subtask", "ses_work", now, `{"role":"assistant","cost":0.10}`)
-	insertPart(t, db, "part_subtask", "msg_part_subtask", "ses_work", now, `{"type":"subtask","agent":"legacy-subtask"}`)
-
-	report, err := loadForDirAt(dir, now)
+	report, err := loadForDirAt(testSession.dir, testSession.now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
 	}
@@ -193,23 +249,19 @@ func TestLoadForDirAt_CountsDelegatedAgentMessages(t *testing.T) {
 }
 
 func TestLoadForDirAt_BuildsTopToolUsage(t *testing.T) {
-	db, tmp := openStatsTestDB(t)
-
-	dir := filepath.Join(tmp, "work")
-	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
-	insertSession(t, db, "ses_work", dir)
-	insertMessage(t, db, "msg_tools", "ses_work", now, `{"role":"assistant","cost":1.00}`)
+	testSession := setupStatsTestWorkSession(t)
+	insertMessage(t, testSession.db, "msg_tools", "ses_work", testSession.now, `{"role":"assistant","cost":1.00}`)
 
 	toolCounts := map[string]int{"bash": 5, "read": 4, "edit": 3, "grep": 3, "write": 2, "glob": 1}
 	partID := 0
 	for tool, count := range toolCounts {
 		for range count {
-			insertPart(t, db, fmt.Sprintf("tool_%d", partID), "msg_tools", "ses_work", now, fmt.Sprintf(`{"type":"tool","tool":%q}`, tool))
+			insertPart(t, testSession.db, fmt.Sprintf("tool_%d", partID), "msg_tools", "ses_work", testSession.now, fmt.Sprintf(`{"type":"tool","tool":%q}`, tool))
 			partID++
 		}
 	}
 
-	report, err := loadForDirAt(dir, now)
+	report, err := loadForDirAt(testSession.dir, testSession.now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
 	}
@@ -225,12 +277,8 @@ func TestLoadForDirAt_BuildsTopToolUsage(t *testing.T) {
 }
 
 func TestLoadForDirAt_BuildsTopSkillUsage(t *testing.T) {
-	db, tmp := openStatsTestDB(t)
-
-	dir := filepath.Join(tmp, "work")
-	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
-	insertSession(t, db, "ses_work", dir)
-	insertMessage(t, db, "msg_skills", "ses_work", now, `{"role":"assistant","cost":1.00}`)
+	testSession := setupStatsTestWorkSession(t)
+	insertMessage(t, testSession.db, "msg_skills", "ses_work", testSession.now, `{"role":"assistant","cost":1.00}`)
 
 	rows := []string{
 		`{"type":"tool","tool":"skill","state":{"input":{"name":"writing-plans"}}}`,
@@ -242,10 +290,10 @@ func TestLoadForDirAt_BuildsTopSkillUsage(t *testing.T) {
 		`{"type":"tool","tool":"bash"}`,
 	}
 	for i, data := range rows {
-		insertPart(t, db, fmt.Sprintf("skill_%d", i), "msg_skills", "ses_work", now, data)
+		insertPart(t, testSession.db, fmt.Sprintf("skill_%d", i), "msg_skills", "ses_work", testSession.now, data)
 	}
 
-	report, err := loadForDirAt(dir, now)
+	report, err := loadForDirAt(testSession.dir, testSession.now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
 	}
@@ -264,21 +312,17 @@ func TestLoadForDirAt_BuildsTopSkillUsage(t *testing.T) {
 }
 
 func TestLoadForDirAt_BuildsTopAgentUsage(t *testing.T) {
-	db, tmp := openStatsTestDB(t)
-
-	dir := filepath.Join(tmp, "work")
-	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
-	insertSession(t, db, "ses_work", dir)
+	testSession := setupStatsTestWorkSession(t)
 	agents := []string{"explore", "explore", "explore", "oracle", "oracle", "planner", "planner", "review", "debug", "compaction"}
 	for i, agent := range agents {
-		insertMessage(t, db, fmt.Sprintf("msg_agent_%d", i), "ses_work", now, fmt.Sprintf(`{"role":"assistant","agent":%q}`, agent))
+		insertMessage(t, testSession.db, fmt.Sprintf("msg_agent_%d", i), "ses_work", testSession.now, fmt.Sprintf(`{"role":"assistant","agent":%q}`, agent))
 	}
-	insertMessage(t, db, "msg_user_agent", "ses_work", now, `{"role":"user","agent":"explore"}`)
-	insertMessage(t, db, "msg_plain", "ses_work", now, `{"role":"assistant"}`)
-	insertMessage(t, db, "msg_legacy_subtask", "ses_work", now, `{"role":"assistant"}`)
-	insertPart(t, db, "part_legacy_subtask", "msg_legacy_subtask", "ses_work", now, `{"type":"subtask","agent":"legacy-subtask"}`)
+	insertMessage(t, testSession.db, "msg_user_agent", "ses_work", testSession.now, `{"role":"user","agent":"explore"}`)
+	insertMessage(t, testSession.db, "msg_plain", "ses_work", testSession.now, `{"role":"assistant"}`)
+	insertMessage(t, testSession.db, "msg_legacy_subtask", "ses_work", testSession.now, `{"role":"assistant"}`)
+	insertPart(t, testSession.db, "part_legacy_subtask", "msg_legacy_subtask", "ses_work", testSession.now, `{"type":"subtask","agent":"legacy-subtask"}`)
 
-	report, err := loadForDirAt(dir, now)
+	report, err := loadForDirAt(testSession.dir, testSession.now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
 	}
@@ -291,11 +335,7 @@ func TestLoadForDirAt_BuildsTopAgentUsage(t *testing.T) {
 }
 
 func TestLoadForDirAt_BuildsTopAgentModelUsage(t *testing.T) {
-	db, tmp := openStatsTestDB(t)
-
-	dir := filepath.Join(tmp, "work")
-	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
-	insertSession(t, db, "ses_work", dir)
+	testSession := setupStatsTestWorkSession(t)
 
 	entries := []struct {
 		messageID string
@@ -310,14 +350,14 @@ func TestLoadForDirAt_BuildsTopAgentModelUsage(t *testing.T) {
 		{"msg_oracle_2", "oracle", "google", "gemini-2.5-pro"},
 	}
 	for i, entry := range entries {
-		insertMessage(t, db, entry.messageID, "ses_work", now, fmt.Sprintf(`{"role":"assistant","agent":%q,"providerID":%q,"modelID":%q}`, entry.agent, entry.provider, entry.model))
-		insertPart(t, db, fmt.Sprintf("part_%d", i), entry.messageID, "ses_work", now, `{"type":"step-finish","tokens":{"input":5,"output":5}}`)
+		insertMessage(t, testSession.db, entry.messageID, "ses_work", testSession.now, fmt.Sprintf(`{"role":"assistant","agent":%q,"providerID":%q,"modelID":%q}`, entry.agent, entry.provider, entry.model))
+		insertPart(t, testSession.db, fmt.Sprintf("part_%d", i), entry.messageID, "ses_work", testSession.now, `{"type":"step-finish","tokens":{"input":5,"output":5}}`)
 	}
 
-	insertMessage(t, db, "msg_no_agent", "ses_work", now, `{"role":"assistant","providerID":"openai","modelID":"gpt-5.4"}`)
-	insertPart(t, db, "part_no_agent", "msg_no_agent", "ses_work", now, `{"type":"step-finish","tokens":{"input":5,"output":5}}`)
+	insertMessage(t, testSession.db, "msg_no_agent", "ses_work", testSession.now, `{"role":"assistant","providerID":"openai","modelID":"gpt-5.4"}`)
+	insertPart(t, testSession.db, "part_no_agent", "msg_no_agent", "ses_work", testSession.now, `{"type":"step-finish","tokens":{"input":5,"output":5}}`)
 
-	report, err := loadForDirAt(dir, now)
+	report, err := loadForDirAt(testSession.dir, testSession.now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
 	}
@@ -336,11 +376,7 @@ func TestLoadForDirAt_BuildsTopAgentModelUsage(t *testing.T) {
 }
 
 func TestLoadForDirAt_BuildsTopModelUsage(t *testing.T) {
-	db, tmp := openStatsTestDB(t)
-
-	dir := filepath.Join(tmp, "work")
-	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
-	insertSession(t, db, "ses_work", dir)
+	testSession := setupStatsTestWorkSession(t)
 
 	usage := []struct {
 		provider string
@@ -368,8 +404,8 @@ func TestLoadForDirAt_BuildsTopModelUsage(t *testing.T) {
 	for i, item := range usage {
 		msgID := fmt.Sprintf("msg_model_%d", i)
 		partID := fmt.Sprintf("part_model_%d", i)
-		insertMessage(t, db, msgID, "ses_work", now, fmt.Sprintf(`{"role":"assistant","providerID":%q,"modelID":%q,"cost":1.00}`, item.provider, item.model))
-		insertPart(t, db, partID, msgID, "ses_work", now, fmt.Sprintf(`{"type":"step-finish","tokens":{"input":%d,"output":%d,"reasoning":%d,"cache":{"read":%d,"write":%d}}}`,
+		insertMessage(t, testSession.db, msgID, "ses_work", testSession.now, fmt.Sprintf(`{"role":"assistant","providerID":%q,"modelID":%q,"cost":1.00}`, item.provider, item.model))
+		insertPart(t, testSession.db, partID, msgID, "ses_work", testSession.now, fmt.Sprintf(`{"type":"step-finish","tokens":{"input":%d,"output":%d,"reasoning":%d,"cache":{"read":%d,"write":%d}}}`,
 			item.input,
 			item.output,
 			item.reason,
@@ -378,12 +414,12 @@ func TestLoadForDirAt_BuildsTopModelUsage(t *testing.T) {
 		))
 	}
 
-	insertMessage(t, db, "msg_missing_provider", "ses_work", now, `{"role":"assistant","modelID":"skip-me"}`)
-	insertPart(t, db, "part_missing_provider", "msg_missing_provider", "ses_work", now, `{"type":"step-finish","tokens":{"input":999,"output":999,"reasoning":999}}`)
-	insertMessage(t, db, "msg_missing_model", "ses_work", now, `{"role":"assistant","providerID":"openai"}`)
-	insertPart(t, db, "part_missing_model", "msg_missing_model", "ses_work", now, `{"type":"step-finish","tokens":{"input":999,"output":999,"reasoning":999}}`)
+	insertMessage(t, testSession.db, "msg_missing_provider", "ses_work", testSession.now, `{"role":"assistant","modelID":"skip-me"}`)
+	insertPart(t, testSession.db, "part_missing_provider", "msg_missing_provider", "ses_work", testSession.now, `{"type":"step-finish","tokens":{"input":999,"output":999,"reasoning":999}}`)
+	insertMessage(t, testSession.db, "msg_missing_model", "ses_work", testSession.now, `{"role":"assistant","providerID":"openai"}`)
+	insertPart(t, testSession.db, "part_missing_model", "msg_missing_model", "ses_work", testSession.now, `{"type":"step-finish","tokens":{"input":999,"output":999,"reasoning":999}}`)
 
-	report, err := loadForDirAt(dir, now)
+	report, err := loadForDirAt(testSession.dir, testSession.now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
 	}
@@ -428,16 +464,12 @@ func TestLoadForDirAt_BuildsTopModelUsage(t *testing.T) {
 }
 
 func TestLoadForDirAt_DoesNotDoubleCountModelCostWhenMessageCostExistsAcrossMultipleSteps(t *testing.T) {
-	db, tmp := openStatsTestDB(t)
+	testSession := setupStatsTestWorkSession(t)
+	insertMessage(t, testSession.db, "msg_work", "ses_work", testSession.now, `{"role":"assistant","providerID":"openai","modelID":"gpt-5.4","cost":1.84}`)
+	insertPart(t, testSession.db, "part_work_1", "msg_work", "ses_work", testSession.now, `{"type":"step-finish","tokens":{"input":50,"output":25,"reasoning":5}}`)
+	insertPart(t, testSession.db, "part_work_2", "msg_work", "ses_work", testSession.now, `{"type":"step-finish","tokens":{"input":20,"output":10,"reasoning":0}}`)
 
-	dir := filepath.Join(tmp, "work")
-	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
-	insertSession(t, db, "ses_work", dir)
-	insertMessage(t, db, "msg_work", "ses_work", now, `{"role":"assistant","providerID":"openai","modelID":"gpt-5.4","cost":1.84}`)
-	insertPart(t, db, "part_work_1", "msg_work", "ses_work", now, `{"type":"step-finish","tokens":{"input":50,"output":25,"reasoning":5}}`)
-	insertPart(t, db, "part_work_2", "msg_work", "ses_work", now, `{"type":"step-finish","tokens":{"input":20,"output":10,"reasoning":0}}`)
-
-	report, err := loadForDirAt(dir, now)
+	report, err := loadForDirAt(testSession.dir, testSession.now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
 	}
@@ -457,16 +489,12 @@ func TestLoadForDirAt_DoesNotDoubleCountModelCostWhenMessageCostExistsAcrossMult
 }
 
 func TestLoadForDirAt_CountsMessageCostInDailyTotalsOnceAcrossMultipleSteps(t *testing.T) {
-	db, tmp := openStatsTestDB(t)
+	testSession := setupStatsTestWorkSession(t)
+	insertMessage(t, testSession.db, "msg_work", "ses_work", testSession.now, `{"role":"assistant","providerID":"openai","modelID":"gpt-5.4","cost":1.84}`)
+	insertPart(t, testSession.db, "part_work_1", "msg_work", "ses_work", testSession.now, `{"type":"step-finish","tokens":{"input":50,"output":25,"reasoning":5}}`)
+	insertPart(t, testSession.db, "part_work_2", "msg_work", "ses_work", testSession.now, `{"type":"step-finish","tokens":{"input":20,"output":10,"reasoning":0}}`)
 
-	dir := filepath.Join(tmp, "work")
-	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
-	insertSession(t, db, "ses_work", dir)
-	insertMessage(t, db, "msg_work", "ses_work", now, `{"role":"assistant","providerID":"openai","modelID":"gpt-5.4","cost":1.84}`)
-	insertPart(t, db, "part_work_1", "msg_work", "ses_work", now, `{"type":"step-finish","tokens":{"input":50,"output":25,"reasoning":5}}`)
-	insertPart(t, db, "part_work_2", "msg_work", "ses_work", now, `{"type":"step-finish","tokens":{"input":20,"output":10,"reasoning":0}}`)
-
-	report, err := loadForDirAt(dir, now)
+	report, err := loadForDirAt(testSession.dir, testSession.now)
 	if err != nil {
 		t.Fatalf("loadForDirAt returned error: %v", err)
 	}
@@ -681,6 +709,88 @@ func TestLoadForDirAt_ComputesSessionizedHoursFromEventGaps(t *testing.T) {
 	}
 }
 
+func TestLoadGlobalWithOptions_UsesConfiguredSessionGapForSummaryRollups(t *testing.T) {
+	db, tmp := openStatsTestDB(t)
+
+	projectA := filepath.Join(tmp, "work-a")
+	projectB := filepath.Join(tmp, "work-b")
+	todayAnchor := startOfDay(time.Now().In(time.Local)).Add(12 * time.Hour)
+	insertSession(t, db, "ses_a", projectA)
+	insertSession(t, db, "ses_b", projectB)
+
+	insertMessage(t, db, "msg_a1", "ses_a", todayAnchor.Add(-10*time.Minute), `{"role":"assistant","cost":1.25}`)
+	insertPart(t, db, "part_a1", "msg_a1", "ses_a", todayAnchor.Add(-10*time.Minute), `{"type":"step-finish","tokens":{"input":100,"output":50,"reasoning":0}}`)
+	insertMessage(t, db, "msg_a2", "ses_a", todayAnchor.Add(-7*time.Minute), `{"role":"assistant","cost":0.75}`)
+	insertPart(t, db, "part_a2", "msg_a2", "ses_a", todayAnchor.Add(-7*time.Minute), `{"type":"step-finish","tokens":{"input":40,"output":10,"reasoning":0}}`)
+	insertMessage(t, db, "msg_a3", "ses_a", todayAnchor, `{"role":"assistant","cost":0.50}`)
+	insertPart(t, db, "part_a3", "msg_a3", "ses_a", todayAnchor, `{"type":"step-finish","tokens":{"input":20,"output":10,"reasoning":0}}`)
+
+	insertMessage(t, db, "msg_b1", "ses_b", todayAnchor.Add(-24*time.Hour), `{"role":"assistant","cost":0.25}`)
+	insertPart(t, db, "part_b1", "msg_b1", "ses_b", todayAnchor.Add(-24*time.Hour), `{"type":"step-finish","tokens":{"input":30,"output":20,"reasoning":0}}`)
+
+	report, err := LoadGlobalWithOptions(Options{SessionGapMinutes: 5})
+	if err != nil {
+		t.Fatalf("LoadGlobalWithOptions returned error: %v", err)
+	}
+
+	if report.TodaySessionMinutes != 3 {
+		t.Fatalf("expected 3 today session minutes with 5-minute gap, got %d", report.TodaySessionMinutes)
+	}
+	if report.ThirtyDaySessionMinutes != 3 {
+		t.Fatalf("expected 3 30-day session minutes with 5-minute gap, got %d", report.ThirtyDaySessionMinutes)
+	}
+	if report.TodayTokens != 230 {
+		t.Fatalf("expected global today tokens 230, got %d", report.TodayTokens)
+	}
+	if math.Abs(report.TodayCost-2.50) > 1e-9 {
+		t.Fatalf("expected global today cost 2.50, got %.4f", report.TodayCost)
+	}
+	if report.ThirtyDayTokens != 280 {
+		t.Fatalf("expected global 30-day tokens 280, got %d", report.ThirtyDayTokens)
+	}
+	if math.Abs(report.ThirtyDayCost-2.75) > 1e-9 {
+		t.Fatalf("expected global 30-day cost 2.75, got %.4f", report.ThirtyDayCost)
+	}
+}
+
+func TestLoadForDirWithOptions_FiltersScopedDirectoryAndUsesConfiguredSessionGap(t *testing.T) {
+	db, tmp := openStatsTestDB(t)
+
+	targetDir := filepath.Join(tmp, "work")
+	otherDir := filepath.Join(tmp, "other")
+	todayAnchor := startOfDay(time.Now().In(time.Local)).Add(12 * time.Hour)
+	insertSession(t, db, "ses_target", targetDir)
+	insertSession(t, db, "ses_other", otherDir)
+
+	insertMessage(t, db, "msg_target_1", "ses_target", todayAnchor.Add(-10*time.Minute), `{"role":"assistant","cost":1.50}`)
+	insertPart(t, db, "part_target_1", "msg_target_1", "ses_target", todayAnchor.Add(-10*time.Minute), `{"type":"step-finish","tokens":{"input":90,"output":10,"reasoning":0}}`)
+	insertMessage(t, db, "msg_target_2", "ses_target", todayAnchor.Add(-7*time.Minute), `{"role":"assistant","cost":0.50}`)
+	insertPart(t, db, "part_target_2", "msg_target_2", "ses_target", todayAnchor.Add(-7*time.Minute), `{"type":"step-finish","tokens":{"input":20,"output":10,"reasoning":0}}`)
+	insertMessage(t, db, "msg_target_3", "ses_target", todayAnchor, `{"role":"assistant","cost":0.25}`)
+	insertPart(t, db, "part_target_3", "msg_target_3", "ses_target", todayAnchor, `{"type":"step-finish","tokens":{"input":5,"output":5,"reasoning":0}}`)
+
+	insertMessage(t, db, "msg_other", "ses_other", todayAnchor.Add(-2*time.Minute), `{"role":"assistant","cost":9.00}`)
+	insertPart(t, db, "part_other", "msg_other", "ses_other", todayAnchor.Add(-2*time.Minute), `{"type":"step-finish","tokens":{"input":400,"output":100,"reasoning":0}}`)
+
+	report, err := LoadForDirWithOptions(targetDir, Options{SessionGapMinutes: 5})
+	if err != nil {
+		t.Fatalf("LoadForDirWithOptions returned error: %v", err)
+	}
+
+	if report.TodaySessionMinutes != 3 {
+		t.Fatalf("expected 3 today session minutes for scoped project, got %d", report.TodaySessionMinutes)
+	}
+	if report.ThirtyDaySessionMinutes != 3 {
+		t.Fatalf("expected 3 30-day session minutes for scoped project, got %d", report.ThirtyDaySessionMinutes)
+	}
+	if report.TodayTokens != 140 {
+		t.Fatalf("expected scoped today tokens 140, got %d", report.TodayTokens)
+	}
+	if math.Abs(report.TodayCost-2.25) > 1e-9 {
+		t.Fatalf("expected scoped today cost 2.25, got %.4f", report.TodayCost)
+	}
+}
+
 func TestLoadForDirAt_AggregatesCodeLinesFromSessionSummaries(t *testing.T) {
 	db, ntmp := openStatsTestDBWithSchema(t, `
 		CREATE TABLE session (
@@ -796,6 +906,131 @@ func TestLoadForDirAt_AggregatesChangedFilesFromPartSignals(t *testing.T) {
 	}
 	if report.HighestChangedFilesDay.ChangedFiles != 5 {
 		t.Fatalf("expected highest changed-files day 5, got %d", report.HighestChangedFilesDay.ChangedFiles)
+	}
+}
+
+func TestExtractChangedFilesFromPart_PatchAndToolInputs(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{
+			name: "patch payload uses files list",
+			raw:  `{"type":"patch","files":["internal/app/app.go","README.md","README.md"]}`,
+			want: []string{"README.md", "internal/app/app.go"},
+		},
+		{
+			name: "tool payload uses completed apply_patch input",
+			raw:  `{"type":"tool","tool":"apply_patch","state":{"status":"completed","input":{"patchText":"*** Begin Patch\n*** Add File: docs/new.md\n*** Update File: internal/stats/stats.go\n*** End Patch"}}}`,
+			want: []string{"docs/new.md", "internal/stats/stats.go"},
+		},
+		{
+			name: "completed write payload uses file path",
+			raw:  `{"type":"tool","tool":"write","state":{"status":"completed","input":{"filePath":"docs/notes.md"}}}`,
+			want: []string{"docs/notes.md"},
+		},
+		{
+			name: "incomplete tool payload is ignored",
+			raw:  `{"type":"tool","tool":"edit","state":{"status":"pending","input":{"filePath":"docs/notes.md"}}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractChangedFilesFromPart(tt.raw)
+			sort.Strings(got)
+			want := append([]string(nil), tt.want...)
+			sort.Strings(want)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("expected files %v, got %v", want, got)
+			}
+		})
+	}
+}
+
+func TestExtractFilesFromPatchText_ReturnsTouchedFiles(t *testing.T) {
+	got := extractFilesFromPatchText("*** Begin Patch\n*** Add File: internal/new/file.go\n*** Update File: README.md\n*** Delete File: docs/old.md\n*** End Patch")
+	sort.Strings(got)
+	want := []string{"README.md", "docs/old.md", "internal/new/file.go"}
+	sort.Strings(want)
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected files %v, got %v", want, got)
+	}
+}
+
+func TestNormalizeChangedFilePath_NormalizesPlatformSpecificInput(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		wantPOSIX   string
+		wantWindows string
+	}{
+		{
+			name:        "trims and cleans relative path",
+			input:       "  ./docs/../internal/stats.go  ",
+			wantPOSIX:   "internal/stats.go",
+			wantWindows: "internal/stats.go",
+		},
+		{
+			name:        "empty path stays empty",
+			input:       "   ",
+			wantPOSIX:   "",
+			wantWindows: "",
+		},
+		{
+			name:        "windows normalizes slashes and casing",
+			input:       `  .\Internal\Stats.GO  `,
+			wantPOSIX:   `.\Internal\Stats.GO`,
+			wantWindows: "internal/stats.go",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			want := tt.wantPOSIX
+			if runtime.GOOS == "windows" {
+				want = tt.wantWindows
+			}
+
+			if got := normalizeChangedFilePath(tt.input); got != want {
+				t.Fatalf("expected normalized path %q, got %q", want, got)
+			}
+		})
+	}
+}
+
+func TestMergeSessionCodeStats_UsesSummaryColumnsWhenPresent(t *testing.T) {
+	db, tmp := openStatsTestDBWithSchema(t, `
+		CREATE TABLE session (
+			id TEXT PRIMARY KEY,
+			title TEXT NOT NULL DEFAULT '',
+			directory TEXT NOT NULL,
+			parent_id TEXT,
+			time_updated INTEGER NOT NULL,
+			summary_additions INTEGER,
+			summary_deletions INTEGER
+		);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+
+	day := newEmptyDay(time.Date(2026, time.March, 27, 0, 0, 0, 0, time.Local))
+	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
+	dayMap := map[string]*Day{dayKey(now): &day}
+	dir := filepath.Join(tmp, "work")
+
+	if _, err := db.Exec(`INSERT INTO session (id, title, directory, parent_id, time_updated, summary_additions, summary_deletions) VALUES (?, ?, ?, NULL, ?, ?, ?)`, "ses_today", "today", dir, now.UnixMilli(), 120, 30); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := mergeSessionCodeStats(db, dir, now.Add(-time.Hour).UnixMilli(), time.Local, dayMap); err != nil {
+		t.Fatalf("mergeSessionCodeStats returned error: %v", err)
+	}
+
+	if dayMap[dayKey(now)].CodeLines != 150 {
+		t.Fatalf("expected today code lines 150, got %d", dayMap[dayKey(now)].CodeLines)
 	}
 }
 
@@ -1648,6 +1883,18 @@ func TestBuildMonthDailyReport_CurrentMonthSkipsFutureRowsWithinSameMonth(t *tes
 	}
 }
 
+func TestMonthReportVisibleEnd_ClampsCurrentMonthToTomorrow(t *testing.T) {
+	now := time.Date(2026, time.April, 3, 15, 30, 0, 0, time.Local)
+	monthStart := time.Date(2026, time.April, 1, 0, 0, 0, 0, time.Local)
+
+	visibleEnd := monthReportVisibleEnd(monthStart, now)
+
+	want := time.Date(2026, time.April, 4, 0, 0, 0, 0, time.Local)
+	if !visibleEnd.Equal(want) {
+		t.Fatalf("expected visible end %v, got %v", want, visibleEnd)
+	}
+}
+
 func TestBuildMonthDailyReport_KeepsDayAndMonthCostConsistent(t *testing.T) {
 	db, tmp := openStatsTestDB(t)
 
@@ -1822,5 +2069,72 @@ func TestBuildWindowReport_PreservesProviderModelKeyInModels(t *testing.T) {
 	}
 	if report.Models[0].Model != "openai\x00gpt-5.4" {
 		t.Fatalf("expected provider/model key preserved, got %q", report.Models[0].Model)
+	}
+}
+
+func TestLoadWindowReport_FiltersScopedDirectoryFromConfiguredDB(t *testing.T) {
+	db, tmp := openStatsTestDB(t)
+
+	targetDir := filepath.Join(tmp, "work")
+	otherDir := filepath.Join(tmp, "other")
+	start := time.Now().In(time.Local).Add(-2 * time.Hour).Truncate(time.Hour)
+	insertSession(t, db, "ses_target", targetDir)
+	insertSession(t, db, "ses_other", otherDir)
+
+	insertMessage(t, db, "msg_target", "ses_target", start.Add(30*time.Minute), `{"role":"assistant","cost":1.25}`)
+	insertPart(t, db, "part_target", "msg_target", "ses_target", start.Add(30*time.Minute), `{"type":"step-finish","tokens":{"input":100,"output":50,"reasoning":0}}`)
+	insertMessage(t, db, "msg_other", "ses_other", start.Add(45*time.Minute), `{"role":"assistant","cost":5.00}`)
+	insertPart(t, db, "part_other", "msg_other", "ses_other", start.Add(45*time.Minute), `{"type":"step-finish","tokens":{"input":500,"output":100,"reasoning":0}}`)
+
+	report, err := LoadWindowReport(targetDir, "Daily", start, start.Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("LoadWindowReport returned error: %v", err)
+	}
+
+	if report.Tokens != 150 {
+		t.Fatalf("expected scoped window tokens 150, got %d", report.Tokens)
+	}
+	if math.Abs(report.Cost-1.25) > 1e-9 {
+		t.Fatalf("expected scoped window cost 1.25, got %.4f", report.Cost)
+	}
+	if report.Sessions != 1 {
+		t.Fatalf("expected one scoped session, got %d", report.Sessions)
+	}
+}
+
+func TestEstimatePartCost_UsesPricingFallback(t *testing.T) {
+	previousResolver := defaultPricingResolver
+	t.Cleanup(func() {
+		defaultPricingResolver = previousResolver
+	})
+
+	resolver := &liteLLMPricingResolver{
+		entries: map[string]liteLLMPricingEntry{
+			"gpt-4o-mini": {
+				InputCostPerToken:           ptrFloat(0.000001),
+				OutputCostPerToken:          ptrFloat(0.000002),
+				CacheCreationInputTokenCost: ptrFloat(0.000003),
+				CacheReadInputTokenCost:     ptrFloat(0.0000005),
+			},
+		},
+	}
+	resolver.initOnce.Do(func() {})
+	defaultPricingResolver = resolver
+
+	cost, err := estimatePartCost(partEvent{
+		ProviderID:       "openai",
+		ModelID:          "gpt-4o-mini",
+		InputTokens:      1000,
+		OutputTokens:     500,
+		CacheReadTokens:  200,
+		CacheWriteTokens: 100,
+	})
+	if err != nil {
+		t.Fatalf("estimatePartCost returned error: %v", err)
+	}
+
+	const expected = 0.0024
+	if math.Abs(cost-expected) > 1e-9 {
+		t.Fatalf("expected estimated fallback cost %.4f, got %.4f", expected, cost)
 	}
 }

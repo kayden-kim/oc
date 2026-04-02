@@ -281,3 +281,57 @@ func formatRatioToTop(today float64, maxValue float64) string {
 func formatPercent(value float64) string {
 	return fmt.Sprintf("%.0f%%", value*100)
 }
+
+func currentTrailingActiveSlots(slots [48]int64) int {
+	streak := 0
+	for i := len(slots) - 1; i >= 0; i-- {
+		if slots[i] <= 0 {
+			if streak > 0 {
+				return streak
+			}
+			continue
+		}
+		streak++
+	}
+	return streak
+}
+
+func renderDetailModeHelpLine(targetWidth int) string {
+	return renderHelpBlock([]string{
+		helpBgTextStyle.Render("💡 ") + helpEntry("↑/↓", "scroll") + helpBgTextStyle.Render(" • ") + helpEntry("pgup/pgdn", "page") + helpBgTextStyle.Render(" • ") + helpEntry("ctrl+u/d", "half") + helpBgTextStyle.Render(" • ") + helpEntry("home/end", "top/bottom"),
+		helpBgTextStyle.Render("   ") + helpEntry("esc", "month list") + helpBgTextStyle.Render(" • ") + helpEntry("g", "scope") + helpBgTextStyle.Render(" • ") + helpEntry("←/→", "tabs") + helpBgTextStyle.Render(" • ") + helpEntry("tab", "launcher"),
+	}, targetWidth)
+}
+
+func monthDailyBestStreak(days []stats.DailySummary) int {
+	best := 0
+	current := 0
+	for i := len(days) - 1; i >= 0; i-- {
+		if isMonthDailyActive(days[i]) {
+			current++
+			if current > best {
+				best = current
+			}
+			continue
+		}
+		current = 0
+	}
+	return best
+}
+
+func (m Model) renderSharedDetailActivityLines(report stats.WindowReport) []string {
+	lines := []string{}
+	if len(report.TopAgentModels) > 0 {
+		lines = append(lines, "", activitySectionHeader("Agents", len(report.TopAgentModels)))
+		lines = append(lines, m.renderAgentModelUsageLines(report.TopAgentModels, int64(report.TotalAgentModelCalls))...)
+	}
+	if len(report.TopSkills) > 0 {
+		lines = append(lines, "", activitySectionHeader("Skills", len(report.TopSkills)))
+		lines = append(lines, m.renderUsageLines("count", report.TopSkills, int64(report.TotalSkillCalls))...)
+	}
+	if len(report.TopTools) > 0 {
+		lines = append(lines, "", activitySectionHeader("Tools", len(report.TopTools)))
+		lines = append(lines, m.renderUsageLines("count", report.TopTools, int64(report.TotalToolCalls))...)
+	}
+	return lines
+}

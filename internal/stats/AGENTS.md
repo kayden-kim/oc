@@ -6,13 +6,16 @@
 ## WHERE TO LOOK
 | Task | Location | Notes |
 |------|----------|-------|
-| 30-day overview report | `internal/stats/stats.go` | report structs, aggregation entrypoints, shared stat math |
+| 30-day overview report | `internal/stats/stats.go`, `internal/stats/overview_reports.go`, `internal/stats/summary_math.go`, `internal/stats/report_types.go` | entrypoints, overview assembly, pure summary helpers, and shared report types |
 | Daily/monthly window reports | `internal/stats/window_reports.go` | SQLite window queries, model/session/project slices |
 | Pricing-backed cost estimation | `internal/stats/litellm_pricing.go` | embedded cache + background refresh of LiteLLM pricing |
 | Behavior proof | `internal/stats/stats_test.go` | aggregation/schema fixtures |
 
 ## LOCAL CONVENTIONS
-- Keep `stats.go` for shared report types, summary aggregation, and cross-window helpers.
+- Keep `stats.go` for package entrypoints plus lower-level merge/query helpers that are still shared across report builders.
+- Keep `overview_reports.go` for 30-day overview loading orchestration and project-usage aggregation.
+- Keep `summary_math.go` for pure summary/ranking/streak calculations.
+- Keep `report_types.go` for shared report/data structs when `stats.go` would otherwise become type-heavy.
 - Keep `window_reports.go` for date-bounded SQLite queries and window-specific projections.
 - Shared opencode DB path/DSN/timestamp helpers belong in `internal/opencodedb`, not duplicated here.
 - Pricing estimation should flow through the resolver in `litellm_pricing.go`; keep the embedded JSON fallback intact.
