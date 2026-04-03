@@ -2058,6 +2058,72 @@ func TestUpdate_TabSwitchesToStatsAndEscReturns(t *testing.T) {
 	}
 }
 
+func TestUpdate_TabLoadsOverviewForCurrentProjectScope(t *testing.T) {
+	var globalOverviewLoads, projectOverviewLoads, globalWindowLoads, projectWindowLoads int
+	model := NewModel(
+		[]PluginItem{{Name: "plugin-a"}},
+		nil,
+		nil,
+		SessionItem{},
+		stats.Report{},
+		stats.Report{},
+		config.StatsConfig{DefaultScope: "project"},
+		testVersion,
+		true,
+	).WithStatsLoaders(
+		func() (stats.Report, error) {
+			globalOverviewLoads++
+			return stats.Report{Days: make([]stats.Day, 30)}, nil
+		},
+		func() (stats.Report, error) {
+			projectOverviewLoads++
+			return stats.Report{Days: make([]stats.Day, 30)}, nil
+		},
+		func(label string, start, end time.Time) (stats.WindowReport, error) {
+			globalWindowLoads++
+			return stats.WindowReport{Label: label, Start: start, End: end}, nil
+		},
+		func(label string, start, end time.Time) (stats.WindowReport, error) {
+			projectWindowLoads++
+			return stats.WindowReport{Label: label, Start: start, End: end}, nil
+		},
+	)
+
+	if cmd := model.Init(); cmd == nil {
+		t.Fatal("expected init to load launcher daily window for current project scope")
+	} else {
+		updated, _ := model.Update(cmd())
+		model = updated.(Model)
+	}
+	if projectWindowLoads != 1 {
+		t.Fatalf("expected one project launcher daily window load, got %d", projectWindowLoads)
+	}
+	if globalWindowLoads != 0 {
+		t.Fatalf("expected no global launcher daily window load, got %d", globalWindowLoads)
+	}
+
+	updated, cmd := model.Update(mockKeyMsg("tab"))
+	model = updated.(Model)
+	if !model.statsMode {
+		t.Fatal("expected stats mode after tab")
+	}
+	if cmd == nil {
+		t.Fatal("expected entering stats overview to trigger current-scope overview load")
+	}
+	updated, _ = model.Update(cmd())
+	model = updated.(Model)
+
+	if projectOverviewLoads != 1 {
+		t.Fatalf("expected one project overview load after entering stats, got %d", projectOverviewLoads)
+	}
+	if globalOverviewLoads != 0 {
+		t.Fatalf("expected no global overview load after entering stats, got %d", globalOverviewLoads)
+	}
+	if projectWindowLoads != 1 {
+		t.Fatalf("expected no extra project launcher window loads after entering stats, got %d", projectWindowLoads)
+	}
+}
+
 func TestUpdate_LeftRightMovesStatsTabs(t *testing.T) {
 	model := newTestModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: false}}, nil, true)
 	updated, _ := model.Update(mockKeyMsg("tab"))
