@@ -2060,6 +2060,11 @@ func TestUpdate_TabSwitchesToStatsAndEscReturns(t *testing.T) {
 
 func TestUpdate_TabLoadsOverviewForCurrentProjectScope(t *testing.T) {
 	var globalOverviewLoads, projectOverviewLoads, globalWindowLoads, projectWindowLoads int
+	projectOverview := stats.Report{
+		TotalToolCalls:  5,
+		UniqueToolCount: 1,
+		TopTools:        []stats.UsageCount{{Name: "read", Count: 5}},
+	}
 	model := NewModel(
 		[]PluginItem{{Name: "plugin-a"}},
 		nil,
@@ -2077,7 +2082,7 @@ func TestUpdate_TabLoadsOverviewForCurrentProjectScope(t *testing.T) {
 		},
 		func() (stats.Report, error) {
 			projectOverviewLoads++
-			return stats.Report{Days: make([]stats.Day, 30)}, nil
+			return projectOverview, nil
 		},
 		func(label string, start, end time.Time) (stats.WindowReport, error) {
 			globalWindowLoads++
@@ -2121,6 +2126,18 @@ func TestUpdate_TabLoadsOverviewForCurrentProjectScope(t *testing.T) {
 	}
 	if projectWindowLoads != 1 {
 		t.Fatalf("expected no extra project launcher window loads after entering stats, got %d", projectWindowLoads)
+	}
+	if !model.projectStatsLoaded {
+		t.Fatal("expected project overview to be marked loaded after handling the stats command")
+	}
+	if got := model.projectStats.TopTools; len(got) != 1 || got[0].Name != "read" || got[0].Count != 5 {
+		t.Fatalf("expected loaded project overview to be applied to the model, got %#v", got)
+	}
+	view := stripANSI(model.View().Content)
+	for _, snippet := range []string{"Tools (1)", "read"} {
+		if !strings.Contains(view, snippet) {
+			t.Fatalf("expected project overview snippet %q in stats view, got %q", snippet, view)
+		}
 	}
 }
 
