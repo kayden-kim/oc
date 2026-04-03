@@ -681,6 +681,88 @@ func TestLoadForDirAt_ComputesSessionizedHoursFromEventGaps(t *testing.T) {
 	}
 }
 
+func TestLoadGlobalWithOptions_UsesConfiguredSessionGapForSummaryRollups(t *testing.T) {
+	db, tmp := openStatsTestDB(t)
+
+	projectA := filepath.Join(tmp, "work-a")
+	projectB := filepath.Join(tmp, "work-b")
+	now := time.Now().In(time.Local).Truncate(time.Minute)
+	insertSession(t, db, "ses_a", projectA)
+	insertSession(t, db, "ses_b", projectB)
+
+	insertMessage(t, db, "msg_a1", "ses_a", now.Add(-10*time.Minute), `{"role":"assistant","cost":1.25}`)
+	insertPart(t, db, "part_a1", "msg_a1", "ses_a", now.Add(-10*time.Minute), `{"type":"step-finish","tokens":{"input":100,"output":50,"reasoning":0}}`)
+	insertMessage(t, db, "msg_a2", "ses_a", now.Add(-7*time.Minute), `{"role":"assistant","cost":0.75}`)
+	insertPart(t, db, "part_a2", "msg_a2", "ses_a", now.Add(-7*time.Minute), `{"type":"step-finish","tokens":{"input":40,"output":10,"reasoning":0}}`)
+	insertMessage(t, db, "msg_a3", "ses_a", now, `{"role":"assistant","cost":0.50}`)
+	insertPart(t, db, "part_a3", "msg_a3", "ses_a", now, `{"type":"step-finish","tokens":{"input":20,"output":10,"reasoning":0}}`)
+
+	insertMessage(t, db, "msg_b1", "ses_b", now.Add(-24*time.Hour), `{"role":"assistant","cost":0.25}`)
+	insertPart(t, db, "part_b1", "msg_b1", "ses_b", now.Add(-24*time.Hour), `{"type":"step-finish","tokens":{"input":30,"output":20,"reasoning":0}}`)
+
+	report, err := LoadGlobalWithOptions(Options{SessionGapMinutes: 5})
+	if err != nil {
+		t.Fatalf("LoadGlobalWithOptions returned error: %v", err)
+	}
+
+	if report.TodaySessionMinutes != 3 {
+		t.Fatalf("expected 3 today session minutes with 5-minute gap, got %d", report.TodaySessionMinutes)
+	}
+	if report.ThirtyDaySessionMinutes != 3 {
+		t.Fatalf("expected 3 30-day session minutes with 5-minute gap, got %d", report.ThirtyDaySessionMinutes)
+	}
+	if report.TodayTokens != 230 {
+		t.Fatalf("expected global today tokens 230, got %d", report.TodayTokens)
+	}
+	if math.Abs(report.TodayCost-2.50) > 1e-9 {
+		t.Fatalf("expected global today cost 2.50, got %.4f", report.TodayCost)
+	}
+	if report.ThirtyDayTokens != 280 {
+		t.Fatalf("expected global 30-day tokens 280, got %d", report.ThirtyDayTokens)
+	}
+	if math.Abs(report.ThirtyDayCost-2.75) > 1e-9 {
+		t.Fatalf("expected global 30-day cost 2.75, got %.4f", report.ThirtyDayCost)
+	}
+}
+
+func TestLoadForDirWithOptions_FiltersScopedDirectoryAndUsesConfiguredSessionGap(t *testing.T) {
+	db, tmp := openStatsTestDB(t)
+
+	targetDir := filepath.Join(tmp, "work")
+	otherDir := filepath.Join(tmp, "other")
+	now := time.Now().In(time.Local).Truncate(time.Minute)
+	insertSession(t, db, "ses_target", targetDir)
+	insertSession(t, db, "ses_other", otherDir)
+
+	insertMessage(t, db, "msg_target_1", "ses_target", now.Add(-10*time.Minute), `{"role":"assistant","cost":1.50}`)
+	insertPart(t, db, "part_target_1", "msg_target_1", "ses_target", now.Add(-10*time.Minute), `{"type":"step-finish","tokens":{"input":90,"output":10,"reasoning":0}}`)
+	insertMessage(t, db, "msg_target_2", "ses_target", now.Add(-7*time.Minute), `{"role":"assistant","cost":0.50}`)
+	insertPart(t, db, "part_target_2", "msg_target_2", "ses_target", now.Add(-7*time.Minute), `{"type":"step-finish","tokens":{"input":20,"output":10,"reasoning":0}}`)
+	insertMessage(t, db, "msg_target_3", "ses_target", now, `{"role":"assistant","cost":0.25}`)
+	insertPart(t, db, "part_target_3", "msg_target_3", "ses_target", now, `{"type":"step-finish","tokens":{"input":5,"output":5,"reasoning":0}}`)
+
+	insertMessage(t, db, "msg_other", "ses_other", now.Add(-2*time.Minute), `{"role":"assistant","cost":9.00}`)
+	insertPart(t, db, "part_other", "msg_other", "ses_other", now.Add(-2*time.Minute), `{"type":"step-finish","tokens":{"input":400,"output":100,"reasoning":0}}`)
+
+	report, err := LoadForDirWithOptions(targetDir, Options{SessionGapMinutes: 5})
+	if err != nil {
+		t.Fatalf("LoadForDirWithOptions returned error: %v", err)
+	}
+
+	if report.TodaySessionMinutes != 3 {
+		t.Fatalf("expected 3 today session minutes for scoped project, got %d", report.TodaySessionMinutes)
+	}
+	if report.ThirtyDaySessionMinutes != 3 {
+		t.Fatalf("expected 3 30-day session minutes for scoped project, got %d", report.ThirtyDaySessionMinutes)
+	}
+	if report.TodayTokens != 140 {
+		t.Fatalf("expected scoped today tokens 140, got %d", report.TodayTokens)
+	}
+	if math.Abs(report.TodayCost-2.25) > 1e-9 {
+		t.Fatalf("expected scoped today cost 2.25, got %.4f", report.TodayCost)
+	}
+}
+
 func TestLoadForDirAt_AggregatesCodeLinesFromSessionSummaries(t *testing.T) {
 	db, ntmp := openStatsTestDBWithSchema(t, `
 		CREATE TABLE session (
@@ -1822,5 +1904,72 @@ func TestBuildWindowReport_PreservesProviderModelKeyInModels(t *testing.T) {
 	}
 	if report.Models[0].Model != "openai\x00gpt-5.4" {
 		t.Fatalf("expected provider/model key preserved, got %q", report.Models[0].Model)
+	}
+}
+
+func TestLoadWindowReport_FiltersScopedDirectoryFromConfiguredDB(t *testing.T) {
+	db, tmp := openStatsTestDB(t)
+
+	targetDir := filepath.Join(tmp, "work")
+	otherDir := filepath.Join(tmp, "other")
+	start := time.Now().In(time.Local).Add(-2 * time.Hour).Truncate(time.Hour)
+	insertSession(t, db, "ses_target", targetDir)
+	insertSession(t, db, "ses_other", otherDir)
+
+	insertMessage(t, db, "msg_target", "ses_target", start.Add(30*time.Minute), `{"role":"assistant","cost":1.25}`)
+	insertPart(t, db, "part_target", "msg_target", "ses_target", start.Add(30*time.Minute), `{"type":"step-finish","tokens":{"input":100,"output":50,"reasoning":0}}`)
+	insertMessage(t, db, "msg_other", "ses_other", start.Add(45*time.Minute), `{"role":"assistant","cost":5.00}`)
+	insertPart(t, db, "part_other", "msg_other", "ses_other", start.Add(45*time.Minute), `{"type":"step-finish","tokens":{"input":500,"output":100,"reasoning":0}}`)
+
+	report, err := LoadWindowReport(targetDir, "Daily", start, start.Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("LoadWindowReport returned error: %v", err)
+	}
+
+	if report.Tokens != 150 {
+		t.Fatalf("expected scoped window tokens 150, got %d", report.Tokens)
+	}
+	if math.Abs(report.Cost-1.25) > 1e-9 {
+		t.Fatalf("expected scoped window cost 1.25, got %.4f", report.Cost)
+	}
+	if report.Sessions != 1 {
+		t.Fatalf("expected one scoped session, got %d", report.Sessions)
+	}
+}
+
+func TestEstimatePartCost_UsesPricingFallback(t *testing.T) {
+	previousResolver := defaultPricingResolver
+	t.Cleanup(func() {
+		defaultPricingResolver = previousResolver
+	})
+
+	resolver := &liteLLMPricingResolver{
+		entries: map[string]liteLLMPricingEntry{
+			"gpt-4o-mini": {
+				InputCostPerToken:           ptrFloat(0.000001),
+				OutputCostPerToken:          ptrFloat(0.000002),
+				CacheCreationInputTokenCost: ptrFloat(0.000003),
+				CacheReadInputTokenCost:     ptrFloat(0.0000005),
+			},
+		},
+	}
+	resolver.initOnce.Do(func() {})
+	defaultPricingResolver = resolver
+
+	cost, err := estimatePartCost(partEvent{
+		ProviderID:       "openai",
+		ModelID:          "gpt-4o-mini",
+		InputTokens:      1000,
+		OutputTokens:     500,
+		CacheReadTokens:  200,
+		CacheWriteTokens: 100,
+	})
+	if err != nil {
+		t.Fatalf("estimatePartCost returned error: %v", err)
+	}
+
+	const expected = 0.0024
+	if math.Abs(cost-expected) > 1e-9 {
+		t.Fatalf("expected estimated fallback cost %.4f, got %.4f", expected, cost)
 	}
 }
