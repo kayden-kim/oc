@@ -686,19 +686,19 @@ func TestLoadGlobalWithOptions_UsesConfiguredSessionGapForSummaryRollups(t *test
 
 	projectA := filepath.Join(tmp, "work-a")
 	projectB := filepath.Join(tmp, "work-b")
-	now := time.Now().In(time.Local).Truncate(time.Minute)
+	todayAnchor := startOfDay(time.Now().In(time.Local)).Add(12 * time.Hour)
 	insertSession(t, db, "ses_a", projectA)
 	insertSession(t, db, "ses_b", projectB)
 
-	insertMessage(t, db, "msg_a1", "ses_a", now.Add(-10*time.Minute), `{"role":"assistant","cost":1.25}`)
-	insertPart(t, db, "part_a1", "msg_a1", "ses_a", now.Add(-10*time.Minute), `{"type":"step-finish","tokens":{"input":100,"output":50,"reasoning":0}}`)
-	insertMessage(t, db, "msg_a2", "ses_a", now.Add(-7*time.Minute), `{"role":"assistant","cost":0.75}`)
-	insertPart(t, db, "part_a2", "msg_a2", "ses_a", now.Add(-7*time.Minute), `{"type":"step-finish","tokens":{"input":40,"output":10,"reasoning":0}}`)
-	insertMessage(t, db, "msg_a3", "ses_a", now, `{"role":"assistant","cost":0.50}`)
-	insertPart(t, db, "part_a3", "msg_a3", "ses_a", now, `{"type":"step-finish","tokens":{"input":20,"output":10,"reasoning":0}}`)
+	insertMessage(t, db, "msg_a1", "ses_a", todayAnchor.Add(-10*time.Minute), `{"role":"assistant","cost":1.25}`)
+	insertPart(t, db, "part_a1", "msg_a1", "ses_a", todayAnchor.Add(-10*time.Minute), `{"type":"step-finish","tokens":{"input":100,"output":50,"reasoning":0}}`)
+	insertMessage(t, db, "msg_a2", "ses_a", todayAnchor.Add(-7*time.Minute), `{"role":"assistant","cost":0.75}`)
+	insertPart(t, db, "part_a2", "msg_a2", "ses_a", todayAnchor.Add(-7*time.Minute), `{"type":"step-finish","tokens":{"input":40,"output":10,"reasoning":0}}`)
+	insertMessage(t, db, "msg_a3", "ses_a", todayAnchor, `{"role":"assistant","cost":0.50}`)
+	insertPart(t, db, "part_a3", "msg_a3", "ses_a", todayAnchor, `{"type":"step-finish","tokens":{"input":20,"output":10,"reasoning":0}}`)
 
-	insertMessage(t, db, "msg_b1", "ses_b", now.Add(-24*time.Hour), `{"role":"assistant","cost":0.25}`)
-	insertPart(t, db, "part_b1", "msg_b1", "ses_b", now.Add(-24*time.Hour), `{"type":"step-finish","tokens":{"input":30,"output":20,"reasoning":0}}`)
+	insertMessage(t, db, "msg_b1", "ses_b", todayAnchor.Add(-24*time.Hour), `{"role":"assistant","cost":0.25}`)
+	insertPart(t, db, "part_b1", "msg_b1", "ses_b", todayAnchor.Add(-24*time.Hour), `{"type":"step-finish","tokens":{"input":30,"output":20,"reasoning":0}}`)
 
 	report, err := LoadGlobalWithOptions(Options{SessionGapMinutes: 5})
 	if err != nil {
@@ -730,19 +730,19 @@ func TestLoadForDirWithOptions_FiltersScopedDirectoryAndUsesConfiguredSessionGap
 
 	targetDir := filepath.Join(tmp, "work")
 	otherDir := filepath.Join(tmp, "other")
-	now := time.Now().In(time.Local).Truncate(time.Minute)
+	todayAnchor := startOfDay(time.Now().In(time.Local)).Add(12 * time.Hour)
 	insertSession(t, db, "ses_target", targetDir)
 	insertSession(t, db, "ses_other", otherDir)
 
-	insertMessage(t, db, "msg_target_1", "ses_target", now.Add(-10*time.Minute), `{"role":"assistant","cost":1.50}`)
-	insertPart(t, db, "part_target_1", "msg_target_1", "ses_target", now.Add(-10*time.Minute), `{"type":"step-finish","tokens":{"input":90,"output":10,"reasoning":0}}`)
-	insertMessage(t, db, "msg_target_2", "ses_target", now.Add(-7*time.Minute), `{"role":"assistant","cost":0.50}`)
-	insertPart(t, db, "part_target_2", "msg_target_2", "ses_target", now.Add(-7*time.Minute), `{"type":"step-finish","tokens":{"input":20,"output":10,"reasoning":0}}`)
-	insertMessage(t, db, "msg_target_3", "ses_target", now, `{"role":"assistant","cost":0.25}`)
-	insertPart(t, db, "part_target_3", "msg_target_3", "ses_target", now, `{"type":"step-finish","tokens":{"input":5,"output":5,"reasoning":0}}`)
+	insertMessage(t, db, "msg_target_1", "ses_target", todayAnchor.Add(-10*time.Minute), `{"role":"assistant","cost":1.50}`)
+	insertPart(t, db, "part_target_1", "msg_target_1", "ses_target", todayAnchor.Add(-10*time.Minute), `{"type":"step-finish","tokens":{"input":90,"output":10,"reasoning":0}}`)
+	insertMessage(t, db, "msg_target_2", "ses_target", todayAnchor.Add(-7*time.Minute), `{"role":"assistant","cost":0.50}`)
+	insertPart(t, db, "part_target_2", "msg_target_2", "ses_target", todayAnchor.Add(-7*time.Minute), `{"type":"step-finish","tokens":{"input":20,"output":10,"reasoning":0}}`)
+	insertMessage(t, db, "msg_target_3", "ses_target", todayAnchor, `{"role":"assistant","cost":0.25}`)
+	insertPart(t, db, "part_target_3", "msg_target_3", "ses_target", todayAnchor, `{"type":"step-finish","tokens":{"input":5,"output":5,"reasoning":0}}`)
 
-	insertMessage(t, db, "msg_other", "ses_other", now.Add(-2*time.Minute), `{"role":"assistant","cost":9.00}`)
-	insertPart(t, db, "part_other", "msg_other", "ses_other", now.Add(-2*time.Minute), `{"type":"step-finish","tokens":{"input":400,"output":100,"reasoning":0}}`)
+	insertMessage(t, db, "msg_other", "ses_other", todayAnchor.Add(-2*time.Minute), `{"role":"assistant","cost":9.00}`)
+	insertPart(t, db, "part_other", "msg_other", "ses_other", todayAnchor.Add(-2*time.Minute), `{"type":"step-finish","tokens":{"input":400,"output":100,"reasoning":0}}`)
 
 	report, err := LoadForDirWithOptions(targetDir, Options{SessionGapMinutes: 5})
 	if err != nil {
