@@ -58,28 +58,6 @@ func normalizeProjectUsageKey(directory string) string {
 	return cleaned
 }
 
-func buildEmptyDays(now time.Time) []Day {
-	start := startOfDay(now).AddDate(0, 0, -(dayWindow - 1))
-	days := make([]Day, 0, dayWindow)
-	for i := 0; i < dayWindow; i++ {
-		days = append(days, Day{
-			Date:              start.AddDate(0, 0, i),
-			ToolCounts:        map[string]int{},
-			SkillCounts:       map[string]int{},
-			AgentCounts:       map[string]int{},
-			AgentModelCounts:  map[string]int{},
-			ModelCounts:       map[string]int64{},
-			ModelCosts:        map[string]float64{},
-			eventTimes:        nil,
-			UniqueTools:       map[string]struct{}{},
-			UniqueSkills:      map[string]struct{}{},
-			UniqueAgents:      map[string]struct{}{},
-			UniqueAgentModels: map[string]struct{}{},
-		})
-	}
-	return days
-}
-
 func mergeSessionCodeStats(db *sql.DB, dir string, since int64, loc *time.Location, dayMap map[string]*Day) error {
 	hasColumns, err := hasSessionSummaryColumns(db)
 	if err != nil {
@@ -327,7 +305,7 @@ func buildReport(days []Day, now time.Time, options Options) Report {
 		days = buildEmptyDays(now)
 	}
 
-	report := Report{Days: days, HighestBurnDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, AgentModelCounts: map[string]int{}, ModelCounts: map[string]int64{}, ModelCosts: map[string]float64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}, UniqueAgentModels: map[string]struct{}{}}, HighestCodeDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, AgentModelCounts: map[string]int{}, ModelCounts: map[string]int64{}, ModelCosts: map[string]float64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}, UniqueAgentModels: map[string]struct{}{}}, HighestChangedFilesDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, AgentModelCounts: map[string]int{}, ModelCounts: map[string]int64{}, ModelCosts: map[string]float64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}, UniqueAgentModels: map[string]struct{}{}}, LongestSessionDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, AgentModelCounts: map[string]int{}, ModelCounts: map[string]int64{}, ModelCosts: map[string]float64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}, UniqueAgentModels: map[string]struct{}{}}, MostEfficientDay: Day{ToolCounts: map[string]int{}, SkillCounts: map[string]int{}, AgentCounts: map[string]int{}, AgentModelCounts: map[string]int{}, ModelCounts: map[string]int64{}, ModelCosts: map[string]float64{}, UniqueTools: map[string]struct{}{}, UniqueSkills: map[string]struct{}{}, UniqueAgents: map[string]struct{}{}, UniqueAgentModels: map[string]struct{}{}}}
+	report := Report{Days: days, HighestBurnDay: newEmptyDay(time.Time{}), HighestCodeDay: newEmptyDay(time.Time{}), HighestChangedFilesDay: newEmptyDay(time.Time{}), LongestSessionDay: newEmptyDay(time.Time{}), MostEfficientDay: newEmptyDay(time.Time{})}
 	allTools := map[string]struct{}{}
 	allSkills := map[string]struct{}{}
 	allAgents := map[string]struct{}{}

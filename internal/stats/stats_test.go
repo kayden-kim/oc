@@ -46,6 +46,28 @@ func openStatsTestDBWithSchema(t *testing.T, schema string) (*sql.DB, string) {
 	return db, tmp
 }
 
+func TestNewEmptyDay_InitializesReportMaps(t *testing.T) {
+	date := time.Date(2026, time.March, 27, 0, 0, 0, 0, time.Local)
+
+	day := newEmptyDay(date)
+
+	if !day.Date.Equal(date) {
+		t.Fatalf("expected date %v, got %v", date, day.Date)
+	}
+	if day.ToolCounts == nil || day.SkillCounts == nil || day.AgentCounts == nil || day.AgentModelCounts == nil {
+		t.Fatal("expected usage count maps to be initialized")
+	}
+	if day.ModelCounts == nil || day.ModelCosts == nil {
+		t.Fatal("expected model maps to be initialized")
+	}
+	if day.UniqueTools == nil || day.UniqueSkills == nil || day.UniqueAgents == nil || day.UniqueAgentModels == nil {
+		t.Fatal("expected unique tracking maps to be initialized")
+	}
+	if day.AssistantMessages != 0 || day.ToolCalls != 0 || day.Tokens != 0 || day.Cost != 0 {
+		t.Fatalf("expected zero-value metrics, got %+v", day)
+	}
+}
+
 func TestLoadForDirAt_AggregatesGlobalStatsAndFiltersSynthetic(t *testing.T) {
 	db, tmp := openStatsTestDB(t)
 

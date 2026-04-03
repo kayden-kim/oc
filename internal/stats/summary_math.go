@@ -115,6 +115,37 @@ func bestHourlyStreakSlots(days []Day) int {
 	return best
 }
 
+func isYearMonthlyActive(month MonthlySummary) bool {
+	return month.TotalMessages > 0 || month.TotalSessions > 0 || month.TotalTokens > 0 || month.TotalCost > 0
+}
+
+func currentMonthlyStreak(months []MonthlySummary) int {
+	current := 0
+	for i := len(months) - 1; i >= 0; i-- {
+		if !isYearMonthlyActive(months[i]) {
+			break
+		}
+		current++
+	}
+	return current
+}
+
+func bestMonthlyStreak(months []MonthlySummary) int {
+	best := 0
+	current := 0
+	for _, month := range months {
+		if isYearMonthlyActive(month) {
+			current++
+			if current > best {
+				best = current
+			}
+			continue
+		}
+		current = 0
+	}
+	return best
+}
+
 func recentReasoningShare(days []Day) float64 {
 	if len(days) <= 1 {
 		return 0

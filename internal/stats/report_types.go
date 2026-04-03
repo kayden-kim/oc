@@ -29,6 +29,31 @@ type Day struct {
 	SlotTokens        [48]int64
 }
 
+func newEmptyDay(date time.Time) Day {
+	return Day{
+		Date:              date,
+		ToolCounts:        map[string]int{},
+		SkillCounts:       map[string]int{},
+		AgentCounts:       map[string]int{},
+		AgentModelCounts:  map[string]int{},
+		ModelCounts:       map[string]int64{},
+		ModelCosts:        map[string]float64{},
+		UniqueTools:       map[string]struct{}{},
+		UniqueSkills:      map[string]struct{}{},
+		UniqueAgents:      map[string]struct{}{},
+		UniqueAgentModels: map[string]struct{}{},
+	}
+}
+
+func buildEmptyDays(now time.Time) []Day {
+	start := startOfDay(now).AddDate(0, 0, -(dayWindow - 1))
+	days := make([]Day, 0, dayWindow)
+	for i := 0; i < dayWindow; i++ {
+		days = append(days, newEmptyDay(start.AddDate(0, 0, i)))
+	}
+	return days
+}
+
 type UsageCount struct {
 	Name   string
 	Count  int
