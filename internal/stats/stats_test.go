@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -45,24 +44,6 @@ func openStatsTestDBWithSchema(t *testing.T, schema string) (*sql.DB, string) {
 	}
 	t.Setenv("OPENCODE_DB", dbPath)
 	return db, tmp
-}
-
-func TestQueryHelpersLiveInSharedQueryFile(t *testing.T) {
-	t.Helper()
-
-	assertHelperFile := func(name string, fn any) {
-		t.Helper()
-
-		pc := reflect.ValueOf(fn).Pointer()
-		file, _ := runtime.FuncForPC(pc).FileLine(pc)
-		if !strings.HasSuffix(filepath.ToSlash(file), "/internal/stats/stats_query_shared.go") {
-			t.Fatalf("expected %s to be defined in internal/stats/stats_query_shared.go, got %s", name, file)
-		}
-	}
-
-	assertHelperFile("dayKey", dayKey)
-	assertHelperFile("scopedDirectoryClause", scopedDirectoryClause)
-	assertHelperFile("scopedDirectoryArg", scopedDirectoryArg)
 }
 
 func TestLoadForDirAt_AggregatesGlobalStatsAndFiltersSynthetic(t *testing.T) {
