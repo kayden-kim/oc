@@ -146,6 +146,159 @@ func bestMonthlyStreak(months []MonthlySummary) int {
 	return best
 }
 
+func buildReport(days []Day, now time.Time, options Options) Report {
+	if days == nil {
+		days = buildEmptyDays(now)
+	}
+
+	report := newEmptyReport(days)
+	allTools := map[string]struct{}{}
+	allSkills := map[string]struct{}{}
+	allAgents := map[string]struct{}{}
+	allAgentModels := map[string]struct{}{}
+	toolTotals := map[string]int{}
+	skillTotals := map[string]int{}
+	agentTotals := map[string]int{}
+	agentModelTotals := map[string]int{}
+	modelTotals := map[string]int64{}
+	modelCostTotals := map[string]float64{}
+	for i, day := range days {
+		day.SessionMinutes = computeSessionMinutes(day.eventTimes, options.SessionGapMinutes)
+		days[i] = day
+		if isActiveDay(day) {
+			report.ActiveDays++
+			report.WeekdayActiveCounts[int(day.Date.Weekday())]++
+		}
+		if isAgentDay(day) {
+			report.AgentDays++
+			report.WeekdayAgentCounts[int(day.Date.Weekday())]++
+		}
+		report.TotalToolCalls += day.ToolCalls
+		report.TotalSkillCalls += day.SkillCalls
+		report.TotalSubtasks += day.Subtasks
+		report.ThirtyDaySessionMinutes += day.SessionMinutes
+		report.ThirtyDayCodeLines += day.CodeLines
+		report.ThirtyDayChangedFiles += day.ChangedFiles
+		for tool := range day.UniqueTools {
+			allTools[tool] = struct{}{}
+		}
+		for tool, count := range day.ToolCounts {
+			toolTotals[tool] += count
+		}
+		for skill := range day.UniqueSkills {
+			allSkills[skill] = struct{}{}
+		}
+		for skill, count := range day.SkillCounts {
+			skillTotals[skill] += count
+		}
+		for agent := range day.UniqueAgents {
+			allAgents[agent] = struct{}{}
+		}
+		for agent, count := range day.AgentCounts {
+			agentTotals[agent] += count
+		}
+		for agentModel := range day.UniqueAgentModels {
+			allAgentModels[agentModel] = struct{}{}
+		}
+		for agentModel, count := range day.AgentModelCounts {
+			agentModelTotals[agentModel] += count
+			report.TotalAgentModelCalls += count
+		}
+		for name, amount := range day.ModelCounts {
+			modelTotals[name] += amount
+			report.TotalModelTokens += amount
+		}
+		for name, cost := range day.ModelCosts {
+			modelCostTotals[name] += cost
+			report.TotalModelCost += cost
+		}
+		report.ThirtyDayCost += day.Cost
+		report.ThirtyDayTokens += day.Tokens
+		if i >= len(days)-7 {
+			if isActiveDay(day) {
+				report.WeeklyActiveDays++
+			}
+			if isAgentDay(day) {
+				report.WeeklyAgentDays++
+			}
+		}
+		if day.Cost > report.HighestBurnDay.Cost {
+			report.HighestBurnDay = day
+		}
+		if day.CodeLines > report.HighestCodeDay.CodeLines {
+			report.HighestCodeDay = day
+		}
+		if day.ChangedFiles > report.HighestChangedFilesDay.ChangedFiles {
+			report.HighestChangedFilesDay = day
+		}
+		if day.SessionMinutes > report.LongestSessionDay.SessionMinutes {
+			report.LongestSessionDay = day
+		}
+		if isActiveDay(day) && (report.MostEfficientDay.Date.IsZero() || efficiencyScore(day) < efficiencyScore(report.MostEfficientDay)) {
+			report.MostEfficientDay = day
+		}
+	}
+	report.UniqueToolCount = len(allTools)
+	report.UniqueSkillCount = len(allSkills)
+	report.UniqueAgentCount = len(allAgents)
+	report.UniqueAgentModelCount = len(allAgentModels)
+	report.UniqueModelCount = len(modelTotals)
+	report.TopTools = topUsageCounts(toolTotals, unlimitedUsageItems)
+	report.TopSkills = topUsageCounts(skillTotals, unlimitedUsageItems)
+	report.TopAgents = topUsageCounts(agentTotals, unlimitedUsageItems)
+	report.TopAgentModels = topUsageCounts(agentModelTotals, unlimitedUsageItems)
+	report.TopModels = topUsageAmountsWithCostsFromMaps(modelTotals, modelCostTotals, unlimitedUsageItems)
+	report.CurrentStreak = currentStreak(days)
+	report.BestStreak = bestStreak(days)
+	report.CurrentHourlyStreakSlots = currentHourlyStreakSlots(days)
+	report.BestHourlyStreakSlots = bestHourlyStreakSlots(days)
+	if len(days) > 0 {
+		today := days[len(days)-1]
+		report.TodayCost = today.Cost
+		report.TodayTokens = today.Tokens
+		report.TodaySessionMinutes = today.SessionMinutes
+		report.TodayCodeLines = today.CodeLines
+		report.TodayChangedFiles = today.ChangedFiles
+		report.TodayReasoningShare = reasoningShare(today)
+	}
+	if len(days) > 1 {
+		yesterday := days[len(days)-2]
+		report.YesterdayCost = yesterday.Cost
+		report.YesterdayTokens = yesterday.Tokens
+		report.YesterdaySessionMinutes = yesterday.SessionMinutes
+		report.YesterdayCodeLines = yesterday.CodeLines
+		report.YesterdayChangedFiles = yesterday.ChangedFiles
+	}
+	if len(days) > 1 {
+		nowSlot := now.Hour()*2 + now.Minute()/30
+		today := days[len(days)-1]
+		yesterday := days[len(days)-2]
+		for i := 0; i < 48; i++ {
+			srcSlot := (nowSlot + 1 + i) % 48
+			if srcSlot > nowSlot {
+				report.Rolling24hSlots[i] = yesterday.SlotTokens[srcSlot]
+			} else {
+				report.Rolling24hSlots[i] = today.SlotTokens[srcSlot]
+			}
+		}
+		var rollingEvents []int64
+		cutoff := now.Add(-24 * time.Hour).UnixMilli()
+		for _, evt := range today.eventTimes {
+			if evt >= cutoff {
+				rollingEvents = append(rollingEvents, evt)
+			}
+		}
+		for _, evt := range yesterday.eventTimes {
+			if evt >= cutoff {
+				rollingEvents = append(rollingEvents, evt)
+			}
+		}
+		report.Rolling24hSessionMinutes = computeSessionMinutes(rollingEvents, options.SessionGapMinutes)
+	}
+	report.RecentReasoningShare = recentReasoningShare(days)
+	return report
+}
+
 func recentReasoningShare(days []Day) float64 {
 	if len(days) <= 1 {
 		return 0

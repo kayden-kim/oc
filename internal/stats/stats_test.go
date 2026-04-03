@@ -68,6 +68,32 @@ func TestNewEmptyDay_InitializesReportMaps(t *testing.T) {
 	}
 }
 
+func TestNewEmptyReport_InitializesHighlightDays(t *testing.T) {
+	report := newEmptyReport(nil)
+
+	if report.Days != nil {
+		t.Fatalf("expected nil days, got %v", report.Days)
+	}
+	highlights := []Day{
+		report.HighestBurnDay,
+		report.HighestCodeDay,
+		report.HighestChangedFilesDay,
+		report.LongestSessionDay,
+		report.MostEfficientDay,
+	}
+	for i, day := range highlights {
+		if day.ToolCounts == nil || day.SkillCounts == nil || day.AgentCounts == nil || day.AgentModelCounts == nil {
+			t.Fatalf("expected initialized count maps for highlight %d", i)
+		}
+		if day.ModelCounts == nil || day.ModelCosts == nil {
+			t.Fatalf("expected initialized model maps for highlight %d", i)
+		}
+		if day.UniqueTools == nil || day.UniqueSkills == nil || day.UniqueAgents == nil || day.UniqueAgentModels == nil {
+			t.Fatalf("expected initialized unique maps for highlight %d", i)
+		}
+	}
+}
+
 func TestLoadForDirAt_AggregatesGlobalStatsAndFiltersSynthetic(t *testing.T) {
 	db, tmp := openStatsTestDB(t)
 
