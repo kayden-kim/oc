@@ -1778,6 +1778,18 @@ func TestBuildMonthDailyReport_CurrentMonthSkipsFutureRowsWithinSameMonth(t *tes
 	}
 }
 
+func TestMonthReportVisibleEnd_ClampsCurrentMonthToTomorrow(t *testing.T) {
+	now := time.Date(2026, time.April, 3, 15, 30, 0, 0, time.Local)
+	monthStart := time.Date(2026, time.April, 1, 0, 0, 0, 0, time.Local)
+
+	visibleEnd := monthReportVisibleEnd(monthStart, now)
+
+	want := time.Date(2026, time.April, 4, 0, 0, 0, 0, time.Local)
+	if !visibleEnd.Equal(want) {
+		t.Fatalf("expected visible end %v, got %v", want, visibleEnd)
+	}
+}
+
 func TestBuildMonthDailyReport_KeepsDayAndMonthCostConsistent(t *testing.T) {
 	db, tmp := openStatsTestDB(t)
 
