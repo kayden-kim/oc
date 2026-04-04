@@ -12,6 +12,21 @@ func activitySectionHeader(title string, unique int) string {
 	return renderSubSectionHeader(fmt.Sprintf("%s (%s)", title, formatGroupedInt(unique)), habitSectionTitleStyle)
 }
 
+func sessionTableRows(sessions []stats.SessionUsage, currentSessionID string) []statsTableRow {
+	rows := make([]statsTableRow, 0, len(sessions))
+	for _, session := range sessions {
+		currentMark := ""
+		if currentSessionID != "" && session.ID == currentSessionID {
+			currentMark = "*"
+		}
+		rows = append(rows, statsTableRow{Cells: []string{currentMark, session.ID, formatGroupedInt(session.Messages), formatSummaryTokens(session.Tokens), formatSummaryCurrency(session.Cost), blankDash(session.Title)}})
+	}
+	if len(rows) == 0 {
+		rows = append(rows, statsTableRow{Cells: []string{"", "-", "-", "-", "-", "-"}})
+	}
+	return rows
+}
+
 func (m Model) renderSharedDetailActivityLines(report stats.WindowReport) []string {
 	lines := []string{}
 	if len(report.TopAgentModels) > 0 {

@@ -21,17 +21,13 @@ func TestRenderWindowLines_GroupsSummaryCounts(t *testing.T) {
 	}
 }
 func TestWindowSessionRows_GroupsMessageCounts(t *testing.T) {
-	report := stats.WindowReport{TopSessions: []stats.SessionUsage{{ID: "ses_big", Messages: 12345}}}
-	model := NewModel(nil, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true)
-	rows := model.windowSessionRows(report)
-	if got := rows[0][2]; got != "12,345" {
+	rows := sessionTableRows([]stats.SessionUsage{{ID: "ses_big", Messages: 12345}}, "")
+	if got := rows[0].Cells[2]; got != "12,345" {
 		t.Fatalf("expected grouped session message count, got %q", got)
 	}
 }
 func TestWindowSessionRows_DoesNotInsertMissingCurrentSessionRow(t *testing.T) {
-	report := stats.WindowReport{TopSessions: []stats.SessionUsage{{ID: "ses_other", Messages: 1}}}
-	model := NewModel(nil, nil, nil, SessionItem{ID: "ses_current"}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true)
-	rows := model.windowSessionRows(report)
+	rows := sessionTableRows([]stats.SessionUsage{{ID: "ses_other", Messages: 1}}, "ses_current")
 	if len(rows) != 1 {
 		t.Fatalf("expected only actual session rows, got %+v", rows)
 	}

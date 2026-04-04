@@ -21,7 +21,7 @@ func (m Model) renderWindowLines(report stats.WindowReport) []string {
 		"",
 		renderSubSectionHeader("Top Sessions", habitSectionTitleStyle),
 	)
-	lines = append(lines, renderStatsTable(windowSessionColumns(), m.windowSessionTableRows(report), m.statsTableMaxWidth())...)
+	lines = append(lines, renderStatsTable(windowSessionColumns(), sessionTableRows(report.TopSessions, m.session.ID), m.statsTableMaxWidth())...)
 	return lines
 }
 
@@ -49,8 +49,8 @@ func (m Model) renderCompactWindowLines(report stats.WindowReport) []string {
 		}
 	}
 	lines = append(lines, "", clamp(renderSubSectionHeader("Top Sessions", habitSectionTitleStyle)))
-	for _, row := range m.windowSessionRows(report) {
-		lines = append(lines, bullet("• "+strings.TrimSpace(strings.Join(row, " "))))
+	for _, row := range sessionTableRows(report.TopSessions, m.session.ID) {
+		lines = append(lines, bullet("• "+strings.TrimSpace(strings.Join(row.Cells, " "))))
 	}
 	return lines
 }
@@ -199,30 +199,6 @@ func windowSessionColumns() []statsTableColumn {
 		{Header: "cost", MinWidth: 6, AlignRight: true, Style: statsValueTextStyle},
 		{Header: "title", MinWidth: 10, Style: defaultTextStyle},
 	}
-}
-
-func (m Model) windowSessionRows(report stats.WindowReport) [][]string {
-	rows := make([][]string, 0, len(report.TopSessions))
-	for _, session := range report.TopSessions {
-		currentMark := ""
-		if m.session.ID != "" && session.ID == m.session.ID {
-			currentMark = "*"
-		}
-		rows = append(rows, []string{currentMark, session.ID, formatGroupedInt(session.Messages), formatSummaryTokens(session.Tokens), formatSummaryCurrency(session.Cost), blankDash(session.Title)})
-	}
-	if len(rows) == 0 {
-		rows = [][]string{{"", "-", "-", "-", "-", "-"}}
-	}
-	return rows
-}
-
-func (m Model) windowSessionTableRows(report stats.WindowReport) []statsTableRow {
-	stringRows := m.windowSessionRows(report)
-	rows := make([]statsTableRow, 0, len(stringRows))
-	for _, row := range stringRows {
-		rows = append(rows, statsTableRow{Cells: row})
-	}
-	return rows
 }
 
 func blankDash(value string) string {

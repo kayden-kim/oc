@@ -48,7 +48,7 @@ func (m Model) renderDailyDetailSections(report stats.WindowReport) []string {
 	lines = append(lines, "", renderSubSectionHeader(fmt.Sprintf("Models (%d)", len(report.Models)), habitSectionTitleStyle))
 	lines = append(lines, renderStatsTable(windowModelColumns(), windowModelTableRows(report.Models, windowModelDisplayName), m.statsTableMaxWidth())...)
 	lines = append(lines, "", renderSubSectionHeader(fmt.Sprintf("Sessions (%d)", len(report.AllSessions)), habitSectionTitleStyle))
-	lines = append(lines, renderStatsTable(windowSessionColumns(), windowSessionTableRows(report.AllSessions, m.session.ID), m.statsTableMaxWidth())...)
+	lines = append(lines, renderStatsTable(windowSessionColumns(), sessionTableRows(report.AllSessions, m.session.ID), m.statsTableMaxWidth())...)
 	for _, line := range m.renderSharedDetailActivityLines(report) {
 		lines = append(lines, line)
 	}
@@ -68,7 +68,7 @@ func (m Model) renderCompactDailyDetailSections(report stats.WindowReport) []str
 		lines = append(lines, defaultTextStyle.Render("    ")+fmt.Sprintf("• %s %s %s", blankDash(windowModelDisplayName(model.Model)), formatSummaryTokens(model.TotalTokens), formatSummaryCurrency(model.Cost)))
 	}
 	lines = append(lines, "", renderSubSectionHeader(fmt.Sprintf("Sessions (%d)", len(report.AllSessions)), habitSectionTitleStyle))
-	for _, row := range windowSessionTableRows(report.AllSessions, m.session.ID) {
+	for _, row := range sessionTableRows(report.AllSessions, m.session.ID) {
 		lines = append(lines, defaultTextStyle.Render("    ")+"• "+strings.TrimSpace(strings.Join(row.Cells, " ")))
 	}
 	for _, line := range m.renderSharedDetailActivityLines(report) {
@@ -165,19 +165,4 @@ func renderHalfHourSparkline(slots [48]int64, now time.Time, highlightCurrent bo
 		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(char))
 	}
 	return defaultTextStyle.Render("      ") + b.String()
-}
-
-func windowSessionTableRows(sessions []stats.SessionUsage, currentSessionID string) []statsTableRow {
-	rows := make([]statsTableRow, 0, len(sessions))
-	for _, session := range sessions {
-		currentMark := ""
-		if currentSessionID != "" && session.ID == currentSessionID {
-			currentMark = "*"
-		}
-		rows = append(rows, statsTableRow{Cells: []string{currentMark, session.ID, formatGroupedInt(session.Messages), formatSummaryTokens(session.Tokens), formatSummaryCurrency(session.Cost), blankDash(session.Title)}})
-	}
-	if len(rows) == 0 {
-		rows = append(rows, statsTableRow{Cells: []string{"", "-", "-", "-", "-", "-"}})
-	}
-	return rows
 }
