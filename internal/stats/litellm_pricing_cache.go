@@ -7,6 +7,9 @@ import (
 	"time"
 )
 
+var createTempFile = os.CreateTemp
+var renameFile = os.Rename
+
 type pricingCacheMetadata struct {
 	LastAttempt time.Time `json:"last_attempt"`
 }
@@ -40,10 +43,7 @@ func writePricingCache(raw []byte, attemptedAt time.Time) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(cachePath, raw, 0o644); err != nil {
+	if err := writeFileAtomically(cachePath, raw, 0o644); err != nil {
 		return err
 	}
 	return writePricingCacheMetadata(attemptedAt)
@@ -61,7 +61,40 @@ func writePricingCacheMetadata(attemptedAt time.Time) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(metaPath, payload, 0o644)
+	return writeFileAtomically(metaPath, payload, 0o644)
+}
+
+func writeFileAtomically(path string, data []byte, perm os.FileMode) (err error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+
+	tmp, err := createTempFile(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := renameFile(tmpPath, path); err != nil {
+		return err
+	}
+	return nil
 }
 
 func pricingCachePaths() (string, string, error) {

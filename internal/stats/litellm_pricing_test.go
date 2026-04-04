@@ -345,6 +345,58 @@ func TestLiteLLMPricingResolver_LoadCachedEntriesRequiresCompleteCacheFile(t *te
 	}
 }
 
+func TestCacheWrite_PreservesPreviousCacheWhenReplacementFails(t *testing.T) {
+	writeLiteLLMCacheFixture(t, `{"gpt-4o-mini":{"input_cost_per_token":0.000001}}`, pricingCacheMetadata{LastAttempt: time.Date(2026, time.March, 27, 10, 0, 0, 0, time.Local)})
+
+	cachePath, metaPath, err := pricingCachePaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalCache, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalMeta, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	previousCreateTempFile := createTempFile
+	previousRenameFile := renameFile
+	t.Cleanup(func() {
+		createTempFile = previousCreateTempFile
+		renameFile = previousRenameFile
+	})
+
+	createTempFile = func(dir, pattern string) (*os.File, error) {
+		return previousCreateTempFile(dir, pattern)
+	}
+	renameFile = func(oldPath, newPath string) error {
+		return fmt.Errorf("rename failed")
+	}
+
+	err = writePricingCache([]byte(`{"gpt-4o-mini":{"input_cost_per_token":0.000002}}`), time.Date(2026, time.March, 28, 10, 0, 0, 0, time.Local))
+	if err == nil {
+		t.Fatal("expected writePricingCache to fail when replacement rename fails")
+	}
+
+	cacheAfter, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(cacheAfter) != string(originalCache) {
+		t.Fatalf("expected cache contents to stay unchanged on failed replacement, got %q", cacheAfter)
+	}
+
+	metaAfter, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(metaAfter) != string(originalMeta) {
+		t.Fatalf("expected cache metadata to stay unchanged on failed replacement, got %q", metaAfter)
+	}
+}
+
 func TestEstimatePartCost_UsesPricingFallback(t *testing.T) {
 	previousResolver := defaultPricingResolver
 	t.Cleanup(func() {
