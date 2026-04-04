@@ -13,6 +13,18 @@ func TestFormatRolling24hHours_ClampsNegativeMinutes(t *testing.T) {
 	}
 }
 
+func TestFormatHourlyStreakDuration_FormatsHalfHours(t *testing.T) {
+	if got := formatHourlyStreakDuration(0); got != "0h" {
+		t.Fatalf("formatHourlyStreakDuration(0) = %q, want %q", got, "0h")
+	}
+	if got := formatHourlyStreakDuration(3); got != "1.5h" {
+		t.Fatalf("formatHourlyStreakDuration(3) = %q, want %q", got, "1.5h")
+	}
+	if got := formatHourlyStreakDuration(4); got != "2h" {
+		t.Fatalf("formatHourlyStreakDuration(4) = %q, want %q", got, "2h")
+	}
+}
+
 func TestFormatSummaryTokensPerHour(t *testing.T) {
 	for _, tt := range []struct {
 		name           string
@@ -85,12 +97,4 @@ func TestFormatPerHourWithTop(t *testing.T) {
 	if got := formatCodeLinesPerHourWithTop(100, 0, days); got != "-- (--)" {
 		t.Fatalf("formatCodeLinesPerHourWithTop zero minutes = %q, want %q", got, "-- (--)")
 	}
-}
-
-func mustDate(year int, month time.Month, day int) time.Time {
-	return time.Date(year, month, day, 0, 0, 0, 0, time.Local)
-}
-
-func mustClock(year int, month time.Month, day int, hour int, minute int) time.Time {
-	return time.Date(year, month, day, hour, minute, 0, 0, time.Local)
 }

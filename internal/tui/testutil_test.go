@@ -171,3 +171,11 @@ func maxRenderedLineWidth(content string) int {
 	}
 	return maxWidth
 }
+
+func mustDate(year int, month time.Month, day int) time.Time {
+	return time.Date(year, month, day, 0, 0, 0, 0, time.Local)
+}
+
+func mustClock(year int, month time.Month, day int, hour int, minute int) time.Time {
+	return time.Date(year, month, day, hour, minute, 0, 0, time.Local)
+}

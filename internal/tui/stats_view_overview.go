@@ -171,16 +171,6 @@ func formatHourlyBestStreakValue(report stats.Report) string {
 	return formatHourlyStreakDuration(best)
 }
 
-func formatHourlyStreakDuration(slots int) string {
-	if slots <= 0 {
-		return "0h"
-	}
-	if slots%2 == 0 {
-		return fmt.Sprintf("%dh", slots/2)
-	}
-	return fmt.Sprintf("%.1fh", float64(slots)/2)
-}
-
 func maxTokenDay(days []stats.Day) stats.Day {
 	var max stats.Day
 	for _, day := range days {
@@ -260,11 +250,6 @@ func styledTrendLine(label string, value string) string {
 
 func styledMetricLead(label string, value string) string {
 	return renderColumn(label, value, rhythmFirstColumnWidth)
-}
-
-func activitySectionHeader(title string, unique int) string {
-	title = strings.TrimPrefix(title, "Activity - ")
-	return renderSubSectionHeader(fmt.Sprintf("%s (%s)", title, formatGroupedInt(unique)), habitSectionTitleStyle)
 }
 
 func (m Model) renderMetricsTable(report stats.Report) []string {

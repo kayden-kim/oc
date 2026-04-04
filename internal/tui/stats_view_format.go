@@ -14,6 +14,16 @@ func formatRolling24hHours(minutes int) string {
 	return fmt.Sprintf("%.1f/24h", float64(minutes)/60)
 }
 
+func formatHourlyStreakDuration(slots int) string {
+	if slots <= 0 {
+		return "0h"
+	}
+	if slots%2 == 0 {
+		return fmt.Sprintf("%dh", slots/2)
+	}
+	return fmt.Sprintf("%.1fh", float64(slots)/2)
+}
+
 func formatSummaryCurrency(value float64) string {
 	if value <= 0 {
 		return "--"

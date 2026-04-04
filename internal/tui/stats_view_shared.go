@@ -1,6 +1,16 @@
 package tui
 
-import "github.com/kayden-kim/oc/internal/stats"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/kayden-kim/oc/internal/stats"
+)
+
+func activitySectionHeader(title string, unique int) string {
+	title = strings.TrimPrefix(title, "Activity - ")
+	return renderSubSectionHeader(fmt.Sprintf("%s (%s)", title, formatGroupedInt(unique)), habitSectionTitleStyle)
+}
 
 func (m Model) renderSharedDetailActivityLines(report stats.WindowReport) []string {
 	lines := []string{}
