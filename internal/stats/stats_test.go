@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -905,6 +907,120 @@ func TestLoadForDirAt_AggregatesChangedFilesFromPartSignals(t *testing.T) {
 	}
 	if report.HighestChangedFilesDay.ChangedFiles != 5 {
 		t.Fatalf("expected highest changed-files day 5, got %d", report.HighestChangedFilesDay.ChangedFiles)
+	}
+}
+
+func TestExtractChangedFilesFromPart_PatchAndToolInputs(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{
+			name: "patch payload uses files list",
+			raw:  `{"type":"patch","files":["internal/app/app.go","README.md","README.md"]}`,
+			want: []string{"README.md", "internal/app/app.go"},
+		},
+		{
+			name: "tool payload uses completed write edit and patch inputs",
+			raw:  `{"type":"tool","tool":"apply_patch","state":{"status":"completed","input":{"patchText":"*** Begin Patch\n*** Add File: docs/new.md\n*** Update File: internal/stats/stats.go\n*** End Patch"}}}`,
+			want: []string{"docs/new.md", "internal/stats/stats.go"},
+		},
+		{
+			name: "completed write payload uses file path",
+			raw:  `{"type":"tool","tool":"write","state":{"status":"completed","input":{"filePath":"docs/notes.md"}}}`,
+			want: []string{"docs/notes.md"},
+		},
+		{
+			name: "incomplete tool payload is ignored",
+			raw:  `{"type":"tool","tool":"edit","state":{"status":"pending","input":{"filePath":"docs/notes.md"}}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractChangedFilesFromPart(tt.raw)
+			sort.Strings(got)
+			sort.Strings(tt.want)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("expected files %v, got %v", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestExtractFilesFromPatchText_ReturnsTouchedFiles(t *testing.T) {
+	patchText := "*** Begin Patch\n*** Add File: internal/new/file.go\n*** Update File: README.md\n*** Delete File: docs/old.md\n*** Update File: README.md\n*** End Patch"
+
+	got := extractFilesFromPatchText(patchText)
+	sort.Strings(got)
+	want := []string{"README.md", "docs/old.md", "internal/new/file.go"}
+	sort.Strings(want)
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected files %v, got %v", want, got)
+	}
+}
+
+func TestNormalizeChangedFilePath_NormalizesPlatformSpecificInput(t *testing.T) {
+	input := filepath.Join(".", "Docs", "..", "Internal", "Stats.go")
+
+	got := normalizeChangedFilePath("  " + input + "  ")
+	want := filepath.Clean(input)
+	if runtime.GOOS == "windows" {
+		want = strings.ToLower(filepath.ToSlash(want))
+	}
+
+	if got != want {
+		t.Fatalf("expected normalized path %q, got %q", want, got)
+	}
+}
+
+func TestMergeSessionCodeStats_UsesSummaryColumnsWhenPresent(t *testing.T) {
+	db, tmp := openStatsTestDBWithSchema(t, `
+		CREATE TABLE session (
+			id TEXT PRIMARY KEY,
+			title TEXT NOT NULL DEFAULT '',
+			directory TEXT NOT NULL,
+			parent_id TEXT,
+			time_updated INTEGER NOT NULL,
+			summary_additions INTEGER,
+			summary_deletions INTEGER
+		);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+
+	dir := filepath.Join(tmp, "work")
+	otherDir := filepath.Join(tmp, "other")
+	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
+	yesterday := now.AddDate(0, 0, -1)
+	todayDay := newEmptyDay(time.Date(2026, time.March, 27, 0, 0, 0, 0, time.Local))
+	yesterdayDay := newEmptyDay(time.Date(2026, time.March, 26, 0, 0, 0, 0, time.Local))
+	dayMap := map[string]*Day{
+		dayKey(now):       &todayDay,
+		dayKey(yesterday): &yesterdayDay,
+	}
+
+	if _, err := db.Exec(`INSERT INTO session (id, title, directory, parent_id, time_updated, summary_additions, summary_deletions) VALUES (?, ?, ?, NULL, ?, ?, ?)`, "ses_today", "today", dir, now.UnixMilli(), 120, 30); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO session (id, title, directory, parent_id, time_updated, summary_additions, summary_deletions) VALUES (?, ?, ?, NULL, ?, ?, ?)`, "ses_yesterday", "yesterday", dir, yesterday.UnixMilli(), 40, 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO session (id, title, directory, parent_id, time_updated, summary_additions, summary_deletions) VALUES (?, ?, ?, NULL, ?, ?, ?)`, "ses_other", "other", otherDir, now.UnixMilli(), 999, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := mergeSessionCodeStats(db, dir, yesterday.Add(-time.Hour).UnixMilli(), time.Local, dayMap); err != nil {
+		t.Fatalf("mergeSessionCodeStats returned error: %v", err)
+	}
+
+	if dayMap[dayKey(now)].CodeLines != 150 {
+		t.Fatalf("expected today code lines 150, got %d", dayMap[dayKey(now)].CodeLines)
+	}
+	if dayMap[dayKey(yesterday)].CodeLines != 50 {
+		t.Fatalf("expected yesterday code lines 50, got %d", dayMap[dayKey(yesterday)].CodeLines)
 	}
 }
 
