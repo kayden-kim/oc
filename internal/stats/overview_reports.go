@@ -73,6 +73,52 @@ func loadAtWithOptions(now time.Time, dir string, options Options) (Report, erro
 	return report, nil
 }
 
+func mergeSessionCodeStats(db *sql.DB, dir string, since int64, loc *time.Location, dayMap map[string]*Day) error {
+	hasColumns, err := hasSessionSummaryColumns(db)
+	if err != nil {
+		return err
+	}
+	if !hasColumns {
+		return nil
+	}
+
+	query := `
+		SELECT
+			s.time_updated,
+			CAST(COALESCE(s.summary_additions, 0) AS INTEGER),
+			CAST(COALESCE(s.summary_deletions, 0) AS INTEGER)
+		FROM session s
+		WHERE %s s.time_updated >= ?
+	`
+	args := []any{since}
+	wherePrefix := ""
+	if dir != "" {
+		wherePrefix = scopedDirectoryClause() + " AND "
+		args = []any{scopedDirectoryArg(dir), since}
+	}
+	rows, err := db.Query(fmt.Sprintf(query, wherePrefix), args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var updatedAt int64
+		var additions int
+		var deletions int
+		if err := rows.Scan(&updatedAt, &additions, &deletions); err != nil {
+			return err
+		}
+		day := dayMap[dayKey(opencodedb.UnixTimestampToTime(updatedAt).In(loc))]
+		if day == nil {
+			continue
+		}
+		day.CodeLines += additions + deletions
+	}
+
+	return rows.Err()
+}
+
 func loadProjectUsage(db *sql.DB, since int64) (map[string]projectUsage, error) {
 	tokenTotals, err := loadProjectTokenTotals(db, since)
 	if err != nil {

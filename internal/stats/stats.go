@@ -2,9 +2,6 @@ package stats
 
 import (
 	"database/sql"
-	"fmt"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -43,64 +40,6 @@ func loadForDirAt(dir string, now time.Time) (Report, error) {
 
 func loadForDirAtWithOptions(dir string, now time.Time, options Options) (Report, error) {
 	return loadAtWithOptions(now, dir, options)
-}
-
-func normalizeProjectUsageKey(directory string) string {
-	directory = strings.TrimSpace(directory)
-	if directory == "" {
-		return "(unknown project)"
-	}
-	cleaned := filepath.Clean(directory)
-	if runtime.GOOS == "windows" {
-		return strings.ToLower(filepath.ToSlash(cleaned))
-	}
-	return cleaned
-}
-
-func mergeSessionCodeStats(db *sql.DB, dir string, since int64, loc *time.Location, dayMap map[string]*Day) error {
-	hasColumns, err := hasSessionSummaryColumns(db)
-	if err != nil {
-		return err
-	}
-	if !hasColumns {
-		return nil
-	}
-
-	query := `
-		SELECT
-			s.time_updated,
-			CAST(COALESCE(s.summary_additions, 0) AS INTEGER),
-			CAST(COALESCE(s.summary_deletions, 0) AS INTEGER)
-		FROM session s
-		WHERE %s s.time_updated >= ?
-	`
-	args := []any{since}
-	wherePrefix := ""
-	if dir != "" {
-		wherePrefix = scopedDirectoryClause() + " AND "
-		args = []any{scopedDirectoryArg(dir), since}
-	}
-	rows, err := db.Query(fmt.Sprintf(query, wherePrefix), args...)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var updatedAt int64
-		var additions int
-		var deletions int
-		if err := rows.Scan(&updatedAt, &additions, &deletions); err != nil {
-			return err
-		}
-		day := dayMap[dayKey(opencodedb.UnixTimestampToTime(updatedAt).In(loc))]
-		if day == nil {
-			continue
-		}
-		day.CodeLines += additions + deletions
-	}
-
-	return rows.Err()
 }
 
 func mergePartFileStats(db *sql.DB, dir string, since int64, loc *time.Location, dayMap map[string]*Day) error {
@@ -171,38 +110,6 @@ func mergePartFileStats(db *sql.DB, dir string, since int64, loc *time.Location,
 	}
 
 	return rows.Err()
-}
-
-func hasSessionSummaryColumns(db *sql.DB) (bool, error) {
-	rows, err := db.Query(`PRAGMA table_info(session)`)
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-
-	hasAdditions := false
-	hasDeletions := false
-	for rows.Next() {
-		var cid int
-		var name string
-		var columnType string
-		var notNull int
-		var defaultValue any
-		var pk int
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
-			return false, err
-		}
-		switch name {
-		case "summary_additions":
-			hasAdditions = true
-		case "summary_deletions":
-			hasDeletions = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return false, err
-	}
-	return hasAdditions && hasDeletions, nil
 }
 
 func normalizeOptions(options Options) Options {
