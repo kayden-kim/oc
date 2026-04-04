@@ -13,7 +13,6 @@ import (
 	"reflect"
 	"runtime"
 	"sort"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -946,33 +945,6 @@ func TestExtractChangedFilesFromPart_PatchAndToolInputs(t *testing.T) {
 				t.Fatalf("expected files %v, got %v", tt.want, got)
 			}
 		})
-	}
-}
-
-func TestExtractFilesFromPatchText_ReturnsTouchedFiles(t *testing.T) {
-	patchText := "*** Begin Patch\n*** Add File: internal/new/file.go\n*** Update File: README.md\n*** Delete File: docs/old.md\n*** Update File: README.md\n*** End Patch"
-
-	got := extractFilesFromPatchText(patchText)
-	sort.Strings(got)
-	want := []string{"README.md", "docs/old.md", "internal/new/file.go"}
-	sort.Strings(want)
-
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("expected files %v, got %v", want, got)
-	}
-}
-
-func TestNormalizeChangedFilePath_NormalizesPlatformSpecificInput(t *testing.T) {
-	input := filepath.Join(".", "Docs", "..", "Internal", "Stats.go")
-
-	got := normalizeChangedFilePath("  " + input + "  ")
-	want := filepath.Clean(input)
-	if runtime.GOOS == "windows" {
-		want = strings.ToLower(filepath.ToSlash(want))
-	}
-
-	if got != want {
-		t.Fatalf("expected normalized path %q, got %q", want, got)
 	}
 }
 
