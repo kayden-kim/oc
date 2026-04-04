@@ -92,6 +92,20 @@ func (m Model) renderDailyDetailMeta(report stats.WindowReport) string {
 	return fmt.Sprintf("%s active • streak %s (best %dd)", formatActiveHours(report.ActiveMinutes), formatHourlyStreakDuration(currentTrailingActiveSlots(report.HalfHourSlots)), monthDailyBestStreak(m.currentMonthDaily().Days))
 }
 
+func currentTrailingActiveSlots(slots [48]int64) int {
+	streak := 0
+	for i := len(slots) - 1; i >= 0; i-- {
+		if slots[i] <= 0 {
+			if streak > 0 {
+				return streak
+			}
+			continue
+		}
+		streak++
+	}
+	return streak
+}
+
 func formatActiveHours(minutes int) string {
 	if minutes <= 0 {
 		return "0h"

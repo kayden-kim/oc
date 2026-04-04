@@ -400,13 +400,6 @@ func formatChangedFilesWithTop(today int, days []stats.Day) string {
 	return fmt.Sprintf("%s (%s)", formatSummaryChangedFiles(today), formatRatioToTop(float64(today), float64(maxChangedFiles(days))))
 }
 
-func perHourRate(value float64, sessionMinutes int) float64 {
-	if value <= 0 || sessionMinutes <= 0 {
-		return 0
-	}
-	return value / (float64(sessionMinutes) / 60)
-}
-
 func maxTokensPerHour(days []stats.Day) float64 {
 	maxRate := 0.0
 	for _, day := range days {

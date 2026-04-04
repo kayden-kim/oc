@@ -55,6 +55,13 @@ func formatSummaryChangedFiles(value int) string {
 	return formatGroupedInt(value)
 }
 
+func perHourRate(value float64, sessionMinutes int) float64 {
+	if value <= 0 || sessionMinutes <= 0 {
+		return 0
+	}
+	return value / (float64(sessionMinutes) / 60)
+}
+
 func formatSummaryTokensPerHour(value int64, sessionMinutes int) string {
 	rate := perHourRate(float64(value), sessionMinutes)
 	if rate <= 0 {
@@ -158,18 +165,4 @@ func formatRatioToTop(today float64, maxValue float64) string {
 
 func formatPercent(value float64) string {
 	return fmt.Sprintf("%.0f%%", value*100)
-}
-
-func currentTrailingActiveSlots(slots [48]int64) int {
-	streak := 0
-	for i := len(slots) - 1; i >= 0; i-- {
-		if slots[i] <= 0 {
-			if streak > 0 {
-				return streak
-			}
-			continue
-		}
-		streak++
-	}
-	return streak
 }
