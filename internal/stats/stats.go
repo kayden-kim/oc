@@ -2,7 +2,6 @@ package stats
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"runtime"
@@ -172,100 +171,6 @@ func mergePartFileStats(db *sql.DB, dir string, since int64, loc *time.Location,
 	}
 
 	return rows.Err()
-}
-
-func extractChangedFilesFromPart(raw string) []string {
-	type partPayload struct {
-		Type  string   `json:"type"`
-		Tool  string   `json:"tool"`
-		Files []string `json:"files"`
-		State struct {
-			Status string `json:"status"`
-			Input  struct {
-				FilePath  string `json:"filePath"`
-				PatchText string `json:"patchText"`
-			} `json:"input"`
-		} `json:"state"`
-	}
-
-	var payload partPayload
-	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-		return nil
-	}
-
-	fileSet := map[string]struct{}{}
-	addFile := func(path string) {
-		path = strings.TrimSpace(path)
-		if path == "" {
-			return
-		}
-		fileSet[path] = struct{}{}
-	}
-
-	switch payload.Type {
-	case "patch":
-		for _, file := range payload.Files {
-			addFile(file)
-		}
-	case "tool":
-		if payload.State.Status != "completed" {
-			break
-		}
-		switch payload.Tool {
-		case "write", "edit":
-			addFile(payload.State.Input.FilePath)
-		case "apply_patch":
-			for _, file := range extractFilesFromPatchText(payload.State.Input.PatchText) {
-				addFile(file)
-			}
-		}
-	}
-
-	if len(fileSet) == 0 {
-		return nil
-	}
-	files := make([]string, 0, len(fileSet))
-	for file := range fileSet {
-		files = append(files, file)
-	}
-	return files
-}
-
-func extractFilesFromPatchText(patchText string) []string {
-	if strings.TrimSpace(patchText) == "" {
-		return nil
-	}
-	files := map[string]struct{}{}
-	for _, line := range strings.Split(patchText, "\n") {
-		switch {
-		case strings.HasPrefix(line, "*** Add File: "):
-			files[strings.TrimSpace(strings.TrimPrefix(line, "*** Add File: "))] = struct{}{}
-		case strings.HasPrefix(line, "*** Update File: "):
-			files[strings.TrimSpace(strings.TrimPrefix(line, "*** Update File: "))] = struct{}{}
-		case strings.HasPrefix(line, "*** Delete File: "):
-			files[strings.TrimSpace(strings.TrimPrefix(line, "*** Delete File: "))] = struct{}{}
-		}
-	}
-	if len(files) == 0 {
-		return nil
-	}
-	result := make([]string, 0, len(files))
-	for file := range files {
-		result = append(result, file)
-	}
-	return result
-}
-
-func normalizeChangedFilePath(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return ""
-	}
-	path = filepath.Clean(path)
-	if runtime.GOOS == "windows" {
-		return strings.ToLower(filepath.ToSlash(path))
-	}
-	return path
 }
 
 func hasSessionSummaryColumns(db *sql.DB) (bool, error) {
