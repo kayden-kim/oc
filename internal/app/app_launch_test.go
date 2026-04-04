@@ -40,6 +40,37 @@ func loopbackServerPort(server *httptest.Server) string {
 	return serverURL[strings.LastIndex(serverURL, ":")+1:]
 }
 
+func baseDepsWithPort(tmp string, r *fakeRunner) RuntimeDeps {
+	return RuntimeDeps{
+		NewRunner:         func() RunnerAPI { return r },
+		UserHomeDir:       func() (string, error) { return tmp, nil },
+		ReadFile:          os.ReadFile,
+		LoadOcConfig:      config.LoadOcConfig,
+		ParsePlugins:      config.ParsePlugins,
+		FilterByWhitelist: DefaultDeps("test").FilterByWhitelist,
+		RunTUI: wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string, _ bool) (map[string]bool, bool, string, []string, error) {
+			if r.runCalls > 0 {
+				return nil, true, "", nil, nil
+			}
+			return map[string]bool{}, false, "", []string{"--port", "51234"}, nil
+		}),
+		ApplySelections: config.ApplySelections,
+		WriteConfigFile: config.WriteConfigFile,
+		OpenEditor:      func(string, string) error { return nil },
+		ParsePortRange:  port.ParseRange,
+		SelectPort: func(minPort, maxPort int, checkAvailable func(int) bool, logFn func(attempt, p int, available bool)) port.SelectResult {
+			return port.SelectResult{Port: 51234, Attempts: 1, Found: true}
+		},
+		IsPortAvailable: func(int) bool { return true },
+		SendToast:       func(_ context.Context, _ int, _ []string) error { return nil },
+	}
+}
+
+func setupPortTestFiles(t *testing.T, tmp string, pluginContent string, ocContent string) {
+	t.Helper()
+	setupConfigFiles(t, tmp, pluginContent, ocContent)
+}
+
 func TestRunWithDeps_FullHappyPath(t *testing.T) {
 	tmp := t.TempDir()
 	initial := "{\n  \"plugin\": [\n    \"plugin-a\",\n    // \"plugin-b\",\n    \"plugin-c\"\n  ]\n}\n"
@@ -357,6 +388,270 @@ func TestRunWithDeps_CheckAvailableError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "opencode not found") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunWithDeps_PortSelectionAddsPortFlag(t *testing.T) {
+	tmp := t.TempDir()
+	setupPortTestFiles(t, tmp,
+		"{\n  \"plugin\": [\n    \"oh-my-opencode\"\n  ]\n}\n",
+		"[oc]\nports = \"50000-55000\"\n",
+	)
+
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+	deps.RunTUI = wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
+		if portsRange != "50000-55000" {
+			t.Fatalf("expected ports range to reach TUI, got %q", portsRange)
+		}
+		if r.runCalls > 0 {
+			return nil, true, "", nil, nil
+		}
+		return map[string]bool{"oh-my-opencode": true}, false, "", []string{"--port", "51234"}, nil
+	})
+
+	err := RunWithDeps([]string{"--model", "gpt-5"}, deps)
+	if err != nil {
+		t.Fatalf("RunWithDeps returned error: %v", err)
+	}
+	if !r.ran {
+		t.Fatal("runner.Run should be called")
+	}
+	if len(r.args) != 4 {
+		t.Fatalf("expected 4 args, got %d: %v", len(r.args), r.args)
+	}
+	if r.args[2] != "--port" || r.args[3] != "51234" {
+		t.Fatalf("expected --port 51234 appended, got %v", r.args)
+	}
+}
+
+func TestRunWithDeps_PortSelectionFailsFallback(t *testing.T) {
+	tmp := t.TempDir()
+	setupPortTestFiles(t, tmp,
+		"{\n  \"plugin\": [\n    \"oh-my-opencode\"\n  ]\n}\n",
+		"[oc]\nports = \"50000-55000\"\n",
+	)
+
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+	deps.RunTUI = wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
+		if portsRange != "50000-55000" {
+			t.Fatalf("expected ports range to reach TUI, got %q", portsRange)
+		}
+		if r.runCalls > 0 {
+			return nil, true, "", nil, nil
+		}
+		return map[string]bool{"oh-my-opencode": true}, false, "", nil, nil
+	})
+
+	err := RunWithDeps([]string{"--model", "gpt-5"}, deps)
+	if err != nil {
+		t.Fatalf("RunWithDeps returned error: %v", err)
+	}
+	if !r.ran {
+		t.Fatal("runner.Run should be called even when port selection fails")
+	}
+	if len(r.args) != 2 {
+		t.Fatalf("expected 2 args (no --port), got %d: %v", len(r.args), r.args)
+	}
+}
+
+func TestRunWithDeps_NoPortsConfigNoPortFlag(t *testing.T) {
+	tmp := t.TempDir()
+	setupPortTestFiles(t, tmp,
+		"{\n  \"plugin\": [\n    \"oh-my-opencode\"\n  ]\n}\n",
+		"plugins = [\"oh-my-opencode\"]\n",
+	)
+
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+	deps.RunTUI = wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
+		if portsRange != DefaultPortsRange {
+			t.Fatalf("expected default ports range %q, got %q", DefaultPortsRange, portsRange)
+		}
+		if r.runCalls > 0 {
+			return nil, true, "", nil, nil
+		}
+		return map[string]bool{"oh-my-opencode": true}, false, "", nil, nil
+	})
+
+	err := RunWithDeps([]string{"--model", "gpt-5"}, deps)
+	if err != nil {
+		t.Fatalf("RunWithDeps returned error: %v", err)
+	}
+	if !r.ran {
+		t.Fatal("runner.Run should be called")
+	}
+	if len(r.args) != 2 {
+		t.Fatalf("expected no --port to be appended by the TUI stub, got %v", r.args)
+	}
+}
+
+func TestRunWithDeps_DefaultPortRangeWhenNoOcConfig(t *testing.T) {
+	tmp := t.TempDir()
+	setupPortTestFiles(t, tmp,
+		"{\n  \"plugin\": [\n    \"oh-my-opencode\"\n  ]\n}\n",
+		"",
+	)
+
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+	deps.RunTUI = wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
+		if portsRange != DefaultPortsRange {
+			t.Fatalf("expected default ports range %q, got %q", DefaultPortsRange, portsRange)
+		}
+		if r.runCalls > 0 {
+			return nil, true, "", nil, nil
+		}
+		return map[string]bool{"oh-my-opencode": true}, false, "", nil, nil
+	})
+
+	err := RunWithDeps([]string{"--model", "gpt-5"}, deps)
+	if err != nil {
+		t.Fatalf("RunWithDeps returned error: %v", err)
+	}
+	if len(r.args) != 2 {
+		t.Fatalf("expected no --port to be appended by the TUI stub, got %v", r.args)
+	}
+}
+
+func TestRunWithDeps_PortSelectionRunsWithoutVisiblePlugins(t *testing.T) {
+	tmp := t.TempDir()
+	setupPortTestFiles(t, tmp,
+		"{\n  \"plugin\": []\n}\n",
+		"[oc]\nports = \"50000-55000\"\n",
+	)
+
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+
+	err := RunWithDeps([]string{"--verbose"}, deps)
+	if err != nil {
+		t.Fatalf("RunWithDeps returned error: %v", err)
+	}
+	if !r.ran {
+		t.Fatal("runner.Run should be called")
+	}
+	if len(r.args) != 3 || r.args[0] != "--verbose" || r.args[1] != "--port" || r.args[2] != "51234" {
+		t.Fatalf("expected --port to be appended even without visible plugins, got %v", r.args)
+	}
+}
+
+func TestRunWithDeps_UsesOcSectionPortsForSingleVisiblePlugin(t *testing.T) {
+	tmp := t.TempDir()
+	setupPortTestFiles(t, tmp,
+		"{\n  \"plugin\": [\n    \"oh-my-opencode@latest\",\n    \"superpowers\"\n  ]\n}\n",
+		"[oc]\nplugins = [\"oh-my-opencode\"]\nports = \"55000-55500\"\n",
+	)
+
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+	deps.RunTUI = wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
+		if portsRange != "55000-55500" {
+			t.Fatalf("expected [oc] ports to reach TUI, got %q", portsRange)
+		}
+		if r.runCalls > 0 {
+			return nil, true, "", nil, nil
+		}
+		return map[string]bool{"oh-my-opencode@latest": true}, false, "", []string{"--port", "51234"}, nil
+	})
+
+	err := RunWithDeps([]string{"--model", "gpt-5"}, deps)
+	if err != nil {
+		t.Fatalf("RunWithDeps returned error: %v", err)
+	}
+	if !r.ran {
+		t.Fatal("runner.Run should be called")
+	}
+	if len(r.args) != 4 || r.args[2] != "--port" || r.args[3] != "51234" {
+		t.Fatalf("expected [oc] port to be appended, got %v", r.args)
+	}
+}
+
+func TestRunWithDeps_PortSelectionStillAppliesWhenOhMyOpencodeNotSelected(t *testing.T) {
+	tmp := t.TempDir()
+	setupPortTestFiles(t, tmp,
+		"{\n  \"plugin\": [\n    \"oh-my-opencode\",\n    \"superpowers\"\n  ]\n}\n",
+		"[oc]\nports = \"55000-55500\"\n",
+	)
+
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+	deps.RunTUI = wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
+		if portsRange != "55000-55500" {
+			t.Fatalf("expected [oc] ports to reach TUI, got %q", portsRange)
+		}
+		if r.runCalls > 0 {
+			return nil, true, "", nil, nil
+		}
+		return map[string]bool{"oh-my-opencode": false, "superpowers": true}, false, "", []string{"--port", "51234"}, nil
+	})
+
+	err := RunWithDeps([]string{"--model", "gpt-5"}, deps)
+	if err != nil {
+		t.Fatalf("RunWithDeps returned error: %v", err)
+	}
+	if !r.ran {
+		t.Fatal("runner.Run should be called")
+	}
+	if len(r.args) != 4 || r.args[2] != "--port" || r.args[3] != "51234" {
+		t.Fatalf("expected port to be preserved even when oh-my-opencode is not selected, got %v", r.args)
+	}
+}
+
+func TestRunWithDeps_IgnoresLegacyPluginSectionPorts(t *testing.T) {
+	tmp := t.TempDir()
+	setupPortTestFiles(t, tmp,
+		"{\n  \"plugin\": [\n    \"oh-my-opencode\"\n  ]\n}\n",
+		"[plugin.oh-my-opencode]\nports = \"55000-55500\"\n",
+	)
+
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+	deps.RunTUI = wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
+		if portsRange != DefaultPortsRange {
+			t.Fatalf("expected legacy plugin-section ports to fall back to %q, got %q", DefaultPortsRange, portsRange)
+		}
+		if r.runCalls > 0 {
+			return nil, true, "", nil, nil
+		}
+		return map[string]bool{"oh-my-opencode": true}, false, "", nil, nil
+	})
+
+	err := RunWithDeps([]string{"--model", "gpt-5"}, deps)
+	if err != nil {
+		t.Fatalf("RunWithDeps returned error: %v", err)
+	}
+	if len(r.args) != 2 {
+		t.Fatalf("expected no --port to be appended by the TUI stub, got %v", r.args)
+	}
+}
+
+func TestRunWithDeps_IgnoresTopLevelPortsConfig(t *testing.T) {
+	tmp := t.TempDir()
+	setupPortTestFiles(t, tmp,
+		"{\n  \"plugin\": [\n    \"oh-my-opencode\"\n  ]\n}\n",
+		"ports = \"55000-55500\"\n",
+	)
+
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+	deps.RunTUI = wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, portsRange string, _ bool) (map[string]bool, bool, string, []string, error) {
+		if portsRange != DefaultPortsRange {
+			t.Fatalf("expected top-level ports to fall back to %q, got %q", DefaultPortsRange, portsRange)
+		}
+		if r.runCalls > 0 {
+			return nil, true, "", nil, nil
+		}
+		return map[string]bool{"oh-my-opencode": true}, false, "", nil, nil
+	})
+
+	err := RunWithDeps([]string{"--model", "gpt-5"}, deps)
+	if err != nil {
+		t.Fatalf("RunWithDeps returned error: %v", err)
+	}
+	if len(r.args) != 2 {
+		t.Fatalf("expected no --port to be appended by the TUI stub, got %v", r.args)
 	}
 }
 

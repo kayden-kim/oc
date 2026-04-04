@@ -418,3 +418,113 @@ func TestPersistSelections_NoProjectSourceRemainsBackwardCompatible(t *testing.T
 		t.Fatalf("expected user-only to be enabled in user file, got:\n%s", content)
 	}
 }
+
+func TestRunLaunchTUI_ReturnsPortArgsWithoutRenderer(t *testing.T) {
+	tmp := t.TempDir()
+	r := &fakeRunner{}
+	deps := baseDepsWithPort(tmp, r)
+
+	portArgs, err := runLaunchTUI([]string{"oh-my-opencode"}, tui.SessionItem{}, "50000-55000", deps, "test")
+	if err != nil {
+		t.Fatalf("runLaunchTUI returned error: %v", err)
+	}
+	if len(portArgs) != 2 || portArgs[0] != "--port" || portArgs[1] != "51234" {
+		t.Fatalf("expected --port 51234, got %v", portArgs)
+	}
+}
+
+func TestBuildEditChoices_ProjectConfigExists(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, ".config", "opencode")
+	projectDir := filepath.Join(tmp, ".opencode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	userOhMyPath := filepath.Join(configDir, "oh-my-opencode.jsonc")
+	projectOhMyPath := filepath.Join(projectDir, "oh-my-openagent.json")
+	if err := os.WriteFile(userOhMyPath, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(projectOhMyPath, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ocConfigPath := filepath.Join(tmp, ".oc")
+	projectConfigPath := filepath.Join(projectDir, "opencode.json")
+
+	paths := runtimePaths{
+		ocConfigPath: ocConfigPath,
+		configPath:   filepath.Join(configDir, "opencode.json"),
+		configDir:    configDir,
+	}
+
+	choices := buildEditChoices(paths, projectConfigPath, true)
+
+	if len(choices) != 5 {
+		t.Fatalf("expected 5 edit choices when project config and oh-my configs exist, got %d", len(choices))
+	}
+	if choices[0].Label != "1) .oc file" {
+		t.Fatalf("expected first choice label '1) .oc file', got %q", choices[0].Label)
+	}
+	if choices[0].Path != ocConfigPath {
+		t.Fatalf("expected first choice path %q, got %q", ocConfigPath, choices[0].Path)
+	}
+	if choices[1].Label != "2) opencode.json file" {
+		t.Fatalf("expected second choice label '2) opencode.json file', got %q", choices[1].Label)
+	}
+	if choices[2].Path != userOhMyPath {
+		t.Fatalf("expected third choice path %q, got %q", userOhMyPath, choices[2].Path)
+	}
+	if choices[3].Label != "4) project opencode.json file" {
+		t.Fatalf("expected fourth choice label '4) project opencode.json file', got %q", choices[3].Label)
+	}
+	if choices[3].Path != projectConfigPath {
+		t.Fatalf("expected fourth choice path %q, got %q", projectConfigPath, choices[3].Path)
+	}
+	if choices[4].Path != projectOhMyPath {
+		t.Fatalf("expected fifth choice path %q, got %q", projectOhMyPath, choices[4].Path)
+	}
+	if choices[4].Label != "5) project oh-my-openagent.json file" {
+		t.Fatalf("expected fifth choice label '5) project oh-my-openagent.json file', got %q", choices[4].Label)
+	}
+}
+
+func TestBuildEditChoices_ProjectConfigAbsent(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, ".config", "opencode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	userOhMyPath := filepath.Join(configDir, "oh-my-openagent.json")
+	if err := os.WriteFile(userOhMyPath, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ocConfigPath := filepath.Join(tmp, ".oc")
+
+	paths := runtimePaths{
+		ocConfigPath: ocConfigPath,
+		configPath:   filepath.Join(configDir, "opencode.json"),
+		configDir:    configDir,
+	}
+	projectPath := "/tmp/project-opencode.json"
+
+	choices := buildEditChoices(paths, projectPath, false)
+
+	if len(choices) != 3 {
+		t.Fatalf("expected 3 edit choices when project config is absent and one user oh-my config exists, got %d", len(choices))
+	}
+	if choices[0].Label != "1) .oc file" {
+		t.Fatalf("expected first choice label '1) .oc file', got %q", choices[0].Label)
+	}
+	if choices[0].Path != ocConfigPath {
+		t.Fatalf("expected first choice path %q, got %q", ocConfigPath, choices[0].Path)
+	}
+	if choices[2].Path != userOhMyPath {
+		t.Fatalf("expected third choice path %q, got %q", userOhMyPath, choices[2].Path)
+	}
+	if choices[2].Label != "3) oh-my-openagent.json file" {
+		t.Fatalf("expected third choice label '3) oh-my-openagent.json file', got %q", choices[2].Label)
+	}
+}
