@@ -69,7 +69,7 @@ func (m Model) renderCompactDailyDetailSections(report stats.WindowReport) []str
 	}
 	lines = append(lines, "", renderSubSectionHeader(fmt.Sprintf("Sessions (%d)", len(report.AllSessions)), habitSectionTitleStyle))
 	for _, row := range sessionTableRows(report.AllSessions, m.session.ID) {
-		lines = append(lines, defaultTextStyle.Render("    ")+"• "+strings.TrimSpace(strings.Join(row.Cells, " ")))
+		lines = append(lines, defaultTextStyle.Render("    ")+"• "+compactSessionRowText(row))
 	}
 	for _, line := range m.renderSharedDetailActivityLines(report) {
 		lines = append(lines, line)

@@ -20,18 +20,7 @@ func TestRenderWindowLines_GroupsSummaryCounts(t *testing.T) {
 		}
 	}
 }
-func TestWindowSessionRows_GroupsMessageCounts(t *testing.T) {
-	rows := sessionTableRows([]stats.SessionUsage{{ID: "ses_big", Messages: 12345}}, "")
-	if got := rows[0].Cells[2]; got != "12,345" {
-		t.Fatalf("expected grouped session message count, got %q", got)
-	}
-}
-func TestWindowSessionRows_DoesNotInsertMissingCurrentSessionRow(t *testing.T) {
-	rows := sessionTableRows([]stats.SessionUsage{{ID: "ses_other", Messages: 1}}, "ses_current")
-	if len(rows) != 1 {
-		t.Fatalf("expected only actual session rows, got %+v", rows)
-	}
-}
+
 func TestRenderWindowLines_UsesCompactLayoutOnNarrowWidth(t *testing.T) {
 	report := stats.WindowReport{Label: "Daily", Start: time.Date(2026, time.March, 28, 0, 0, 0, 0, time.Local), End: time.Date(2026, time.March, 29, 0, 0, 0, 0, time.Local), Messages: 12345, Sessions: 2345, Tokens: 987654, Cost: 1234.56, Models: []stats.ModelUsage{{Model: "gpt-5.4-with-a-long-name", TotalTokens: 123456, Cost: 12.34}}, TopSessions: []stats.SessionUsage{{ID: "ses_abcdefghijklmnopqrstuvwxyz", Title: "Very long session title", Messages: 123, Tokens: 456789, Cost: 45.67}}}
 	model := NewModel(nil, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true)

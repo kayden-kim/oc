@@ -27,6 +27,10 @@ func sessionTableRows(sessions []stats.SessionUsage, currentSessionID string) []
 	return rows
 }
 
+func compactSessionRowText(row statsTableRow) string {
+	return strings.TrimSpace(strings.Join(row.Cells, " "))
+}
+
 func (m Model) renderSharedDetailActivityLines(report stats.WindowReport) []string {
 	lines := []string{}
 	if len(report.TopAgentModels) > 0 {

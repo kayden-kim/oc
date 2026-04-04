@@ -26,6 +26,7 @@ func TestRenderMonthDailyLines_FormatsHeaderAndDays(t *testing.T) {
 	m := newStatsTestModel()
 	m.width = 80
 	m.height = 24
+	m.dailySelectedDate = time.Date(2026, time.March, 4, 0, 0, 0, 0, time.Local)
 	report := stats.MonthDailyReport{MonthStart: time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local), MonthEnd: time.Date(2026, time.April, 1, 0, 0, 0, 0, time.Local), ActiveDays: 3, TotalMessages: 10, TotalSessions: 2, TotalTokens: 5000, TotalCost: 15.5, Days: []stats.DailySummary{{Date: time.Date(2026, time.March, 1, 0, 0, 0, 0, time.Local), Messages: 2, Sessions: 1, Tokens: 1000, Cost: 3.0, FocusTag: "spike"}, {Date: time.Date(2026, time.March, 15, 0, 0, 0, 0, time.Local), Messages: 5, Sessions: 1, Tokens: 2500, Cost: 7.5, FocusTag: "heavy"}, {Date: time.Date(2026, time.March, 20, 0, 0, 0, 0, time.Local), Messages: 3, Sessions: 1, Tokens: 1500, Cost: 5.0, FocusTag: "--"}}}
 	lines := m.renderMonthDailyLines(report)
 	if len(lines) == 0 {

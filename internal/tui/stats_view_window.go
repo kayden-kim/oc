@@ -50,7 +50,7 @@ func (m Model) renderCompactWindowLines(report stats.WindowReport) []string {
 	}
 	lines = append(lines, "", clamp(renderSubSectionHeader("Top Sessions", habitSectionTitleStyle)))
 	for _, row := range sessionTableRows(report.TopSessions, m.session.ID) {
-		lines = append(lines, bullet("• "+strings.TrimSpace(strings.Join(row.Cells, " "))))
+		lines = append(lines, bullet("• "+compactSessionRowText(row)))
 	}
 	return lines
 }
