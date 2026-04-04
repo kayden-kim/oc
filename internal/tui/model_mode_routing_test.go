@@ -3,13 +3,7 @@ package tui
 import "testing"
 
 func TestView_RoutesToActiveModeRenderer(t *testing.T) {
-	model := newTestModelWithSession(
-		[]PluginItem{{Name: "plugin-a"}},
-		[]EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}},
-		[]SessionItem{{ID: "ses_latest", Title: "Latest session"}},
-		SessionItem{},
-		true,
-	)
+	model := newTestModelWithSession([]PluginItem{{Name: "plugin-a"}}, []EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}}, []SessionItem{{ID: "ses_latest", Title: "Latest session"}}, SessionItem{}, true)
 
 	if got, want := model.View().Content, model.viewLauncher().Content; got != want {
 		t.Fatalf("expected default view to use launcher renderer\nview: %q\nwant: %q", got, want)
@@ -42,13 +36,7 @@ func TestView_RoutesToActiveModeRenderer(t *testing.T) {
 }
 
 func TestUpdate_ModeEscTransitionsReturnToLauncher(t *testing.T) {
-	model := newTestModelWithSession(
-		[]PluginItem{{Name: "plugin-a"}},
-		[]EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}},
-		[]SessionItem{{ID: "ses_latest", Title: "Latest session"}},
-		SessionItem{},
-		true,
-	)
+	model := newTestModelWithSession([]PluginItem{{Name: "plugin-a"}}, []EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}}, []SessionItem{{ID: "ses_latest", Title: "Latest session"}}, SessionItem{}, true)
 
 	updated, _ := model.Update(mockKeyMsg("c"))
 	model = updated.(Model)
