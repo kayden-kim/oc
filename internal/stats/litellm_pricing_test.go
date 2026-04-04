@@ -2,6 +2,7 @@ package stats
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -363,9 +364,11 @@ func TestCacheWrite_PreservesPreviousCacheWhenReplacementFails(t *testing.T) {
 
 	previousCreateTempFile := createTempFile
 	previousRenameFile := renameFile
+	previousReplaceFile := replaceFile
 	t.Cleanup(func() {
 		createTempFile = previousCreateTempFile
 		renameFile = previousRenameFile
+		replaceFile = previousReplaceFile
 	})
 
 	createTempFile = func(dir, pattern string) (*os.File, error) {
@@ -373,6 +376,9 @@ func TestCacheWrite_PreservesPreviousCacheWhenReplacementFails(t *testing.T) {
 	}
 	renameFile = func(oldPath, newPath string) error {
 		return fmt.Errorf("rename failed")
+	}
+	replaceFile = func(oldPath, newPath string) error {
+		return fmt.Errorf("replace failed")
 	}
 
 	err = writePricingCache([]byte(`{"gpt-4o-mini":{"input_cost_per_token":0.000002}}`), time.Date(2026, time.March, 28, 10, 0, 0, 0, time.Local))
@@ -394,6 +400,72 @@ func TestCacheWrite_PreservesPreviousCacheWhenReplacementFails(t *testing.T) {
 	}
 	if string(metaAfter) != string(originalMeta) {
 		t.Fatalf("expected cache metadata to stay unchanged on failed replacement, got %q", metaAfter)
+	}
+}
+
+func TestWritePricingCache_OverwritesExistingCacheAndMetadata(t *testing.T) {
+	writeLiteLLMCacheFixture(t, `{"gpt-4o-mini":{"input_cost_per_token":0.000001}}`, pricingCacheMetadata{LastAttempt: time.Date(2026, time.March, 27, 10, 0, 0, 0, time.UTC)})
+
+	replacementAt := time.Date(2026, time.March, 28, 11, 0, 0, 0, time.UTC)
+	if err := writePricingCache([]byte(`{"gpt-4o-mini":{"input_cost_per_token":0.000002}}`), replacementAt); err != nil {
+		t.Fatalf("writePricingCache returned error: %v", err)
+	}
+
+	cachePath, metaPath, err := pricingCachePaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cacheData, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(cacheData) != `{"gpt-4o-mini":{"input_cost_per_token":0.000002}}` {
+		t.Fatalf("expected overwritten cache contents, got %q", cacheData)
+	}
+
+	metaData, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var meta pricingCacheMetadata
+	if err := json.Unmarshal(metaData, &meta); err != nil {
+		t.Fatalf("failed to parse metadata: %v", err)
+	}
+	if !meta.LastAttempt.Equal(replacementAt) {
+		t.Fatalf("expected metadata timestamp %v, got %v", replacementAt, meta.LastAttempt)
+	}
+}
+
+func TestWritePricingCache_HandlesOverwriteWithoutRenameSemantics(t *testing.T) {
+	writeLiteLLMCacheFixture(t, `{"gpt-4o-mini":{"input_cost_per_token":0.000001}}`, pricingCacheMetadata{LastAttempt: time.Date(2026, time.March, 27, 10, 0, 0, 0, time.UTC)})
+
+	previousCreateTempFile := createTempFile
+	previousRenameFile := renameFile
+	previousReplaceFile := replaceFile
+	t.Cleanup(func() {
+		createTempFile = previousCreateTempFile
+		renameFile = previousRenameFile
+		replaceFile = previousReplaceFile
+	})
+
+	createTempFile = func(dir, pattern string) (*os.File, error) {
+		return previousCreateTempFile(dir, pattern)
+	}
+	renameFile = func(oldPath, newPath string) error {
+		return errors.New("rename cannot overwrite existing file")
+	}
+	replaceCalls := 0
+	replaceFile = func(oldPath, newPath string) error {
+		replaceCalls++
+		return previousRenameFile(oldPath, newPath)
+	}
+
+	replacementAt := time.Date(2026, time.March, 28, 12, 0, 0, 0, time.UTC)
+	if err := writePricingCache([]byte(`{"gpt-4o-mini":{"input_cost_per_token":0.000002}}`), replacementAt); err != nil {
+		t.Fatalf("writePricingCache returned error: %v", err)
+	}
+	if replaceCalls == 0 {
+		t.Fatal("expected overwrite-safe replacement path to be used")
 	}
 }
 

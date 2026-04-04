@@ -9,6 +9,7 @@ import (
 
 var createTempFile = os.CreateTemp
 var renameFile = os.Rename
+var replaceFile = replaceFileAtomically
 
 type pricingCacheMetadata struct {
 	LastAttempt time.Time `json:"last_attempt"`
@@ -92,7 +93,9 @@ func writeFileAtomically(path string, data []byte, perm os.FileMode) (err error)
 		return err
 	}
 	if err := renameFile(tmpPath, path); err != nil {
-		return err
+		if err := replaceFile(tmpPath, path); err != nil {
+			return err
+		}
 	}
 	return nil
 }
