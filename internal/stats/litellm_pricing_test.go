@@ -47,24 +47,7 @@ func TestLiteLLMPricingResolver_UsesAliasMapping(t *testing.T) {
 }
 
 func TestLiteLLMPricingResolver_UsesLocalCacheImmediately(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmp)
-	cacheDir := filepath.Join(tmp, "oc")
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cachePath := filepath.Join(cacheDir, "litellm-pricing-cache.json")
-	metaPath := filepath.Join(cacheDir, "litellm-pricing-cache-meta.json")
-	if err := os.WriteFile(cachePath, []byte(`{"gpt-4o-mini":{"input_cost_per_token":0.000001}}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	meta, err := json.Marshal(pricingCacheMetadata{LastAttempt: time.Date(2026, time.March, 26, 9, 0, 0, 0, time.Local)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(metaPath, meta, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeLiteLLMCacheFixture(t, `{"gpt-4o-mini":{"input_cost_per_token":0.000001}}`, pricingCacheMetadata{LastAttempt: time.Date(2026, time.March, 26, 9, 0, 0, 0, time.Local)})
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		time.Sleep(200 * time.Millisecond)
@@ -91,24 +74,7 @@ func TestLiteLLMPricingResolver_UsesLocalCacheImmediately(t *testing.T) {
 }
 
 func TestLiteLLMPricingResolver_RefreshesAtMostOncePerRollingWindow(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmp)
-	cacheDir := filepath.Join(tmp, "oc")
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cachePath := filepath.Join(cacheDir, "litellm-pricing-cache.json")
-	metaPath := filepath.Join(cacheDir, "litellm-pricing-cache-meta.json")
-	if err := os.WriteFile(cachePath, []byte(`{"gpt-4o-mini":{"input_cost_per_token":0.000001}}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	meta, err := json.Marshal(pricingCacheMetadata{LastAttempt: time.Date(2026, time.March, 27, 1, 0, 0, 0, time.Local)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(metaPath, meta, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeLiteLLMCacheFixture(t, `{"gpt-4o-mini":{"input_cost_per_token":0.000001}}`, pricingCacheMetadata{LastAttempt: time.Date(2026, time.March, 27, 1, 0, 0, 0, time.Local)})
 
 	var hits atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -186,6 +152,26 @@ func TestEstimatePartCost_UsesPricingFallback(t *testing.T) {
 
 func ptrFloat(value float64) *float64 {
 	return &value
+}
+
+func writeLiteLLMCacheFixture(t *testing.T, cacheJSON string, meta pricingCacheMetadata) {
+	t.Helper()
+	tmp := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmp)
+	cacheDir := filepath.Join(tmp, "oc")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "litellm-pricing-cache.json"), []byte(cacheJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	encodedMeta, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "litellm-pricing-cache-meta.json"), encodedMeta, 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
