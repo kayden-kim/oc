@@ -7,10 +7,6 @@ import (
 	"time"
 )
 
-var createTempFile = os.CreateTemp
-var renameFile = os.Rename
-var replaceFile = replaceFileAtomically
-
 type pricingCacheMetadata struct {
 	LastAttempt time.Time `json:"last_attempt"`
 }
@@ -63,41 +59,6 @@ func writePricingCacheMetadata(attemptedAt time.Time) error {
 		return err
 	}
 	return writeFileAtomically(metaPath, payload, 0o644)
-}
-
-func writeFileAtomically(path string, data []byte, perm os.FileMode) (err error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-
-	tmp, err := createTempFile(filepath.Dir(path), filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	defer func() {
-		if err != nil {
-			_ = os.Remove(tmpPath)
-		}
-	}()
-
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(perm); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := renameFile(tmpPath, path); err != nil {
-		if err := replaceFile(tmpPath, path); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func pricingCachePaths() (string, string, error) {

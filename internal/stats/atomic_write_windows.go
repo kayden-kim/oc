@@ -4,7 +4,7 @@ package stats
 
 import "golang.org/x/sys/windows"
 
-func replaceFileAtomically(oldPath, newPath string) error {
+func atomicReplaceFileImpl(oldPath, newPath string) error {
 	oldPtr, err := windows.UTF16PtrFromString(oldPath)
 	if err != nil {
 		return err
