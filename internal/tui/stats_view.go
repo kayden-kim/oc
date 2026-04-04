@@ -78,18 +78,7 @@ func (m Model) renderLauncherAnalytics() string {
 }
 
 func currentWindowStreakSlots(slots [48]int64) int {
-	streak := 0
-	index := len(slots) - 1
-	for index >= 0 && slots[index] <= 0 {
-		index--
-	}
-	for i := index; i >= 0; i-- {
-		if slots[i] <= 0 {
-			break
-		}
-		streak++
-	}
-	return streak
+	return currentTrailingActiveSlots(slots)
 }
 
 func bestWindowStreakSlots(slots [48]int64) int {
@@ -774,13 +763,13 @@ func (m Model) renderStatsView() string {
 	switch m.statsTab {
 	case 1:
 		if m.dailyDetailMode {
-			help = renderDailyDetailHelpLine(m.layoutWidth())
+			help = renderDetailModeHelpLine(m.layoutWidth())
 		} else {
 			help = renderDailyMonthListHelpLine(m.layoutWidth())
 		}
 	case 2:
 		if m.monthlyDetailMode {
-			help = renderMonthlyDetailHelpLine(m.layoutWidth())
+			help = renderDetailModeHelpLine(m.layoutWidth())
 		} else {
 			help = renderMonthlyListHelpLine(m.layoutWidth())
 		}
@@ -793,6 +782,7 @@ func (m Model) renderStatsView() string {
 	return strings.Join(filterNonEmpty(parts), "\n\n")
 }
 
+// statsContentLines keeps stats-mode dispatch centralized across split view files.
 func (m Model) statsContentLines() []string {
 	if m.statsTab == 0 && m.currentStatsLoading() && len(m.currentReport().Days) == 0 {
 		return []string{"Loading stats..."}

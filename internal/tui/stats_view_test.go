@@ -891,6 +891,28 @@ func TestRenderDailyDetailHourlyLines_ShiftsGraphLeftByFourSpaces(t *testing.T) 
 	}
 }
 
+func TestCurrentTrailingActiveSlots(t *testing.T) {
+	var slots [48]int64
+	slots[40] = 1
+	slots[41] = 1
+	slots[45] = 1
+	slots[46] = 1
+	slots[47] = 1
+
+	if got := currentTrailingActiveSlots(slots); got != 3 {
+		t.Fatalf("currentTrailingActiveSlots() = %d, want 3", got)
+	}
+}
+
+func TestRenderDetailModeHelpLine_MatchesDetailNavigationCopy(t *testing.T) {
+	plain := stripANSI(renderDetailModeHelpLine(80))
+	for _, snippet := range []string{"↑/↓", "scroll", "pgup/pgdn", "page", "ctrl+u/d", "half", "home/end", "top/bottom", "esc", "month list", "g", "scope", "←/→", "tabs", "tab", "launcher"} {
+		if !strings.Contains(plain, snippet) {
+			t.Fatalf("expected detail help snippet %q, got %q", snippet, plain)
+		}
+	}
+}
+
 func TestRenderHalfHourSparkline_HighlightsCurrentSlotWhenToday(t *testing.T) {
 	now := time.Date(2026, time.April, 2, 10, 30, 0, 0, time.Local)
 	var slots [48]int64

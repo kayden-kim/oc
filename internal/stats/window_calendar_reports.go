@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/kayden-kim/oc/internal/opencodedb"
@@ -76,7 +75,7 @@ func buildMonthDailyReport(db *sql.DB, dir string, monthStart time.Time) (MonthD
 	seenSessions := make(map[string]struct{})
 
 	for _, row := range messageRows {
-		if row.Summary || strings.EqualFold(row.Agent, "compaction") || row.Role != "assistant" {
+		if !isWindowAssistantMessage(row) {
 			continue
 		}
 
@@ -98,10 +97,8 @@ func buildMonthDailyReport(db *sql.DB, dir string, monthStart time.Time) (MonthD
 		return MonthDailyReport{}, err
 	}
 
-	seenMessageCost := make(map[string]struct{})
-
 	for _, row := range partRows {
-		if row.Summary || strings.EqualFold(row.MessageAgent, "compaction") || row.Type == "compaction" {
+		if !isWindowUsagePart(row) {
 			continue
 		}
 
@@ -117,31 +114,17 @@ func buildMonthDailyReport(db *sql.DB, dir string, monthStart time.Time) (MonthD
 			continue
 		}
 
-		totalTokens := row.InputTokens + row.OutputTokens + row.CacheReadTokens + row.CacheWriteTokens + row.ReasoningTokens
+		totalTokens := windowPartTotalTokens(row)
 		dayMap[key].Tokens += totalTokens
 		report.TotalTokens += totalTokens
 
 		if row.MessageCost > 0 {
-			seenMessageCost[row.MessageID] = struct{}{}
 			continue
 		}
 
-		cost := row.Cost
-		if cost <= 0 {
-			event := partEvent{
-				ProviderID:       row.ProviderID,
-				ModelID:          row.ModelID,
-				InputTokens:      row.InputTokens,
-				OutputTokens:     row.OutputTokens,
-				ReasoningTokens:  row.ReasoningTokens,
-				CacheReadTokens:  row.CacheReadTokens,
-				CacheWriteTokens: row.CacheWriteTokens,
-			}
-			estimatedCost, err := estimatePartCost(event)
-			if err != nil {
-				return MonthDailyReport{}, fmt.Errorf("estimate month daily cost: %w", err)
-			}
-			cost = estimatedCost
+		cost, err := estimateWindowPartCost(row, "month daily")
+		if err != nil {
+			return MonthDailyReport{}, err
 		}
 		dayMap[key].Cost += cost
 		report.TotalCost += cost
