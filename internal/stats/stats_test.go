@@ -979,6 +979,12 @@ func TestNormalizeChangedFilePath_NormalizesPlatformSpecificInput(t *testing.T) 
 			wantPOSIX:   "",
 			wantWindows: "",
 		},
+		{
+			name:        "windows normalizes slashes and casing",
+			input:       `  .\Internal\Stats.GO  `,
+			wantPOSIX:   `.\Internal\Stats.GO`,
+			wantWindows: "internal/stats.go",
+		},
 	}
 
 	for _, tt := range tests {
