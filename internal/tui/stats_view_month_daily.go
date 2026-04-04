@@ -100,6 +100,22 @@ func formatMonthDailyBestStreak(report stats.MonthDailyReport) string {
 	return fmt.Sprintf("streak %dd (best)", monthDailyBestStreak(report.Days))
 }
 
+func monthDailyBestStreak(days []stats.DailySummary) int {
+	best := 0
+	current := 0
+	for i := len(days) - 1; i >= 0; i-- {
+		if isMonthDailyActive(days[i]) {
+			current++
+			if current > best {
+				best = current
+			}
+			continue
+		}
+		current = 0
+	}
+	return best
+}
+
 func isMonthDailyActive(day stats.DailySummary) bool {
 	return day.Messages > 0 || day.Sessions > 0 || day.Tokens > 0 || day.Cost > 0
 }

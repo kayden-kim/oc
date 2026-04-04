@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -296,18 +297,8 @@ func (m Model) renderOverviewLines() []string {
 	report := m.currentReport()
 	lines := strings.Split(m.renderLauncherAnalytics(), "\n")
 	if !m.isNarrowLayout() {
-		lines = append(lines,
-			"",
-			renderSubSectionHeader("Trends", habitSectionTitleStyle),
-			"",
-			bulletLine(styledTrendLine("• tokens ", renderValueTrend(report.Days, func(day stats.Day) float64 { return float64(day.Tokens) }))),
-			bulletLine(styledTrendLine("• cost ", renderValueTrend(report.Days, func(day stats.Day) float64 { return day.Cost }))),
-			bulletLine(styledTrendLine("• hours ", renderValueTrend(report.Days, func(day stats.Day) float64 { return float64(day.SessionMinutes) }))),
-			bulletLine(styledTrendLine("• lines ", renderValueTrend(report.Days, func(day stats.Day) float64 { return float64(day.CodeLines) }))),
-			bulletLine(styledTrendLine("• files ", renderValueTrend(report.Days, func(day stats.Day) float64 { return float64(day.ChangedFiles) }))),
-			"",
-			bulletLine(styledMetricLine("• reasoning ", fmt.Sprintf("%s today | %s baseline", formatPercent(report.TodayReasoningShare), formatPercent(report.RecentReasoningShare)))),
-		)
+		lines = append(lines, "")
+		lines = append(lines, renderOverviewTrendLines(report)...)
 	}
 	lines = append(lines,
 		"",
@@ -337,4 +328,137 @@ func (m Model) renderOverviewLines() []string {
 	)
 	lines = append(lines, m.renderUsageLines("count", report.TopTools, int64(report.TotalToolCalls))...)
 	return lines
+}
+
+func renderOverviewTrendLines(report stats.Report) []string {
+	return []string{
+		renderSubSectionHeader("Trends", habitSectionTitleStyle),
+		"",
+		bulletLine(styledTrendLine("• tokens ", renderValueTrend(report.Days, func(day stats.Day) float64 { return float64(day.Tokens) }))),
+		bulletLine(styledTrendLine("• cost ", renderValueTrend(report.Days, func(day stats.Day) float64 { return day.Cost }))),
+		bulletLine(styledTrendLine("• hours ", renderValueTrend(report.Days, func(day stats.Day) float64 { return float64(day.SessionMinutes) }))),
+		bulletLine(styledTrendLine("• lines ", renderValueTrend(report.Days, func(day stats.Day) float64 { return float64(day.CodeLines) }))),
+		bulletLine(styledTrendLine("• files ", renderValueTrend(report.Days, func(day stats.Day) float64 { return float64(day.ChangedFiles) }))),
+		"",
+		bulletLine(styledMetricLine("• reasoning ", fmt.Sprintf("%s today | %s baseline", formatPercent(report.TodayReasoningShare), formatPercent(report.RecentReasoningShare)))),
+	}
+}
+
+func renderValueTrend(days []stats.Day, extract func(stats.Day) float64) string {
+	if len(days) == 0 {
+		return "--"
+	}
+	values := make([]float64, len(days))
+	maxValue := 0.0
+	for i, day := range days {
+		values[i] = extract(day)
+		if values[i] > maxValue {
+			maxValue = values[i]
+		}
+	}
+	levels := []rune{'·', '░', '▓', '█'}
+	colors := []string{"#303030", "#505050", "#787878", "#B8B8B8"}
+	todayColors := []string{"#5A3A00", "#8A5400", "#C97300", "#FF9900"}
+	var b strings.Builder
+	for i, value := range values {
+		if maxValue == 0 {
+			palette := colors
+			if i == len(values)-1 {
+				palette = todayColors
+			}
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(palette[0])).Render("·"))
+			continue
+		}
+		index := int(math.Round((value / maxValue) * float64(len(levels)-1)))
+		index = min(max(index, 0), len(levels)-1)
+		palette := colors
+		if i == len(values)-1 {
+			palette = todayColors
+		}
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(palette[index])).Render(string(levels[index])))
+	}
+	return b.String()
+}
+
+func formatCurrencyWithTop(today float64, days []stats.Day) string {
+	return fmt.Sprintf("%s (%s)", formatSummaryCurrency(today), formatRatioToTop(today, maxCost(days)))
+}
+
+func formatTokensWithTop(today int64, days []stats.Day) string {
+	return fmt.Sprintf("%s (%s)", formatSummaryTokens(today), formatRatioToTop(float64(today), float64(maxTokens(days))))
+}
+
+func formatHoursWithTop(today int, days []stats.Day) string {
+	return fmt.Sprintf("%s (%s)", formatSummaryHours(today), formatRatioToTop(float64(today), float64(maxSessionMinutes(days))))
+}
+
+func formatCodeLinesWithTop(today int, days []stats.Day) string {
+	return fmt.Sprintf("%s (%s)", formatSummaryCodeLines(today), formatRatioToTop(float64(today), float64(maxCodeLines(days))))
+}
+
+func formatChangedFilesWithTop(today int, days []stats.Day) string {
+	return fmt.Sprintf("%s (%s)", formatSummaryChangedFiles(today), formatRatioToTop(float64(today), float64(maxChangedFiles(days))))
+}
+
+func perHourRate(value float64, sessionMinutes int) float64 {
+	if value <= 0 || sessionMinutes <= 0 {
+		return 0
+	}
+	return value / (float64(sessionMinutes) / 60)
+}
+
+func maxTokensPerHour(days []stats.Day) float64 {
+	maxRate := 0.0
+	for _, day := range days {
+		rate := perHourRate(float64(day.Tokens), day.SessionMinutes)
+		if rate > maxRate {
+			maxRate = rate
+		}
+	}
+	return maxRate
+}
+
+func maxTokensPerHourDay(days []stats.Day) stats.Day {
+	var maxDay stats.Day
+	maxRate := 0.0
+	for _, day := range days {
+		rate := perHourRate(float64(day.Tokens), day.SessionMinutes)
+		if rate > maxRate {
+			maxRate = rate
+			maxDay = day
+		}
+	}
+	return maxDay
+}
+
+func maxCodeLinesPerHour(days []stats.Day) float64 {
+	maxRate := 0.0
+	for _, day := range days {
+		rate := perHourRate(float64(day.CodeLines), day.SessionMinutes)
+		if rate > maxRate {
+			maxRate = rate
+		}
+	}
+	return maxRate
+}
+
+func maxCodeLinesPerHourDay(days []stats.Day) stats.Day {
+	var maxDay stats.Day
+	maxRate := 0.0
+	for _, day := range days {
+		rate := perHourRate(float64(day.CodeLines), day.SessionMinutes)
+		if rate > maxRate {
+			maxRate = rate
+			maxDay = day
+		}
+	}
+	return maxDay
+}
+
+func formatTokensPerHourWithTop(todayTokens int64, todayMinutes int, days []stats.Day) string {
+	return fmt.Sprintf("%s (%s)", formatSummaryTokensPerHour(todayTokens, todayMinutes), formatRatioToTop(perHourRate(float64(todayTokens), todayMinutes), maxTokensPerHour(days)))
+}
+
+func formatCodeLinesPerHourWithTop(today int, todayMinutes int, days []stats.Day) string {
+	return fmt.Sprintf("%s (%s)", formatSummaryCodeLinesPerHour(today, todayMinutes), formatRatioToTop(perHourRate(float64(today), todayMinutes), maxCodeLinesPerHour(days)))
 }
