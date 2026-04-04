@@ -281,13 +281,16 @@ func TestRunWithDeps_ContinuesAfterOpencodeExitCode(t *testing.T) {
 	setupConfigFiles(t, tmp, "{\n  \"plugin\": [\n    \"plugin-a\"\n  ]\n}\n", "")
 	r := &fakeRunner{runErr: &runner.ExitCodeError{Code: 17}}
 	tuiCalls := 0
-	err := RunWithDeps(nil, RuntimeDeps{NewRunner: func() RunnerAPI { return r }, UserHomeDir: func() (string, error) { return tmp, nil }, ReadFile: os.ReadFile, LoadOcConfig: config.LoadOcConfig, ParsePlugins: config.ParsePlugins, FilterByWhitelist: DefaultDeps("test").FilterByWhitelist, RunTUI: wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string, _ bool) (map[string]bool, bool, string, []string, error) {
-		tuiCalls++
-		if tuiCalls == 1 {
-			return map[string]bool{"plugin-a": true}, false, "", nil, nil
-		}
-		return nil, true, "", nil, nil
-	}), ApplySelections: config.ApplySelections, WriteConfigFile: config.WriteConfigFile, OpenEditor: func(string, string) error { return nil }})
+	var err error
+	stderrOutput := captureOutput(t, true, func() {
+		err = RunWithDeps(nil, RuntimeDeps{NewRunner: func() RunnerAPI { return r }, UserHomeDir: func() (string, error) { return tmp, nil }, ReadFile: os.ReadFile, LoadOcConfig: config.LoadOcConfig, ParsePlugins: config.ParsePlugins, FilterByWhitelist: DefaultDeps("test").FilterByWhitelist, RunTUI: wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string, _ bool) (map[string]bool, bool, string, []string, error) {
+			tuiCalls++
+			if tuiCalls == 1 {
+				return map[string]bool{"plugin-a": true}, false, "", nil, nil
+			}
+			return nil, true, "", nil, nil
+		}), ApplySelections: config.ApplySelections, WriteConfigFile: config.WriteConfigFile, OpenEditor: func(string, string) error { return nil }})
+	})
 	var exitErr *runner.ExitCodeError
 	if !errors.As(err, &exitErr) {
 		t.Fatalf("expected exit code error, got %v", err)
@@ -300,6 +303,9 @@ func TestRunWithDeps_ContinuesAfterOpencodeExitCode(t *testing.T) {
 	}
 	if r.runCalls != 1 {
 		t.Fatalf("expected runner to execute once, got %d", r.runCalls)
+	}
+	if stderrOutput != "opencode exited with code 17\n\n" {
+		t.Fatalf("expected exit code message on stderr, got %q", stderrOutput)
 	}
 }
 

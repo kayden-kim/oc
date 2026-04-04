@@ -6,7 +6,6 @@ import (
 
 	"github.com/kayden-kim/oc/internal/config"
 	"github.com/kayden-kim/oc/internal/port"
-	"github.com/kayden-kim/oc/internal/runner"
 )
 
 func TestRunContinuePath_LoadsOcConfigAndUsesResolvedPortArgs(t *testing.T) {
@@ -60,18 +59,5 @@ func TestRunContinuePath_LoadOcConfigErrorMatchesExistingWrap(t *testing.T) {
 	}
 	if err == nil || err.Error() != "failed to load whitelist: bad config" {
 		t.Fatalf("expected preserved error text, got %v", err)
-	}
-}
-
-func TestHandleLaunchOutcome_ExitCodeKeepsLooping(t *testing.T) {
-	lastExitErr, shouldContinue, err := handleLaunchOutcome(&runner.ExitCodeError{Code: 7})
-	if err != nil {
-		t.Fatalf("expected no terminal error, got %v", err)
-	}
-	if !shouldContinue {
-		t.Fatal("expected exit code result to continue loop")
-	}
-	if lastExitErr == nil || lastExitErr.Code != 7 {
-		t.Fatalf("expected last exit error to be preserved, got %+v", lastExitErr)
 	}
 }

@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/kayden-kim/oc/internal/runner"
 	"github.com/kayden-kim/oc/internal/stats"
@@ -74,13 +75,13 @@ func RunWithDeps(args []string, deps RuntimeDeps) error {
 
 		err = runOpencode(r, args, portArgs, selectedSession, selections, deps.SendToast)
 		selectedSession = refreshSelectedSession(deps, state.cwd, selectedSession)
-		exitErr, shouldContinue, err := handleLaunchOutcome(err)
+		if exitErr, ok := runner.IsExitCode(err); ok {
+			lastExitErr = exitErr
+			fmt.Fprintf(os.Stderr, "opencode exited with code %d\n\n", exitErr.Code)
+			continue
+		}
 		if err != nil {
 			return err
-		}
-		if shouldContinue {
-			lastExitErr = exitErr
-			continue
 		}
 		lastExitErr = nil
 	}
