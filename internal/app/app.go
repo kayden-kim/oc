@@ -2,9 +2,7 @@ package app
 
 import (
 	"fmt"
-	"os"
 
-	"github.com/kayden-kim/oc/internal/launch"
 	"github.com/kayden-kim/oc/internal/runner"
 	"github.com/kayden-kim/oc/internal/stats"
 	"github.com/kayden-kim/oc/internal/tui"
@@ -31,13 +29,7 @@ func RunWithDeps(args []string, deps RuntimeDeps) error {
 
 	paths := resolveRuntimePaths(homeDir)
 	if hasContinueArgs(args) {
-		ocConfig, err := deps.LoadOcConfig(paths.ocConfigPath)
-		if err != nil {
-			return fmt.Errorf("failed to load whitelist: %w", err)
-		}
-		_, _, effectivePortsRange, _, _ := extractRuntimeConfig(args, ocConfig)
-		portArgs := launch.ResolvePortArgs(effectivePortsRange, deps.ParsePortRange, deps.SelectPort, deps.IsPortAvailable, nil)
-		return runOpencode(r, args, portArgs, tui.SessionItem{}, nil, deps.SendToast)
+		return runContinuePath(args, deps, paths, r)
 	}
 	selectedSession := tui.SessionItem{}
 
@@ -59,36 +51,38 @@ func RunWithDeps(args []string, deps RuntimeDeps) error {
 			state.effectivePortsRange,
 			state.allowMultiplePlugins,
 		)
-		selectedSession = nextSession
 		if err != nil {
 			return fmt.Errorf("TUI error: %w", err)
 		}
-		if cancelled {
-			if lastExitErr != nil {
-				return lastExitErr
-			}
+
+		outcome, err := resolveTUIOutcome(selections, cancelled, editTarget, portArgs, nextSession, lastExitErr)
+		selectedSession = outcome.selectedSession
+		if err != nil {
+			return err
+		}
+		if outcome.stop {
 			return nil
 		}
-		if editTarget != "" {
-			if err := deps.OpenEditor(editTarget, state.configEditor); err != nil {
+		if outcome.editTarget != "" {
+			if err := deps.OpenEditor(outcome.editTarget, state.configEditor); err != nil {
 				return fmt.Errorf("failed to open editor for %s: %w", editTarget, err)
 			}
 			continue
 		}
 
-		if err := persistSelections(deps, state, selections); err != nil {
+		if err := persistSelections(deps, state, outcome.selections); err != nil {
 			return err
 		}
 
-		err = runOpencode(r, args, portArgs, selectedSession, selections, deps.SendToast)
+		err = runOpencode(r, args, outcome.portArgs, selectedSession, outcome.selections, deps.SendToast)
 		selectedSession = refreshSelectedSession(deps, state.cwd, selectedSession)
-		if exitErr, ok := runner.IsExitCode(err); ok {
-			lastExitErr = exitErr
-			fmt.Fprintf(os.Stderr, "opencode exited with code %d\n\n", exitErr.Code)
-			continue
-		}
+		exitErr, shouldContinue, err := resolveLaunchOutcome(err)
 		if err != nil {
 			return err
+		}
+		if shouldContinue {
+			lastExitErr = exitErr
+			continue
 		}
 		lastExitErr = nil
 	}
