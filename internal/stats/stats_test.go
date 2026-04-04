@@ -13,7 +13,6 @@ import (
 	"reflect"
 	"runtime"
 	"sort"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -941,9 +940,10 @@ func TestExtractChangedFilesFromPart_PatchAndToolInputs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := extractChangedFilesFromPart(tt.raw)
 			sort.Strings(got)
-			sort.Strings(tt.want)
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("expected files %v, got %v", tt.want, got)
+			want := append([]string(nil), tt.want...)
+			sort.Strings(want)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("expected files %v, got %v", want, got)
 			}
 		})
 	}
@@ -962,30 +962,30 @@ func TestExtractFilesFromPatchText_ReturnsTouchedFiles(t *testing.T) {
 
 func TestNormalizeChangedFilePath_NormalizesPlatformSpecificInput(t *testing.T) {
 	tests := []struct {
-		name  string
-		input string
-		want  string
+		name        string
+		input       string
+		wantPOSIX   string
+		wantWindows string
 	}{
 		{
-			name:  "trims and cleans relative path",
-			input: "  ./docs/../internal/stats.go  ",
-			want:  "./docs/../internal/stats.go",
+			name:        "trims and cleans relative path",
+			input:       "  ./docs/../internal/stats.go  ",
+			wantPOSIX:   "internal/stats.go",
+			wantWindows: "internal/stats.go",
 		},
 		{
-			name:  "empty path stays empty",
-			input: "   ",
-			want:  "",
+			name:        "empty path stays empty",
+			input:       "   ",
+			wantPOSIX:   "",
+			wantWindows: "",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			want := tt.want
-			if want != "" {
-				want = filepath.Clean(want)
-				if runtime.GOOS == "windows" {
-					want = strings.ToLower(filepath.ToSlash(want))
-				}
+			want := tt.wantPOSIX
+			if runtime.GOOS == "windows" {
+				want = tt.wantWindows
 			}
 
 			if got := normalizeChangedFilePath(tt.input); got != want {
