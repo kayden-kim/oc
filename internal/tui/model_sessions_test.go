@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 func TestUpdate_SessionPickerSelectsSession(t *testing.T) {
@@ -299,5 +300,38 @@ func TestView_SessionModeRendersUnboxedSessionRow(t *testing.T) {
 
 	if rowLine != expected {
 		t.Fatalf("expected unboxed session row %q, got %q", expected, rowLine)
+	}
+}
+
+func TestSelectedSessionSummary_TruncatesTitleButPreservesFullID(t *testing.T) {
+	session := SessionItem{ID: "ses_abcdefghijklmnopqrstuvwxyz1234567890", Title: "This is a very long session title that should be truncated", UpdatedAt: time.Now().Add(-10 * time.Minute)}
+	summary := selectedSessionSummary(session, 80)
+	if !strings.Contains(summary, "("+session.ID+")") {
+		t.Fatalf("expected full session ID to be preserved, got %q", summary)
+	}
+	if !strings.Contains(summary, "...") {
+		t.Fatalf("expected truncated title with ellipsis, got %q", summary)
+	}
+}
+
+func TestSelectedSessionSummary_ShortensPathLikeTitlesInMiddle(t *testing.T) {
+	session := SessionItem{ID: "ses_123", Title: "/Users/kayden/workspace/super-long-project-name", UpdatedAt: time.Now()}
+	summary := selectedSessionSummary(session, 42)
+	for _, snippet := range []string{"/Users", "..", "name", "(ses_123)"} {
+		if !strings.Contains(summary, snippet) {
+			t.Fatalf("expected %q in %q", snippet, summary)
+		}
+	}
+	if lipgloss.Width(summary) > 42 {
+		t.Fatalf("expected width <= 42, got %d in %q", lipgloss.Width(summary), summary)
+	}
+}
+
+func TestRenderSessionHelpLine_IncludesScrollNavigationTokens(t *testing.T) {
+	helpLine := renderSessionHelpLine(maxLayoutWidth)
+	for _, token := range []string{"↑/↓", "pgup/pgdn", "ctrl+u/d", "home/end", "enter", "esc"} {
+		if !strings.Contains(helpLine, helpBgKeyStyle.Render(token)) {
+			t.Fatalf("expected styled help token %q in %q", token, helpLine)
+		}
 	}
 }

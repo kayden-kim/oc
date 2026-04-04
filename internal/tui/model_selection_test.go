@@ -3,8 +3,10 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 func TestNewModel_InitialState(t *testing.T) {
@@ -403,5 +405,179 @@ func TestView_SourceLabelPlacedAfterPluginName(t *testing.T) {
 	}
 	if !strings.Contains(pluginCLine, "plugin-c") || !strings.Contains(pluginCLine, "[User, Project]") {
 		t.Fatalf("expected plugin-c to show [User, Project] label, got %q", pluginCLine)
+	}
+}
+
+func TestView_RendersFocusedSelectedRowLine(t *testing.T) {
+	view := newTestModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}, nil, true).View().Content
+	expected := stylePluginRow("> ✔  plugin-a", true, true)
+
+	if !strings.Contains(view, expected) {
+		t.Fatalf("expected row line %q in %q", expected, view)
+	}
+}
+
+func TestUpdate_EditRequest(t *testing.T) {
+	items := []PluginItem{{Name: "plugin-a", InitiallyEnabled: false}}
+	editChoices := []EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}}
+	m := newTestModel(items, editChoices, true)
+	newModel, cmd := m.Update(mockKeyMsg("c"))
+	m = newModel.(Model)
+	if m.EditRequested() || !m.editMode || m.cancelled || m.confirmed || cmd != nil {
+		t.Fatalf("unexpected edit request state after opening edit mode: requested=%v editMode=%v cancelled=%v confirmed=%v cmdNil=%v", m.EditRequested(), m.editMode, m.cancelled, m.confirmed, cmd == nil)
+	}
+}
+
+func TestUpdate_EditModeEnterSelectsTarget(t *testing.T) {
+	m := newTestModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: false}}, []EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}, {Label: "opencode.json", Path: "/tmp/opencode.json"}}, true)
+	newModel, _ := m.Update(mockKeyMsg("c"))
+	m = newModel.(Model)
+	newModel, _ = m.Update(mockKeyMsg("down"))
+	m = newModel.(Model)
+	newModel, cmd := m.Update(mockKeyMsg("enter"))
+	m = newModel.(Model)
+	if !m.EditRequested() || m.EditTarget() != "/tmp/opencode.json" || cmd == nil || cmd() != tea.Quit() {
+		t.Fatalf("expected edit target selection to request /tmp/opencode.json and quit, got requested=%v target=%q", m.EditRequested(), m.EditTarget())
+	}
+}
+
+func TestUpdate_EditModeEscReturnsToPluginList(t *testing.T) {
+	m := newTestModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: false}}, []EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}}, true)
+	newModel, _ := m.Update(mockKeyMsg("c"))
+	m = newModel.(Model)
+	newModel, cmd := m.Update(mockKeyMsg("esc"))
+	m = newModel.(Model)
+	if m.editMode || m.Cancelled() || cmd != nil {
+		t.Fatalf("expected esc to leave edit mode without cancelling, got editMode=%v cancelled=%v cmd=%v", m.editMode, m.Cancelled(), cmd)
+	}
+}
+
+func TestEditRequested_Method(t *testing.T) {
+	m := newTestModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: false}}, []EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}}, true)
+	if m.EditRequested() {
+		t.Fatal("expected EditRequested()=false initially")
+	}
+	newModel, _ := m.Update(mockKeyMsg("c"))
+	m = newModel.(Model)
+	if m.EditRequested() {
+		t.Fatal("expected EditRequested()=false while picker is open")
+	}
+	newModel, _ = m.Update(mockKeyMsg("enter"))
+	m = newModel.(Model)
+	if !m.EditRequested() || m.EditTarget() != "/tmp/.oc" {
+		t.Fatalf("expected edit target /tmp/.oc after selection, got requested=%v target=%q", m.EditRequested(), m.EditTarget())
+	}
+}
+
+func TestStylePluginRow_UsesCombinedStyleForFocusedSelectedRow(t *testing.T) {
+	cursorSelectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F0F0F0")).Bold(true)
+	rowLine := stylePluginRow("> ✔  plugin-a", true, true)
+	expected := cursorSelectedStyle.Render("> ✔  plugin-a")
+	if !strings.Contains(rowLine, expected) {
+		t.Fatalf("expected focused+selected style %q in %q", expected, rowLine)
+	}
+}
+
+func TestRenderHelpLine_IncludesStyledKeyTokens(t *testing.T) {
+	helpLine := renderHelpLine(maxLayoutWidth)
+	for _, token := range []string{"↑/↓", "space", "enter", "s", "c", "q"} {
+		if !strings.Contains(helpLine, helpBgKeyStyle.Render(token)) {
+			t.Fatalf("expected styled help token %q in %q", token, helpLine)
+		}
+	}
+	for _, action := range []string{"navigate", "toggle", "confirm", "sessions", "config", "quit"} {
+		if !strings.Contains(helpLine, action) || strings.Contains(helpLine, helpBgKeyStyle.Render(action)) {
+			t.Fatalf("expected unstyled action %q in %q", action, helpLine)
+		}
+	}
+	if !strings.Contains(helpLine, helpBgTextStyle.Render(": quit")) {
+		t.Fatalf("expected default text color on help copy, got %q", helpLine)
+	}
+}
+
+func TestView_RendersStyledHeaderLine(t *testing.T) {
+	view := newTestModel([]PluginItem{{Name: "plugin-a"}}, nil, true).View().Content
+	headerLine := strings.Split(view, "\n")[0]
+	expected := Model{version: testVersion}.renderTopBadge()
+	if headerLine != expected {
+		t.Fatalf("expected top badge %q, got %q", expected, headerLine)
+	}
+}
+
+func TestView_RendersPluginSelectionPrompt(t *testing.T) {
+	view := newTestModel([]PluginItem{{Name: "plugin-a"}}, nil, true).View().Content
+	expected := renderSectionHeader("📋 Choose plugins", maxLayoutWidth)
+	if !strings.Contains(view, expected) {
+		t.Fatalf("expected plugin prompt line %q in %q", expected, view)
+	}
+}
+
+func TestViewLauncher_MatchesDefaultView(t *testing.T) {
+	m := newTestModel([]PluginItem{{Name: "plugin-a"}}, nil, true)
+	if got, want := m.viewLauncher().Content, m.View().Content; got != want {
+		t.Fatalf("expected launcher helper to match default view\nhelper: %q\nview:   %q", got, want)
+	}
+}
+
+func TestView_EditModeRendersInstructionPrompt(t *testing.T) {
+	model := newTestModel([]PluginItem{{Name: "plugin-a"}}, []EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}}, true)
+	updatedModel, _ := model.Update(mockKeyMsg("c"))
+	view := updatedModel.(Model).View().Content
+	expected := renderSectionHeader("📂 Choose config to edit", maxLayoutWidth)
+	if !strings.Contains(view, expected) {
+		t.Fatalf("expected edit prompt line %q in %q", expected, view)
+	}
+}
+
+func TestViewEditPicker_MatchesEditModeView(t *testing.T) {
+	model := newTestModel([]PluginItem{{Name: "plugin-a"}}, []EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}}, true)
+	updatedModel, _ := model.Update(mockKeyMsg("c"))
+	m := updatedModel.(Model)
+	if got, want := m.viewEditPicker().Content, m.View().Content; got != want {
+		t.Fatalf("expected edit helper to match edit mode view\nhelper: %q\nview:   %q", got, want)
+	}
+}
+
+func TestView_EditModeRendersStyledHeaderLine(t *testing.T) {
+	model := newTestModel([]PluginItem{{Name: "plugin-a"}}, []EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}}, true)
+	updatedModel, _ := model.Update(mockKeyMsg("c"))
+	view := updatedModel.(Model).View().Content
+	headerLine := strings.Split(view, "\n")[0]
+	expected := Model{version: testVersion}.renderTopBadge()
+	if headerLine != expected {
+		t.Fatalf("expected edit-mode top badge %q, got %q", expected, headerLine)
+	}
+}
+
+func TestView_RendersStyledHelpLine(t *testing.T) {
+	view := newTestModel([]PluginItem{{Name: "plugin-a"}}, nil, true).View().Content
+	if !strings.Contains(view, renderHelpLine(maxLayoutWidth)) {
+		t.Fatalf("expected help line %q in %q", renderHelpLine(maxLayoutWidth), view)
+	}
+}
+
+func TestView_ClearsOnEditSelection(t *testing.T) {
+	model := newTestModel([]PluginItem{{Name: "plugin-a"}}, []EditChoice{{Label: ".oc file", Path: "/tmp/.oc"}}, true)
+	updatedModel, _ := model.Update(mockKeyMsg("c"))
+	updatedModel, _ = updatedModel.(Model).Update(mockKeyMsg("enter"))
+	if got := updatedModel.(Model).View().Content; got != "" {
+		t.Fatalf("expected empty view after edit selection, got %q", got)
+	}
+}
+
+func TestRenderTopBadge_ContainsBrandAndVersion(t *testing.T) {
+	rendered := Model{version: testVersion}.renderTopBadge()
+	expected := expectedTopBadge(testVersion, SessionItem{})
+	if rendered != expected {
+		t.Fatalf("expected top badge %q, got %q", expected, rendered)
+	}
+}
+
+func TestRenderTopBadge_IncludesSelectedSessionInfoWithMetaBackground(t *testing.T) {
+	session := SessionItem{ID: "ses_latest", Title: "Latest session", UpdatedAt: time.Now()}
+	rendered := Model{version: testVersion, session: session}.renderTopBadge()
+	expected := expectedTopBadge(testVersion, session)
+	if rendered != expected {
+		t.Fatalf("expected top badge %q, got %q", expected, rendered)
 	}
 }
