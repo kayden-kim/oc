@@ -40,37 +40,6 @@ func loopbackServerPort(server *httptest.Server) string {
 	return serverURL[strings.LastIndex(serverURL, ":")+1:]
 }
 
-func baseDepsWithPort(tmp string, r *fakeRunner) RuntimeDeps {
-	return RuntimeDeps{
-		NewRunner:         func() RunnerAPI { return r },
-		UserHomeDir:       func() (string, error) { return tmp, nil },
-		ReadFile:          os.ReadFile,
-		LoadOcConfig:      config.LoadOcConfig,
-		ParsePlugins:      config.ParsePlugins,
-		FilterByWhitelist: DefaultDeps("test").FilterByWhitelist,
-		RunTUI: wrapTUI(func(items []tui.PluginItem, editChoices []tui.EditChoice, _ string, _ bool) (map[string]bool, bool, string, []string, error) {
-			if r.runCalls > 0 {
-				return nil, true, "", nil, nil
-			}
-			return map[string]bool{}, false, "", []string{"--port", "51234"}, nil
-		}),
-		ApplySelections: config.ApplySelections,
-		WriteConfigFile: config.WriteConfigFile,
-		OpenEditor:      func(string, string) error { return nil },
-		ParsePortRange:  port.ParseRange,
-		SelectPort: func(minPort, maxPort int, checkAvailable func(int) bool, logFn func(attempt, p int, available bool)) port.SelectResult {
-			return port.SelectResult{Port: 51234, Attempts: 1, Found: true}
-		},
-		IsPortAvailable: func(int) bool { return true },
-		SendToast:       func(_ context.Context, _ int, _ []string) error { return nil },
-	}
-}
-
-func setupPortTestFiles(t *testing.T, tmp string, pluginContent string, ocContent string) {
-	t.Helper()
-	setupConfigFiles(t, tmp, pluginContent, ocContent)
-}
-
 func TestRunWithDeps_FullHappyPath(t *testing.T) {
 	tmp := t.TempDir()
 	initial := "{\n  \"plugin\": [\n    \"plugin-a\",\n    // \"plugin-b\",\n    \"plugin-c\"\n  ]\n}\n"
