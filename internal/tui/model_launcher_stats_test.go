@@ -217,6 +217,216 @@ func TestRenderOverviewLines_IncludesModelActivitySection(t *testing.T) {
 			t.Fatalf("expected model activity table header %q, got %q", snippet, plainModelSection)
 		}
 	}
+	headerLine := strings.Split(strings.TrimLeft(plainModelSection, "\n"), "\n")[0]
+	if strings.Contains(headerLine, "model") {
+		t.Fatalf("expected blank model column header, got %q", plainModelSection)
+	}
+	if strings.Contains(plainModelSection, "████") || strings.Contains(plainModelSection, "····") {
+		t.Fatalf("expected share graph removed from model activity section, got %q", plainModelSection)
+	}
+	for _, snippet := range []string{"• tokens ", "• unique ", "• 1 gpt-5.4", "• 10 o4-mini"} {
+		if strings.Contains(modelSection, snippet) {
+			t.Fatalf("expected old model activity formatting to be removed, got %q", modelSection)
+		}
+	}
+	if strings.Contains(modelSection, "11 claude-haiku-4.5") {
+		t.Fatalf("expected model activity section to keep plain labels without ordinal prefixes, got %q", modelSection)
+	}
+}
+
+func TestRenderOverviewLines_OrdersActivitySectionsAsRequested(t *testing.T) {
+	report := stats.Report{UniqueModelCount: 1, UniqueProjectCount: 1, UniqueAgentCount: 1, UniqueAgentModelCount: 1, UniqueSkillCount: 1, UniqueToolCount: 1, TotalModelTokens: 100, ThirtyDayTokens: 100, TotalSubtasks: 2, TotalAgentModelCalls: 2, TotalSkillCalls: 3, TotalToolCalls: 4, TopModels: []stats.UsageCount{{Name: "openai\x00gpt-5.4", Amount: 100, Cost: 1.25}}, TopProjects: []stats.UsageCount{{Name: "/tmp/work", Amount: 100, Cost: 2.50}}, TotalModelCost: 1.25, TotalProjectCost: 2.50, TopAgentModels: []stats.UsageCount{{Name: "explore\x00gpt-5.4", Count: 2}}, TopSkills: []stats.UsageCount{{Name: "writing-plans", Count: 3}}, TopTools: []stats.UsageCount{{Name: "bash", Count: 4}}, Days: make([]stats.Day, 30)}
+	for i := range report.Days {
+		report.Days[i] = stats.Day{Date: time.Now().AddDate(0, 0, -(29 - i)), Tokens: 100}
+	}
+	model := NewModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{}, testVersion, true)
+	content := strings.Join(model.renderOverviewLines(), "\n")
+	positions := []int{strings.Index(content, renderSubSectionHeader("Models (1)", habitSectionTitleStyle)), strings.Index(content, renderSubSectionHeader("Projects (1)", habitSectionTitleStyle)), strings.Index(content, renderSubSectionHeader("Agents (1)", habitSectionTitleStyle)), strings.Index(content, renderSubSectionHeader("Skills (1)", habitSectionTitleStyle)), strings.Index(content, renderSubSectionHeader("Tools (1)", habitSectionTitleStyle))}
+	for i, pos := range positions {
+		if pos < 0 {
+			t.Fatalf("expected activity section %d in %q", i, content)
+		}
+	}
+	if !(positions[0] < positions[1] && positions[1] < positions[2] && positions[2] < positions[3] && positions[3] < positions[4]) {
+		t.Fatalf("expected activity order models -> projects -> agents -> skills -> tools, got %q", content)
+	}
+}
+
+func TestRenderOverviewLines_HidesProjectActivityInProjectScope(t *testing.T) {
+	report := stats.Report{UniqueProjectCount: 1, TopProjects: []stats.UsageCount{{Name: "/tmp/work", Amount: 100, Cost: 1.50}}, ThirtyDayTokens: 100, TotalProjectCost: 1.50, Days: make([]stats.Day, 30)}
+	for i := range report.Days {
+		report.Days[i] = stats.Day{Date: time.Now().AddDate(0, 0, -(29 - i)), Tokens: 100}
+	}
+	model := NewModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{DefaultScope: "project"}, testVersion, true)
+	content := strings.Join(model.renderOverviewLines(), "\n")
+	if strings.Contains(stripANSI(content), "Projects") {
+		t.Fatalf("expected project activity section to stay hidden in project scope, got %q", content)
+	}
+}
+
+func TestRenderOverviewLines_ShortensProjectPathsInNarrowLayout(t *testing.T) {
+	report := stats.Report{UniqueProjectCount: 1, TopProjects: []stats.UsageCount{{Name: "/Users/kayden/workspace/super-long-project-name", Amount: 100, Cost: 1.50}}, ThirtyDayTokens: 100, TotalProjectCost: 1.50, Days: make([]stats.Day, 30)}
+	for i := range report.Days {
+		report.Days[i] = stats.Day{Date: time.Now().AddDate(0, 0, -(29 - i)), Tokens: 100}
+	}
+	model := NewModel([]PluginItem{{Name: "plugin-a", InitiallyEnabled: true}}, nil, nil, SessionItem{}, report, report, config.StatsConfig{}, testVersion, true)
+	model.width = 38
+	content := strings.Join(model.renderOverviewLines(), "\n")
+	plainContent := stripANSI(content)
+	if !strings.Contains(plainContent, "Projects") {
+		t.Fatalf("expected projects section, got %q", plainContent)
+	}
+	for _, snippet := range []string{"/Users", "..", "t-name"} {
+		if !strings.Contains(plainContent, snippet) {
+			t.Fatalf("expected shortened project path snippet %q, got %q", snippet, plainContent)
+		}
+	}
+	if got := maxRenderedLineWidth(content); got > 38 {
+		t.Fatalf("expected rendered width <= 38, got %d in %q", got, plainContent)
+	}
+}
+
+func TestRenderUsageLines_AlignsBarsToLongestLabel(t *testing.T) {
+	lines := (Model{}).renderUsageLines("count", []stats.UsageCount{{Name: "bash", Count: 21}, {Name: "very-long-tool-name", Count: 11}, {Name: "go", Count: 8}}, 42)
+	if len(lines) != 7 {
+		t.Fatalf("expected 7 usage lines, got %d", len(lines))
+	}
+	plain := make([]string, len(lines))
+	for i, line := range lines {
+		plain[i] = stripANSI(line)
+	}
+	if strings.Contains(plain[0], "tool") || strings.Contains(plain[0], "bar") || !strings.Contains(plain[0], "count") || !strings.Contains(plain[0], "share") {
+		t.Fatalf("expected usage table header, got %q", plain[0])
+	}
+	if !strings.Contains(plain[2], "bash") || !strings.Contains(plain[2], "████████ 50%") || !strings.Contains(plain[2], "21") {
+		t.Fatalf("expected first usage row, got %q", plain[2])
+	}
+	if !strings.Contains(plain[3], "very-long-tool-name") || !strings.Contains(plain[3], "████···· 26%") {
+		t.Fatalf("expected second usage row, got %q", plain[3])
+	}
+	if !strings.Contains(plain[6], "Total") || !strings.Contains(plain[6], "········ 100%") || !strings.Contains(plain[6], "42") {
+		t.Fatalf("expected total usage row, got %q", plain[6])
+	}
+}
+
+func TestRenderUsageLines_AlignsOthersAndTotalToLongestLabel(t *testing.T) {
+	items := make([]stats.UsageCount, 0, 16)
+	for i := range 16 {
+		items = append(items, stats.UsageCount{Name: fmt.Sprintf("t%d", i+1), Count: 20 - i})
+	}
+	lines := (Model{}).renderUsageLines("count", items, 200)
+	if len(lines) < 3 {
+		t.Fatalf("expected usage lines, got %v", lines)
+	}
+	othersLine, totalLine := stripANSI(lines[len(lines)-3]), stripANSI(lines[len(lines)-1])
+	if !strings.Contains(othersLine, "others") {
+		t.Fatalf("expected others line, got %q", othersLine)
+	}
+	if !strings.Contains(totalLine, "Total") {
+		t.Fatalf("expected total line, got %q", totalLine)
+	}
+	othersColumn, totalColumn := strings.Index(othersLine, "others"), strings.Index(totalLine, "Total")
+	if othersColumn != totalColumn {
+		t.Fatalf("expected aligned first column, got others=%d total=%d", othersColumn, totalColumn)
+	}
+}
+
+func TestRenderUsageLines_GroupsLargeCounts(t *testing.T) {
+	lines := (Model{}).renderUsageLines("count", []stats.UsageCount{{Name: "bash", Count: 12345}}, 23456)
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 usage lines, got %d", len(lines))
+	}
+	plain := make([]string, len(lines))
+	for i, line := range lines {
+		plain[i] = stripANSI(line)
+	}
+	if !strings.Contains(plain[2], "12,345") {
+		t.Fatalf("expected grouped usage count, got %q", plain[2])
+	}
+	if !strings.Contains(plain[4], "23,456") || !strings.Contains(plain[4], "100%") {
+		t.Fatalf("expected grouped total usage count, got %q", plain[4])
+	}
+	if strings.Contains(plain[2], "• 1 bash ") {
+		t.Fatalf("expected no ordinal prefix in usage row, got %q", plain[2])
+	}
+	if !strings.Contains(plain[4], "········") {
+		t.Fatalf("expected neutral placeholder bar in total row, got %q", plain[4])
+	}
+	if strings.Contains(plain[4], "████") {
+		t.Fatalf("expected total row to avoid filled bars, got %q", plain[4])
+	}
+}
+
+func TestRenderUsageLines_ShowsPlaceholderOnlyWhenTotalIsZero(t *testing.T) {
+	lines := (Model{}).renderUsageLines("count", nil, 0)
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 usage lines, got %d", len(lines))
+	}
+	if !strings.Contains(stripANSI(lines[2]), "-") {
+		t.Fatalf("expected placeholder row, got %q", stripANSI(lines[2]))
+	}
+	if strings.Contains(stripANSI(strings.Join(lines, "\n")), "Total") {
+		t.Fatalf("expected no total row for zero totals, got %q", stripANSI(strings.Join(lines, "\n")))
+	}
+}
+
+func TestRenderUsageLines_ShowsTotalWhenItemsMissingButTotalExists(t *testing.T) {
+	lines := (Model{}).renderUsageLines("count", nil, 42)
+	plain := stripANSI(strings.Join(lines, "\n"))
+	if !strings.Contains(plain, "-") {
+		t.Fatalf("expected placeholder row, got %q", plain)
+	}
+	if !strings.Contains(plain, "Total") || !strings.Contains(plain, "42") || !strings.Contains(plain, "········ 100%") {
+		t.Fatalf("expected total row when aggregate total exists, got %q", plain)
+	}
+	if strings.Count(plain, strings.Repeat("┈", 10)) < 2 {
+		t.Fatalf("expected header and total dividers, got %q", plain)
+	}
+}
+
+func TestRenderUsageLines_FormatsModelAmountsCompactly(t *testing.T) {
+	lines := (Model{}).renderUsageLines("tokens", []stats.UsageCount{{Name: "gpt-5.4", Amount: 1_250_000}}, 1_500_000)
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 usage lines, got %d", len(lines))
+	}
+	if !strings.Contains(stripANSI(lines[2]), "1.2M") {
+		t.Fatalf("expected compact model amount in usage row, got %q", stripANSI(lines[2]))
+	}
+	if !strings.Contains(stripANSI(lines[4]), "1.5M") || !strings.Contains(stripANSI(lines[4]), "100%") {
+		t.Fatalf("expected compact model amount in total row, got %q", stripANSI(lines[4]))
+	}
+}
+
+func TestRenderProjectUsageLines_ShowsCostColumn(t *testing.T) {
+	lines := (Model{}).renderProjectUsageLines([]stats.UsageCount{{Name: "/tmp/work-a", Amount: 1_250_000, Cost: 12.34}}, 1_500_000, 15.67)
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 project usage lines, got %d", len(lines))
+	}
+	plain := stripANSI(strings.Join(lines, "\n"))
+	for _, snippet := range []string{"tokens", "cost", "share", "/tmp/work-a", "1.2M", "$12.34", "$15.67", "83%", "100%"} {
+		if !strings.Contains(plain, snippet) {
+			t.Fatalf("expected project usage snippet %q, got %q", snippet, plain)
+		}
+	}
+	if strings.Contains(plain, "████") || strings.Contains(plain, "····") {
+		t.Fatalf("expected project usage share graph removed, got %q", plain)
+	}
+}
+
+func TestRenderModelUsageLines_ShowsCostColumn(t *testing.T) {
+	lines := (Model{}).renderModelUsageLines([]stats.UsageCount{{Name: "openai\x00gpt-5.4", Amount: 1_250_000, Cost: 12.34}}, 1_500_000, 15.67)
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 model usage lines, got %d", len(lines))
+	}
+	plain := stripANSI(strings.Join(lines, "\n"))
+	for _, snippet := range []string{"provider", "tokens", "cost", "share", "openai", "gpt-5.4", "1.2M", "$12.34", "$15.67", "83%", "100%"} {
+		if !strings.Contains(plain, snippet) {
+			t.Fatalf("expected model usage snippet %q, got %q", snippet, plain)
+		}
+	}
+	if strings.Contains(plain, "████") || strings.Contains(plain, "····") {
+		t.Fatalf("expected model usage share graph removed, got %q", plain)
+	}
 }
 
 func TestView_LauncherTodayGraphHidesOnNarrowWidths(t *testing.T) {
@@ -335,6 +545,19 @@ func TestRenderUsageLines_GroupsRemainderIntoOthersAfterTop15(t *testing.T) {
 	lines := (Model{}).renderUsageLines("count", items, total)
 	if len(lines) != 20 {
 		t.Fatalf("expected 20 usage lines including header/dividers/others/total, got %d", len(lines))
+	}
+	plain := make([]string, len(lines))
+	for i, line := range lines {
+		plain[i] = stripANSI(line)
+	}
+	if !strings.Contains(plain[17], "others") {
+		t.Fatalf("expected others row at index 17, got %q", plain[17])
+	}
+	if !strings.Contains(plain[17], "9") || !strings.Contains(plain[17], "4%") {
+		t.Fatalf("expected others row to aggregate hidden items, got %q", plain[17])
+	}
+	if !strings.Contains(plain[19], "204") || !strings.Contains(plain[19], "100%") {
+		t.Fatalf("expected total row to remain at the end, got %q", plain[19])
 	}
 }
 func TestSparklineLevel(t *testing.T) {

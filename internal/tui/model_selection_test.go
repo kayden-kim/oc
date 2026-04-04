@@ -7,6 +7,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/kayden-kim/oc/internal/config"
+	"github.com/kayden-kim/oc/internal/stats"
 )
 
 func TestNewModel_InitialState(t *testing.T) {
@@ -488,5 +490,17 @@ func TestRenderTopBadge_IncludesSelectedSessionInfoWithMetaBackground(t *testing
 	expected := expectedTopBadge(testVersion, session)
 	if rendered != expected {
 		t.Fatalf("expected top badge %q, got %q", expected, rendered)
+	}
+}
+
+func TestView_ClampsPluginRowsToNarrowWidth(t *testing.T) {
+	model := NewModel([]PluginItem{{Name: "plugin-with-a-very-long-name-that-should-not-overflow-the-terminal-width", SourceLabel: "User, Project"}}, nil, nil, SessionItem{}, stats.Report{}, stats.Report{}, config.StatsConfig{}, testVersion, true)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 35, Height: 20})
+	view := updated.(Model).View().Content
+	if got := maxRenderedLineWidth(view); got > 35 {
+		t.Fatalf("expected plugin view width <= 35, got %d in %q", got, stripANSI(view))
+	}
+	if !strings.Contains(stripANSI(view), "plugin-with") {
+		t.Fatalf("expected plugin row to retain visible content, got %q", stripANSI(view))
 	}
 }

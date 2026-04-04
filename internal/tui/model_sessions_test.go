@@ -335,3 +335,17 @@ func TestRenderSessionHelpLine_IncludesScrollNavigationTokens(t *testing.T) {
 		}
 	}
 }
+
+func TestView_ClampsSessionRowsToNarrowWidth(t *testing.T) {
+	session := SessionItem{ID: "ses_abcdefghijklmnopqrstuvwxyz", Title: "A very long session title that should be truncated on narrow terminals", UpdatedAt: time.Now()}
+	model := newTestModelWithSession([]PluginItem{{Name: "plugin-a"}}, nil, []SessionItem{session}, session, true)
+	updated, _ := model.Update(mockKeyMsg("s"))
+	updated, _ = updated.(Model).Update(tea.WindowSizeMsg{Width: 35, Height: 12})
+	view := updated.(Model).View().Content
+	if got := maxRenderedLineWidth(view); got > 35 {
+		t.Fatalf("expected session view width <= 35, got %d in %q", got, stripANSI(view))
+	}
+	if !strings.Contains(stripANSI(view), "ses_") {
+		t.Fatalf("expected session row to retain session id content, got %q", stripANSI(view))
+	}
+}
