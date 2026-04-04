@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -63,43 +62,21 @@ func runLaunchTUI(plugins []string, selectedSession tui.SessionItem, portsRange 
 	return finalLaunchModel.PortArgs(), nil
 }
 
-func ResolveOhMyOpencodePath(configDir string) string {
-	return resolveOhMyOpencodePath(configDir, os.Stat)
-}
-
-func DiscoverOhMyConfigPaths(configDir string) []string {
-	return discoverOhMyConfigPaths(configDir, os.Stat)
-}
-
-func discoverOhMyConfigPaths(configDir string, statFn func(string) (os.FileInfo, error)) []string {
-	candidates := []string{
-		"oh-my-opencode.json",
-		"oh-my-opencode.jsonc",
-		"oh-my-openagent.json",
-		"oh-my-openagent.jsonc",
+func runContinuePath(args []string, deps RuntimeDeps, paths runtimePaths, r RunnerAPI) error {
+	ocConfig, err := deps.LoadOcConfig(paths.ocConfigPath)
+	if err != nil {
+		return fmt.Errorf("failed to load whitelist: %w", err)
 	}
 
-	paths := make([]string, 0, len(candidates))
-	for _, name := range candidates {
-		path := filepath.Join(configDir, name)
-		if _, err := statFn(path); err == nil {
-			paths = append(paths, path)
-		}
-	}
-
-	return paths
-}
-
-func resolveOhMyOpencodePath(configDir string, statFn func(string) (os.FileInfo, error)) string {
-	paths := discoverOhMyConfigPaths(configDir, statFn)
-	if len(paths) > 0 {
-		return paths[0]
-	}
-
-	return filepath.Join(configDir, "oh-my-opencode.json")
+	_, _, effectivePortsRange, _, _ := extractRuntimeConfig(args, ocConfig)
+	portArgs := launch.ResolvePortArgs(effectivePortsRange, deps.ParsePortRange, deps.SelectPort, deps.IsPortAvailable, nil)
+	return runOpencode(r, args, portArgs, tui.SessionItem{}, nil, deps.SendToast)
 }
 
 func logToastFailure(port int, err error) {
+	// Toast failures should never block launching opencode.
+	// Log them directly where the callback runs.
+	//
 	fmt.Fprintf(os.Stderr, "oc: error: show-toast failed on port %d: %v\n", port, err)
 }
 

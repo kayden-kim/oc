@@ -2,10 +2,47 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/kayden-kim/oc/internal/tui"
 )
+
+func ResolveOhMyOpencodePath(configDir string) string {
+	return resolveOhMyOpencodePath(configDir, os.Stat)
+}
+
+func DiscoverOhMyConfigPaths(configDir string) []string {
+	return discoverOhMyConfigPaths(configDir, os.Stat)
+}
+
+func discoverOhMyConfigPaths(configDir string, statFn func(string) (os.FileInfo, error)) []string {
+	candidates := []string{
+		"oh-my-opencode.json",
+		"oh-my-opencode.jsonc",
+		"oh-my-openagent.json",
+		"oh-my-openagent.jsonc",
+	}
+
+	paths := make([]string, 0, len(candidates))
+	for _, name := range candidates {
+		path := filepath.Join(configDir, name)
+		if _, err := statFn(path); err == nil {
+			paths = append(paths, path)
+		}
+	}
+
+	return paths
+}
+
+func resolveOhMyOpencodePath(configDir string, statFn func(string) (os.FileInfo, error)) string {
+	paths := discoverOhMyConfigPaths(configDir, statFn)
+	if len(paths) > 0 {
+		return paths[0]
+	}
+
+	return filepath.Join(configDir, "oh-my-opencode.json")
+}
 
 func buildEditChoices(paths runtimePaths, projectConfigPath string, projectConfigExists bool) []tui.EditChoice {
 	userOhMyConfigs := DiscoverOhMyConfigPaths(paths.configDir)
