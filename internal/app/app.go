@@ -54,29 +54,27 @@ func RunWithDeps(args []string, deps RuntimeDeps) error {
 		if err != nil {
 			return fmt.Errorf("TUI error: %w", err)
 		}
-
-		outcome, err := resolveTUIOutcome(selections, cancelled, editTarget, portArgs, nextSession, lastExitErr)
-		selectedSession = outcome.selectedSession
-		if err != nil {
-			return err
-		}
-		if outcome.stop {
+		selectedSession = nextSession
+		if cancelled {
+			if lastExitErr != nil {
+				return lastExitErr
+			}
 			return nil
 		}
-		if outcome.editTarget != "" {
-			if err := deps.OpenEditor(outcome.editTarget, state.configEditor); err != nil {
+		if editTarget != "" {
+			if err := deps.OpenEditor(editTarget, state.configEditor); err != nil {
 				return fmt.Errorf("failed to open editor for %s: %w", editTarget, err)
 			}
 			continue
 		}
 
-		if err := persistSelections(deps, state, outcome.selections); err != nil {
+		if err := persistSelections(deps, state, selections); err != nil {
 			return err
 		}
 
-		err = runOpencode(r, args, outcome.portArgs, selectedSession, outcome.selections, deps.SendToast)
+		err = runOpencode(r, args, portArgs, selectedSession, selections, deps.SendToast)
 		selectedSession = refreshSelectedSession(deps, state.cwd, selectedSession)
-		exitErr, shouldContinue, err := resolveLaunchOutcome(err)
+		exitErr, shouldContinue, err := handleLaunchOutcome(err)
 		if err != nil {
 			return err
 		}

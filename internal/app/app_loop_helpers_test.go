@@ -7,7 +7,6 @@ import (
 	"github.com/kayden-kim/oc/internal/config"
 	"github.com/kayden-kim/oc/internal/port"
 	"github.com/kayden-kim/oc/internal/runner"
-	"github.com/kayden-kim/oc/internal/tui"
 )
 
 func TestRunContinuePath_LoadsOcConfigAndUsesResolvedPortArgs(t *testing.T) {
@@ -64,8 +63,8 @@ func TestRunContinuePath_LoadOcConfigErrorMatchesExistingWrap(t *testing.T) {
 	}
 }
 
-func TestResolveLaunchOutcome_ExitCodeKeepsLooping(t *testing.T) {
-	lastExitErr, shouldContinue, err := resolveLaunchOutcome(&runner.ExitCodeError{Code: 7})
+func TestHandleLaunchOutcome_ExitCodeKeepsLooping(t *testing.T) {
+	lastExitErr, shouldContinue, err := handleLaunchOutcome(&runner.ExitCodeError{Code: 7})
 	if err != nil {
 		t.Fatalf("expected no terminal error, got %v", err)
 	}
@@ -74,19 +73,5 @@ func TestResolveLaunchOutcome_ExitCodeKeepsLooping(t *testing.T) {
 	}
 	if lastExitErr == nil || lastExitErr.Code != 7 {
 		t.Fatalf("expected last exit error to be preserved, got %+v", lastExitErr)
-	}
-}
-
-func TestResolveTUIOutcome_CancelReturnsLastExitError(t *testing.T) {
-	want := &runner.ExitCodeError{Code: 9}
-	decision, err := resolveTUIOutcome(nil, true, "", nil, tui.SessionItem{ID: "ses_next"}, want)
-	if err != want {
-		t.Fatalf("expected cancel to return last exit error, got %v", err)
-	}
-	if !decision.stop {
-		t.Fatal("expected cancel outcome to stop loop")
-	}
-	if decision.selectedSession.ID != "ses_next" {
-		t.Fatalf("expected explicit session update to remain visible to RunWithDeps, got %+v", decision.selectedSession)
 	}
 }
