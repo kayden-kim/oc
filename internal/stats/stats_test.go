@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"runtime"
 	"sort"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -945,6 +946,85 @@ func TestExtractChangedFilesFromPart_PatchAndToolInputs(t *testing.T) {
 				t.Fatalf("expected files %v, got %v", tt.want, got)
 			}
 		})
+	}
+}
+
+func TestExtractFilesFromPatchText_ReturnsTouchedFiles(t *testing.T) {
+	got := extractFilesFromPatchText("*** Begin Patch\n*** Add File: internal/new/file.go\n*** Update File: README.md\n*** Delete File: docs/old.md\n*** End Patch")
+	sort.Strings(got)
+	want := []string{"README.md", "docs/old.md", "internal/new/file.go"}
+	sort.Strings(want)
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected files %v, got %v", want, got)
+	}
+}
+
+func TestNormalizeChangedFilePath_NormalizesPlatformSpecificInput(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "trims and cleans relative path",
+			input: "  ./docs/../internal/stats.go  ",
+			want:  "./docs/../internal/stats.go",
+		},
+		{
+			name:  "empty path stays empty",
+			input: "   ",
+			want:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			want := tt.want
+			if want != "" {
+				want = filepath.Clean(want)
+				if runtime.GOOS == "windows" {
+					want = strings.ToLower(filepath.ToSlash(want))
+				}
+			}
+
+			if got := normalizeChangedFilePath(tt.input); got != want {
+				t.Fatalf("expected normalized path %q, got %q", want, got)
+			}
+		})
+	}
+}
+
+func TestMergeSessionCodeStats_UsesSummaryColumnsWhenPresent(t *testing.T) {
+	db, tmp := openStatsTestDBWithSchema(t, `
+		CREATE TABLE session (
+			id TEXT PRIMARY KEY,
+			title TEXT NOT NULL DEFAULT '',
+			directory TEXT NOT NULL,
+			parent_id TEXT,
+			time_updated INTEGER NOT NULL,
+			summary_additions INTEGER,
+			summary_deletions INTEGER
+		);
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+
+	day := newEmptyDay(time.Date(2026, time.March, 27, 0, 0, 0, 0, time.Local))
+	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.Local)
+	dayMap := map[string]*Day{dayKey(now): &day}
+	dir := filepath.Join(tmp, "work")
+
+	if _, err := db.Exec(`INSERT INTO session (id, title, directory, parent_id, time_updated, summary_additions, summary_deletions) VALUES (?, ?, ?, NULL, ?, ?, ?)`, "ses_today", "today", dir, now.UnixMilli(), 120, 30); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := mergeSessionCodeStats(db, dir, now.Add(-time.Hour).UnixMilli(), time.Local, dayMap); err != nil {
+		t.Fatalf("mergeSessionCodeStats returned error: %v", err)
+	}
+
+	if dayMap[dayKey(now)].CodeLines != 150 {
+		t.Fatalf("expected today code lines 150, got %d", dayMap[dayKey(now)].CodeLines)
 	}
 }
 
