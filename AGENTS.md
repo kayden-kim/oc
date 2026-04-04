@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-04-02 Asia/Seoul
-**Commit:** `d328189`
+**Generated:** 2026-04-05 Asia/Seoul
+**Commit:** `529d3bd`
 **Branch:** `main`
 
 ## OVERVIEW
@@ -18,6 +18,7 @@
 |- internal/session/ cwd-filtered session discovery and latest-session selection
 |- internal/plugin/  whitelist matching and @version normalization
 |- internal/port/    port range parsing and random free-port selection
+|- internal/launch/  port resolution, health polling, and toast notification to opencode
 |- internal/runner/  external `opencode` process execution
 |- internal/editor/  editor resolution and invocation
 |- internal/opencodedb/ shared opencode DB path/DSN/timestamp helpers
@@ -46,6 +47,7 @@
 | Change port behavior | `internal/port/port.go` | `min-max`, 15 random attempts |
 | Change editor resolution | `internal/editor/editor.go` | `EDITOR > ~/.oc > platform default` |
 | Change runner behavior | `internal/runner/runner.go` | wraps external `opencode` command |
+| Change launch networking | `internal/launch/launch.go` | health polling, toast HTTP, port arg resolution |
 | Change release automation | `.goreleaser.yaml`, `.github/workflows/release.yml` | tag-driven GitHub Release and Homebrew publishing |
 
 ## CODE MAP
@@ -69,6 +71,8 @@
 | `Select` | function | `internal/port/port.go` | random available-port search |
 | `OpenWithConfig` | function | `internal/editor/editor.go` | editor command resolution |
 | `Run` | method | `internal/runner/runner.go` | executes `opencode` with passthrough stdio |
+| `ResolvePortArgs` | function | `internal/launch/launch.go` | port range parse, probe, and `--port` arg assembly |
+| `SendToast` | function | `internal/launch/launch.go` | health-gated toast notification to opencode server |
 
 ## CONVENTIONS
 - Go-only repo; primary automation is `make build`, `make test`, `make release-check`, and `make snapshot`.
@@ -87,7 +91,7 @@
 - Do not rewrite the full `opencode.json` document when changing plugin state; preserve comments, line endings, and unrelated fields.
 - Do not bypass `runtimeDeps` for logic that is already injected there; the tests rely on that seam.
 - Do not assume a deterministic port; `internal/port.Select` probes random ports up to 15 attempts.
-- Do not add AGENTS files under every package mechanically; only add child files where local rules materially differ from the root. Current justified children are `cmd/oc`, `internal/app`, `internal/config`, `internal/stats`, and `internal/tui`.
+- Do not add AGENTS files under every package mechanically; only add child files where local rules materially differ from the root. Current justified children are `cmd/oc`, `internal/app`, `internal/config`, `internal/launch`, `internal/stats`, and `internal/tui`.
 
 ## UNIQUE STYLES
 - The CLI is intentionally re-entrant: after `opencode` exits, the launcher returns to the TUI instead of terminating.
@@ -95,7 +99,7 @@
 - TUI copy and styling use yellow/white/gray lipgloss palettes rather than terminal defaults; see the UI/UX guidelines below before changing shared TUI presentation.
 
 ## TUI UI/UX GUIDELINES
-- Treat `internal/tui/model.go` as the shared visual identity layer. Keep core lipgloss styles (`defaultTextStyle`, `cursorStyle`, `sessionLabelStyle`, help styles, tab styles) centralized there and preserve the existing yellow/white/gray palette with dark neutral backgrounds.
+- Treat `internal/tui/model_styles.go` as the shared visual identity layer. Keep core lipgloss styles (`defaultTextStyle`, `cursorStyle`, `sessionLabelStyle`, help styles, tab styles) centralized there and preserve the existing yellow/white/gray palette with dark neutral backgrounds.
 - Reuse the shared chrome before inventing new screen-specific framing: `renderTopBadge` for the top badge/header, `renderSectionHeader` and `renderSubSectionHeader` for section titles, and `renderHelpBlock` plus `helpEntry` for keyboard hints. Launcher, session picker, edit picker, and stats screens already follow this pattern.
 - Keep list interactions consistent across modes. Focus uses the `> ` cursor, selected plugin rows use the `✔  ` marker, and row emphasis flows through `stylePluginRow`. Navigation and confirmation keys are stable (`↑/↓` or `j/k` for one-line movement, `PgUp/PgDn` for a full page, `Ctrl+u/Ctrl+d` for a half page, `Home/End` for top/bottom, `space`, `enter`, `esc`, `q`, plus mode keys like `tab`, `g`, `s`, `c`); update README and tests if this contract changes.
 - Preserve the existing width and spacing rhythm. The full TUI layout caps at 80 columns, and narrower terminals should clamp content to the available width rather than expanding the chrome. Shared headers and help blocks should derive width from the same cap, while tables should use the existing padding/truncation helpers in `internal/tui/stats_view*.go` instead of ad hoc alignment logic.
@@ -124,4 +128,4 @@ make snapshot
 - Windows builds use `.exe`, but the Makefile still assumes POSIX shell utilities for `mkdir -p` and `rm -rf`.
 - Root `oc.exe` may exist locally as a build artifact and is ignored by git; treat it as output, not source of truth.
 - GoReleaser publishes GitHub release assets and updates the Homebrew cask in `kayden-kim/homebrew-tap`.
-- Child knowledge bases live in `cmd/oc/AGENTS.md`, `internal/app/AGENTS.md`, `internal/config/AGENTS.md`, `internal/stats/AGENTS.md`, and `internal/tui/AGENTS.md`.
+- Child knowledge bases live in `cmd/oc/AGENTS.md`, `internal/app/AGENTS.md`, `internal/config/AGENTS.md`, `internal/launch/AGENTS.md`, `internal/stats/AGENTS.md`, and `internal/tui/AGENTS.md`.
