@@ -296,38 +296,6 @@ func currentTrailingActiveSlots(slots [48]int64) int {
 	return streak
 }
 
-func currentWindowStreakSlots(slots [48]int64) int {
-	return currentTrailingActiveSlots(slots)
-}
-
-func bestWindowStreakSlots(slots [48]int64) int {
-	best := 0
-	current := 0
-	for _, slot := range slots {
-		if slot > 0 {
-			current++
-			if current > best {
-				best = current
-			}
-			continue
-		}
-		current = 0
-	}
-	return best
-}
-
-func windowHasActivity(report stats.WindowReport) bool {
-	if report.ActiveMinutes > 0 || report.Messages > 0 || report.Sessions > 0 || report.Tokens > 0 || report.Cost > 0 {
-		return true
-	}
-	for _, slot := range report.HalfHourSlots {
-		if slot > 0 {
-			return true
-		}
-	}
-	return false
-}
-
 func renderDetailModeHelpLine(targetWidth int) string {
 	return renderHelpBlock([]string{
 		helpBgTextStyle.Render("💡 ") + helpEntry("↑/↓", "scroll") + helpBgTextStyle.Render(" • ") + helpEntry("pgup/pgdn", "page") + helpBgTextStyle.Render(" • ") + helpEntry("ctrl+u/d", "half") + helpBgTextStyle.Render(" • ") + helpEntry("home/end", "top/bottom"),

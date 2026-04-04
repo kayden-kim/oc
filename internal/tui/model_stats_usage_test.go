@@ -157,3 +157,15 @@ func TestRenderUsageLines_GroupsRemainderIntoOthersAfterTop15(t *testing.T) {
 		t.Fatalf("expected total row to remain at the end, got %q", plain[19])
 	}
 }
+
+func TestRenderUsageShareCell_UsesBarsOnlyInWideLayouts(t *testing.T) {
+	if got := renderUsageShareCell(21, 42, 21, false); got != "████████ 50%" {
+		t.Fatalf("expected wide usage share cell with bar, got %q", got)
+	}
+	if got := renderUsageShareCell(21, 42, 21, true); got != "50%" {
+		t.Fatalf("expected narrow usage share cell without bar, got %q", got)
+	}
+	if got := renderUsageShareCell(0, 42, 21, false); got != "········ --" {
+		t.Fatalf("expected wide zero usage share placeholder, got %q", got)
+	}
+}
