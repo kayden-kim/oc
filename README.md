@@ -9,7 +9,7 @@
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?style=flat-square&logo=go&logoColor=white)](https://go.dev)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=flat-square)](https://github.com/kayden-kim/oc/releases)
 
-[Features](#features) · [Installation](#installation) · [Quick start](#quick-start) · [Configuration](#configuration) · [TUI controls](#tui-controls) · [Building from source](#building-from-source)
+[Features](#features) · [Installation](#installation) · [Quick start](#quick-start) · [Configuration](#configuration) · [OpenCode plugins](#opencode-plugins) · [TUI controls](#tui-controls) · [Building from source](#building-from-source)
 
 </div>
 
@@ -152,6 +152,34 @@ In both files, `oc` only touches the `plugin` array. All other fields (schema, M
     "oh-my-opencode",
     // "superpowers"
   ]
+}
+```
+
+## OpenCode plugins
+
+`oc` ships with a bundled OpenCode plugin at `.opencode/plugins/oc-skills.ts`.
+
+### oc-skills
+
+Automatically discovers skill directories by walking up the directory tree from the current working directory. At each level it checks for `.agents/skills` and `.opencode/skills` and registers any found paths with OpenCode's skill loader via the `config` hook.
+
+This means you can place skill folders at the project level, in a parent workspace, or in your home directory — the plugin picks them all up without manual `skills.paths` configuration.
+
+**Installation:**
+
+The plugin is included in the repo's `.opencode/` directory and loads automatically when opencode is launched from this project. To use it globally:
+
+```bash
+# Copy to user-level plugin directory
+mkdir -p ~/.config/opencode/plugins
+cp .opencode/plugins/oc-skills.ts ~/.config/opencode/plugins/
+```
+
+Or add it to your `opencode.json`:
+
+```jsonc
+{
+  "plugin": ["./path/to/oc-skills.ts"]
 }
 ```
 
